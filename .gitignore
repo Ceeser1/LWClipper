@@ -1,0 +1,19 @@
+# Restored with npm install.
+node_modules/
+
+# Build output. Every shipped build lives here and each one is about 200MB.
+dist/
+
+# The bundled tools the app ships alongside itself. ffmpeg.exe and ffprobe.exe
+# are 102MB each, over GitHub's 100MB per-file limit, so they cannot go in as
+# they are. See the README for where to put them.
+tools/
+
+# Clips downloaded while testing.
+cache/
+
+# The first build, from before dist/ existed.
+/LWClipper 1.0.0.exe
+
+# The project's own history and working notes. Stays on disk, never in the repo.
+memory.md

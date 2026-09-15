@@ -1,0 +1,10 @@
+# This project is LF throughout. Git on Windows converts to CRLF on checkout by
+# default, which would rewrite every file in a fresh clone and show the whole
+# tree as modified.
+* text=auto eol=lf
+
+# Never touched, whatever the setting above says.
+*.png binary
+*.jpg binary
+*.ico binary
+*.bmp binary

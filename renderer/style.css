@@ -1,0 +1,1581 @@
+:root {
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html {
+  height: 100%;
+}
+
+body {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  margin: 0;
+  padding: 12px;
+  background: #1e1e22;
+  color: #d2d2d8;
+  font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px;
+}
+
+.section {
+  background: #2a2a30;
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 10px;
+  flex: none;
+}
+
+/* The only section that grows: it takes whatever height the fixed rows above
+   and below do not need, which is the budget the previews scale into. */
+.preview-section {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  /* Column, so the Video header stacks above the frames. It was a row when the
+     grid was the only thing in here, and adding the header put it alongside the
+     frames rather than over them. */
+  flex-direction: column;
+}
+
+.section-title {
+  color: #c8c8d2;
+  font-size: 12px;
+  font-weight: bold;
+  margin-bottom: 6px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+
+.url-field {
+  flex: 1;
+  min-width: 200px;
+}
+
+/* Roughly 1.5x the default 13px/5px scale, vertically. The height follows from
+   the larger font plus the matching padding rather than being hard-coded. */
+.primary-row {
+  gap: 8px;
+}
+
+/* The sides stay at the 10px every other button in the app uses. Scaling those
+   up with the rest only pushed the words away from their own edges and took
+   the width off the field they sit beside. */
+.primary-row .url-field,
+.primary-row button {
+  font-size: 20px;
+  padding: 9px 10px;
+  border-radius: 5px;
+}
+
+input[type="text"] {
+  background: #17171a;
+  color: #dcdce2;
+  border: 1px solid #45454e;
+  border-radius: 4px;
+  padding: 5px 8px;
+}
+
+select {
+  background: #17171a;
+  color: #dcdce2;
+  border: 1px solid #45454e;
+  border-radius: 4px;
+  padding: 5px 8px;
+}
+
+select:disabled {
+  opacity: 0.5;
+}
+
+/* Square, and sized by script off the buttons beside it, so all that is said
+   here is how the picture sits inside. The padding is even all round rather
+   than the wider sides the text buttons want, and it has to outrank the
+   .primary-row button rule above to get it. */
+.primary-row .settings-btn {
+  flex: none;
+  display: flex;
+  padding: 8px;
+}
+
+.settings-btn__icon {
+  width: 100%;
+  height: 100%;
+  /* The gear is pure white against text that is not, so it is taken down to
+     about the weight of the words on the buttons next to it. */
+  opacity: 0.85;
+}
+
+.primary-row .settings-btn:hover .settings-btn__icon {
+  opacity: 1;
+}
+
+button {
+  background: #3c3c44;
+  color: #e6e6eb;
+  border: 1px solid #505058;
+  border-radius: 4px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: #4b4b54;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.format-placeholder {
+  color: #777780;
+  font-style: italic;
+}
+
+.quality-section {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* An author display value outranks the UA rule behind the hidden attribute, so
+   without this the section would stay visible when hidden is set. */
+.quality-section[hidden] {
+  display: none;
+}
+
+.quality-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.cancel-btn {
+  flex: none;
+}
+
+/* Same green as the start handle, so "selected" reads consistently. Dark text
+   because the fill is light enough that the normal light text would wash out. */
+.format-btn--selected,
+.format-btn--selected:hover:not(:disabled) {
+  background: #78c88c;
+  border-color: #8fd9a1;
+  color: #14210f;
+  font-weight: bold;
+}
+
+.format-btn--selected:hover:not(:disabled) {
+  background: #86d199;
+}
+
+.title-label {
+  color: #ebebf0;
+  font-size: 22px;
+  font-weight: bold;
+  line-height: 1.3;
+  margin-bottom: 4px;
+  min-height: 28px;
+}
+
+/* Clear sits on the vertical centre of the whole frame, so the title, progress
+   and status stack together as one flexible column beside it. */
+.title-section {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.title-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.clear-btn {
+  flex: none;
+}
+
+/* Cancel rides at the end of the bar and appears with it, so both live or die
+   together with the running job. An author display value outranks the UA rule
+   behind the hidden attribute, hence the explicit [hidden] case. */
+.progress-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.progress-row[hidden] {
+  display: none;
+}
+
+progress {
+  flex: 1;
+  min-width: 0;
+  height: 10px;
+  accent-color: #5a8cdc;
+}
+
+.status-label {
+  color: #b8b8c0;
+}
+
+.error-hint {
+  margin-top: 6px;
+  text-align: center;
+  color: #e0b070;
+}
+
+.status-label--big {
+  font-size: 22px;
+  line-height: 1.35;
+  text-align: center;
+  color: #c8c8d2;
+  padding: 6px 0;
+}
+
+.preview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 10px;
+  align-items: stretch;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+
+.preview-cell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.preview-cell__title {
+  text-align: center;
+}
+
+.preview-cell__controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 6px;
+  flex: none;
+}
+
+/* Names the time boxes once the frame titles above them are gone. Hidden in
+   video mode, where "Start Frame" and "End Frame" already say it. */
+.time-caption {
+  color: #777780;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.preview-section:not([data-audio="true"]) .time-caption {
+  display: none;
+}
+
+/* ---- Audio source: one wide frame instead of three ----
+   An audio file has no picture, so the two frame boxes had nothing in them at
+   all. display: contents drops the three cell boxes out of the layout and lets
+   their parts be placed on the grid directly, which is what allows the preview
+   to span the full width while the three control groups stay in their own
+   columns underneath it. */
+.preview-section[data-audio="true"] .preview-cell {
+  display: contents;
+}
+
+/* The frame row takes the slack and the other two stay tight around their
+   contents. Three auto rows split it between all of them instead, which grew
+   the title and control rows as well; packing to the start left 99px of the
+   section simply empty below the controls. 1fr on the middle row hands the
+   whole of it to the spectrum, which is the one thing here that can use it. */
+.preview-section[data-audio="true"] .preview-grid {
+  grid-template-rows: auto 1fr auto;
+}
+
+.preview-section[data-audio="true"] #startFrameStage,
+.preview-section[data-audio="true"] #endFrameStage,
+.preview-section[data-audio="true"] .preview-cell:first-child .preview-cell__title,
+.preview-section[data-audio="true"] .preview-cell:last-child .preview-cell__title {
+  display: none;
+}
+
+.preview-section[data-audio="true"] .preview-cell:nth-child(2) .preview-cell__title {
+  grid-column: 1 / -1;
+  grid-row: 1;
+}
+
+/* No fixed ratio here: the row is what sets the height, so the frame fills
+   whatever the section has spare. The floor is the one the video frames already
+   use, for a window short enough that there is nothing spare. */
+.preview-section[data-audio="true"] #previewStage {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  aspect-ratio: auto;
+  min-height: 60px;
+}
+
+.preview-section[data-audio="true"] .preview-cell:first-child .preview-cell__controls {
+  grid-column: 1;
+  grid-row: 3;
+}
+
+.preview-section[data-audio="true"] .preview-cell:nth-child(2) .preview-cell__controls {
+  grid-column: 2;
+  grid-row: 3;
+}
+
+.preview-section[data-audio="true"] .preview-cell:last-child .preview-cell__controls {
+  grid-column: 3;
+  grid-row: 3;
+}
+
+/* Sits over the picture, which is black for an audio file anyway. Stops short
+   of the bottom so the video element's own control bar, which draws at the
+   foot of that element, is neither covered nor unclickable. */
+/* Chromium draws its control bar 54px tall by default, which is mostly padding
+   around controls that are only about 20px. Halving the enclosure leaves the
+   buttons, timer and scrubber at exactly the size they were and takes the
+   padding instead, giving the spectrum the rest of the frame.
+   The enclosure is the one that answers: setting a height on the panel alone
+   does nothing at all. Measured, both of them. */
+/* Only for a real audio file. Chromium picks its control layout from the media
+   itself, and a video element still holding a picture gets the full video bar,
+   which this clamp cuts the buttons off the top of: measured, 48px already
+   loses half of them and 27px leaves nothing but the scrubber. That case is
+   handled below by giving the bar the room it asks for instead. */
+.preview-section[data-audio="true"]:not([data-picture-off="true"])
+  .preview-video::-webkit-media-controls-enclosure {
+  height: 27px;
+  max-height: 27px;
+}
+
+/* A video source with its picture switched off gets the equalizer too, and the
+   picture would otherwise carry on playing behind it. The element goes entirely:
+   the transport moves to the audio element below, so the video element is no
+   longer holding the only control bar the preview has. */
+.preview-section[data-picture-off="true"] .preview-video {
+  display: none;
+}
+
+/* Shown only in that state, and laid over the foot of the spectrum exactly where
+   the video element's own bar sits for an audio file, so the two modes look the
+   same. Chromium gives a bare audio element 54px, which is the same padding
+   around the same controls that the clamp above takes off. */
+.preview-sound {
+  display: none;
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 100%;
+  height: 27px;
+}
+
+.preview-section[data-picture-off="true"] .preview-sound {
+  display: block;
+}
+
+.preview-sound::-webkit-media-controls-enclosure {
+  height: 27px;
+  max-height: 27px;
+}
+
+/* Sized in percentages, not by left/right/bottom offsets: a canvas is a
+   replaced element, so width: auto resolves to its intrinsic 300px and the
+   right offset is simply dropped, which drew the whole spectrum into the left
+   third of the frame. The reserved strip is the bar above plus a hair, so the
+   two never overlap. */
+.eq-canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: calc(100% - 29px);
+  display: block;
+  pointer-events: none;
+}
+
+.eq-canvas[hidden] {
+  display: none;
+}
+
+/* A fixed ratio keeps all three boxes the same height before anything loads, so
+   the row does not jump around once a video arrives. The stage owns that sizing
+   rather than the video, so that the crop box can be laid over the picture
+   without the overlay having any say in how tall the row ends up. */
+.frame-stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  flex: 0 1 auto;
+  min-height: 60px;
+  background: #121214;
+}
+
+.preview-video {
+  width: 100%;
+  height: 100%;
+  background: #121214;
+  display: block;
+  object-fit: contain;
+}
+
+/* What a save will actually cut, drawn over the untouched frame. Placed from
+   the picture inside the box rather than from the box, since object-fit:
+   contain letterboxes anything that is not 16:9. pointer-events: none is
+   load-bearing: the preview's own controls sit underneath this. */
+.crop-outline {
+  position: absolute;
+  border: 1px solid #ffffff;
+  /* White on a white frame is invisible, so each line carries its own edge. */
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+}
+
+/* An author display value outranks the UA rule behind the hidden attribute. */
+.crop-outline[hidden] {
+  display: none;
+}
+
+.time-field {
+  width: 130px;
+  text-align: center;
+}
+
+.trim-slider {
+  position: relative;
+  height: 32px;
+  margin-top: 6px;
+}
+
+.trim-slider__track {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: 14px;
+  height: 4px;
+  background: #46464e;
+  border-radius: 2px;
+}
+
+.trim-slider__fill {
+  position: absolute;
+  top: 0;
+  height: 4px;
+  background: #5a8cdc;
+  border-radius: 2px;
+}
+
+.trim-slider__handle {
+  position: absolute;
+  top: 8px;
+  width: 16px;
+  height: 16px;
+  border-radius: 8px;
+  background: #dcdce4;
+  border: 1px solid #3c3c42;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.trim-slider__handle--start { background: #78c88c; }
+.trim-slider__handle--end { background: #dc7878; }
+
+/* Puts the drag hint on the Trim title's own line. Baseline alignment rather
+   than centre, so the smaller hint sits on the title's text baseline instead of
+   floating in the middle of it. nowrap because the hint is long enough to wrap
+   at the minimum window width, which would make the frame taller. */
+.trim-head,
+.preview-head {
+  flex: none;
+  justify-content: flex-start;
+  align-items: baseline;
+  flex-wrap: nowrap;
+  gap: 10px;
+  margin-bottom: 6px;
+  /* Anchors the resolution readout, which is centred on the section. */
+  position: relative;
+}
+
+/* Taken out of the flow and centred on the row, so it lands over the middle
+   cell's title whatever the controls to its left happen to add up to. Laying it
+   out in the flex row instead would centre it in the space they left over,
+   which is not the same place. */
+.render-resolution {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  color: #c8c8d2;
+  font-size: 12px;
+  font-weight: bold;
+  white-space: nowrap;
+  /* The row behind it has a checkbox in it; nothing here should take a click. */
+  pointer-events: none;
+}
+
+/* The title carries its own bottom margin for the normal stacked case; inside
+   this row the row owns the spacing. */
+.trim-head .section-title,
+.preview-head .section-title {
+  margin-bottom: 0;
+}
+
+/* No picture to switch off when the source is audio to begin with, which is
+   what the hidden attribute is set from. It needs saying here: .row sets a
+   display of its own, and an author display beats the browser's rule for
+   [hidden]. This used to key off audio mode instead, which hid the header the
+   moment the picture was switched off and left no way to switch it back on. */
+.preview-head[hidden] {
+  display: none;
+}
+
+/* A crop is measured on a picture the output no longer has. The rectangle
+   itself is kept, so switching the picture back on brings the outline with
+   it. */
+.preview-section[data-audio="true"] .crop-outline {
+  display: none;
+}
+
+/* Holds the selection readout alone now that the hint has moved up beside the
+   Trim title. */
+.span-row {
+  margin-top: 6px;
+  margin-bottom: 0;
+}
+
+.hint-label {
+  color: #777780;
+  font-size: 11px;
+  margin-left: auto;
+}
+
+/* Holds its line even while empty. The readout is blank until media loads, and
+   the hint used to be what kept this row open; without a floor the frame would
+   grow by a line the moment a video arrives and jog everything below it. 1lh is
+   exactly one line box, so it tracks the font rather than a pixel guess. */
+.span-label {
+  color: #b8b8c0;
+  min-height: 1lh;
+}
+
+/* Four controls on a video row and three on an audio one, spread across the
+   full width so the row reads as evenly weighted either way. space-between
+   rather than fixed tracks: hiding Frame-accurate cut for an audio source then
+   re-spreads what is left on its own, instead of leaving a hole where it was. */
+.save-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.save-row > .checkbox-label { white-space: nowrap; }
+
+.compression-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.compression-slider {
+  width: 104px;
+  accent-color: #5a8cdc;
+}
+
+/* Sits directly against the slider, with just enough reserved width that the
+   row does not twitch as the number changes under it. Reserving the width for
+   the widest label in the current mode rather than the widest in any mode: a
+   box sized for "320 kbit/s" while showing "75%" left a gap wide enough to read
+   as a separator, which threw off the even spacing of the row. Measured ink is
+   23px for the percentages and 53px for the bitrates. */
+.compression-value {
+  color: #b8b8c0;
+  font-size: 12px;
+  min-width: 30px;
+  text-align: left;
+}
+
+.compression-value--rate {
+  min-width: 58px;
+}
+
+.compression-slider:disabled,
+.compression-group:has(.compression-slider:disabled) .compression-value {
+  opacity: 0.4;
+}
+
+/* Dims the whole label, not just the box, whenever its control is unavailable.
+   Applies to Frame-accurate cut too, which previously dimmed only its box. */
+.checkbox-label:has(input:disabled) {
+  opacity: 0.5;
+}
+
+
+
+
+/* One connected strip, so the options read as a single control with a current
+   value rather than as loose buttons. */
+.format-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.format-label {
+  color: #b8b8c0;
+  font-size: 12px;
+}
+
+.format-toggle {
+  display: flex;
+}
+
+.format-toggle button {
+  border-radius: 0;
+  margin-left: -1px;
+  padding: 4px 10px;
+  font-size: 12px;
+  position: relative;
+}
+
+.format-toggle button:first-child {
+  border-radius: 4px 0 0 4px;
+  margin-left: 0;
+}
+
+.format-toggle button:last-child {
+  border-radius: 0 4px 4px 0;
+}
+
+/* The chosen one has to sit above its neighbours or its own border is covered
+   by the next button's negative margin. */
+.format-toggle button.btn--active {
+  z-index: 1;
+}
+
+.save-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* A grid track sized 1fr will not shrink below its item's min-content, so
+   refusing to shrink here is what makes the notice give way instead of the
+   buttons. Without it a long filename squeezed them and wrapped their labels
+   onto a second line. */
+.save-actions > button {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* Positions the save confirmation overlay against this frame, not the page. */
+.trim-section {
+  position: relative;
+}
+
+/* While the confirmation is up the frame shows only that. Driven by :has()
+   rather than a class toggled from JS, because six different places hide the
+   notice and any one of them could forget to clear the class.
+   visibility, not display: the overlay is out of flow, so display:none on the
+   real content would collapse the frame to nothing and take the overlay's
+   height with it. */
+.trim-section:has(.save-notice:not([hidden])) > :not(.save-notice) {
+  visibility: hidden;
+}
+
+/* Covers the Trim frame exactly, corners included. It sits over the controls
+   on purpose: the first click dismisses it, the next one reaches whatever is
+   underneath. The Dismiss button is there for discoverability, since "click
+   anywhere" is not something a UI can state without saying it. */
+.save-notice {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  background: rgba(0, 0, 0, 0.33);
+  border-radius: 6px;
+  color: #78c88c;
+  /* 1.5x the 12px it started at. The Dismiss button keeps the default button
+     size, since a button does not inherit font-size. */
+  font-size: 18px;
+  font-weight: bold;
+  text-align: center;
+}
+
+/* An author display value outranks the UA rule behind the hidden attribute. */
+.save-notice[hidden] {
+  display: none;
+}
+
+/* The overlay stacks its text above its buttons, so the two buttons need a row
+   of their own to sit side by side in. */
+.save-notice__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The ellipsis needs a block of its own; an anonymous flex item cannot carry
+   text-overflow. */
+.save-notice > span {
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* The author display above outranks the UA rule behind the hidden attribute,
+   so hiding one of these needs saying explicitly. */
+.checkbox-label[hidden] {
+  display: none;
+}
+
+.footer-section .row {
+  margin-bottom: 0;
+}
+
+.tools-label {
+  color: #777780;
+  font-size: 11px;
+  flex: 1;
+  /* The cache path can be long. min-width:0 lets this flex item shrink below
+     its text width, so the path ellipsises instead of pushing the two buttons
+     onto a second row. Full path stays available via the title tooltip. */
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tools-label[data-warn="true"] {
+  color: #dc7878;
+}
+
+.trim-slider.disabled,
+.trim-slider[data-disabled="true"] {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+/* ---- "Settings & Info" popup ---- */
+
+/* Fixed rather than absolute, so it covers the window regardless of scroll or
+   which frame happens to be tallest. */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.modal[hidden] {
+  display: none;
+}
+
+.modal__panel {
+  background: #2a2a30;
+  border: 1px solid #45454e;
+  border-radius: 6px;
+  padding: 16px 18px;
+  max-width: 520px;
+  max-height: 100%;
+  overflow-y: auto;
+}
+
+.modal__title {
+  text-align: center;
+  font-size: 18px;
+  font-weight: bold;
+  color: #ebebf0;
+  margin-bottom: 12px;
+}
+
+/* Section headings inside the popup. A rule rather than a bare bold line, so
+   the four groups are separable at a glance without reading them. */
+.modal__section {
+  color: #ebebf0;
+  font-weight: bold;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-bottom: 1px solid #3a3a44;
+  padding-bottom: 4px;
+  margin: 0 0 8px;
+}
+
+.modal__section:not(:first-of-type) {
+  margin-top: 16px;
+}
+
+/* Two columns so the labels line up and the values wrap on their own. */
+.modal__list {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 0 0 12px;
+}
+
+.modal__list dt {
+  color: #777780;
+  font-weight: bold;
+}
+
+.modal__list dd {
+  margin: 0;
+  color: #dcdce2;
+}
+
+.modal__note {
+  margin: 0 0 14px;
+  color: #b8b8c0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* The term the note is about, lifted a shade off the sentence explaining it, to
+   the same colour the settings labels above are written in. */
+.modal__note strong {
+  color: #d5d5dc;
+}
+
+.modal__close {
+  display: block;
+  margin: 0 auto;
+}
+
+/* ---- the Settings block inside that modal ---- */
+
+/* Label left, control hard right. The label is allowed to take the room it
+   needs, because one of these is a full sentence rather than a word. */
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 8px;
+}
+
+/* Every setting after the first stands off from the one above, so the block
+   reads as four settings rather than one list of rows. */
+.setting-row--group {
+  margin-top: 18px;
+}
+
+.setting-row__label {
+  color: #d5d5dc;
+  font-size: 13px;
+  font-weight: bold;
+}
+
+.setting-row__value {
+  color: #b8b8c0;
+  font-size: 12px;
+  text-align: right;
+  /* A cache path can be long and has no spaces to break at, so it is allowed to
+     break anywhere rather than pushing the panel wider than its max-width. */
+  overflow-wrap: anywhere;
+}
+
+/* Never squeezed by a long label beside it. */
+.setting-row__control {
+  flex: none;
+}
+
+/* The browser draws its own checkbox at 13px, which sits small against the bold
+   labels here. 16 is about a fifth more, and a whole number on purpose: a third
+   more came to 17.3, which looked oversized beside the text, and a fifth exactly
+   is 15.6, which lands off the pixel grid and draws the box soft. */
+#settingsModal input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+}
+
+/* The flag and the dropdown count as the one control on the right of the row,
+   so they sit together rather than the flag being a third thing in the middle. */
+.language-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The source is a square canvas with the flag drawn across the middle of it,
+   so a square box here shows the flag at its own 3:2 with nothing cropped. */
+.flag {
+  width: 28px;
+  height: 28px;
+  flex: none;
+}
+
+/* The tick and the browser it picks, as one control. */
+.cookie-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The tick used to sit inside its own label, which dimmed the words with it
+   while a download holds the setting. Now that the two are at opposite ends of
+   the row, the label has to be told. */
+.setting-row:has(#cookiesToggle:disabled) .setting-row__label {
+  opacity: 0.5;
+}
+
+/* Explains the setting above it. Tucked up against its own title rather than
+   floating between two of them, which is what tells you which one it belongs
+   to now that the titles are bold. */
+.setting-note {
+  margin: -4px 0 0;
+  color: #b8b8c0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* Where the settings stop and the reference material starts. Heavier than the
+   line under a section heading, because it separates two halves of the panel
+   rather than two parts of one list. */
+.settings-divider {
+  /* Twice the thickness and well clear of the 1px #3a3a44 under a section
+     heading, or it reads as just another one of those. */
+  border-top: 2px solid #7b7b8a;
+  margin: 24px 0 6px;
+}
+
+/* Evenly spread, each button taking the same share of the width whatever its
+   text says, which also keeps them even once the labels are translated. */
+.setting-buttons {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 10px 0 0;
+}
+
+.setting-buttons--pair {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+/* The button here that destroys something for good, coloured so it does not
+   read as just another action in the row. */
+.danger-btn {
+  background: #6d2626;
+  border-color: #8a3030;
+  color: #f4dede;
+}
+
+.danger-btn:hover:not(:disabled) {
+  background: #8a3030;
+}
+
+/* One step down from that: it throws away files the app can fetch again,
+   which is worth a second look but is not the same kind of loss. */
+.caution-btn {
+  background: #9a5a28;
+  border-color: #b87038;
+  color: #ffeeda;
+}
+
+.caution-btn:hover:not(:disabled) {
+  background: #b87038;
+}
+
+/* ---- crop popup ---- */
+
+.modal__panel--crop {
+  width: 80vw;
+  max-width: none;
+  text-align: center;
+}
+
+/* Holds the frame plus the room the arrows above and below it need: their own
+   height plus the gap they all stand off by, and a little to spare. */
+.crop-frame {
+  position: relative;
+  padding: 27px 0;
+}
+
+/* Always on show. Grey says there is nothing that way; green says there are
+   pixels left to reach, and only then does it become a button worth pressing.
+   Placed by the script, which is the only thing that knows how wide the frame
+   ended up, so each one sits a fixed gap outside its own edge of it. */
+.crop-arrow {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: #4e4e57;
+  pointer-events: none;
+  user-select: none;
+}
+
+.crop-arrow[data-live="true"] {
+  color: #78c88c;
+  background: rgba(0, 0, 0, 0.33);
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.crop-arrow[data-live="true"]:hover {
+  color: #9ee0ae;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+/* Twice the size they were and two to one, each along the axis it points down.
+   The pair at the sides has to be the tall way round: the frame leaves only
+   about 20px beside it, where the ones above and below have the whole gutter. */
+.crop-arrow--up,
+.crop-arrow--down {
+  left: 50%;
+  transform: translateX(-50%);
+  width: 38px;
+  height: 19px;
+}
+
+.crop-arrow--left,
+.crop-arrow--right {
+  top: 50%;
+  transform: translateY(-50%);
+  width: 19px;
+  height: 38px;
+}
+
+/* Its box is given the arrow's height and anchored to the same edge, so the two
+   line up by construction rather than by matching font metrics against a
+   triangle. Placed by the script, like the arrows, for the same reason. */
+.crop-pan-hint {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  color: #777780;
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* An author display value outranks the UA rule behind the hidden attribute. */
+.crop-pan-hint[hidden] {
+  display: none;
+}
+
+/* Drawn rather than typed, so the shape is exactly two to one instead of
+   whatever the font happens to make of a triangle. currentColor keeps it in
+   step with the grey and green above. */
+.crop-arrow__glyph {
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-color: transparent;
+}
+
+.crop-arrow--up .crop-arrow__glyph {
+  border-width: 0 11px 11px 11px;
+  border-bottom-color: currentColor;
+}
+
+.crop-arrow--down .crop-arrow__glyph {
+  border-width: 11px 11px 0 11px;
+  border-top-color: currentColor;
+}
+
+.crop-arrow--left .crop-arrow__glyph {
+  border-width: 11px 11px 11px 0;
+  border-right-color: currentColor;
+}
+
+.crop-arrow--right .crop-arrow__glyph {
+  border-width: 11px 0 11px 11px;
+  border-left-color: currentColor;
+}
+
+/* Both dimensions are written by the script: the frame is 90% of the panel's
+   width, less whatever a short window makes it give back. */
+.crop-stage {
+  position: relative;
+  margin: 0 auto;
+  /* Kept at 16:9 whatever shape the picture is, so this shows as the bars above
+     and below a wide clip or either side of a tall one. Lighter than the black
+     an empty picture area uses, so the two do not read as the same thing. */
+  background: #1b1b20;
+  /* The picture is drawn larger than this once zoomed, and what falls outside
+     is what the arrows point at. */
+  overflow: hidden;
+  /* Stops a drag on a grip from selecting the text around it, and keeps a pen
+     or touch drag from scrolling the popup instead of moving the bar. */
+  user-select: none;
+  touch-action: none;
+}
+
+/* Above 100% the picture is what moves, so it says so. */
+.crop-stage[data-pannable="true"] { cursor: grab; }
+.crop-stage[data-panning="true"],
+.crop-stage[data-panning="true"] .crop-box { cursor: grabbing; }
+
+/* Moved and sized by the script to sit exactly over the picture, so whatever
+   the frame leaves around it shows as the bars. */
+.crop-canvas {
+  position: absolute;
+  display: block;
+}
+
+/* The four white lines. Dragging anywhere inside recentres the box, which is
+   only useful once it is smaller than the frame. */
+.crop-box {
+  position: absolute;
+  border: 1px solid #ffffff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(0, 0, 0, 0.55);
+  cursor: move;
+}
+
+/* The bar in the middle of each line, which is the part actually grabbed. Each
+   sits astride its line so it can be caught from either side of it. */
+.crop-grip {
+  position: absolute;
+  background: #ffffff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+}
+
+.crop-grip--left,
+.crop-grip--right {
+  top: 50%;
+  width: 6px;
+  height: 36px;
+  margin-top: -18px;
+  cursor: ew-resize;
+}
+
+.crop-grip--left { left: -4px; }
+.crop-grip--right { right: -4px; }
+
+.crop-grip--top,
+.crop-grip--bottom {
+  left: 50%;
+  width: 36px;
+  height: 6px;
+  margin-left: -18px;
+  cursor: ns-resize;
+}
+
+.crop-grip--top { top: -4px; }
+.crop-grip--bottom { bottom: -4px; }
+
+/* The circle at each corner, which works both of the bars meeting there. The
+   negative margin centres it on the corner rather than hanging off inside it. */
+.crop-corner {
+  position: absolute;
+  width: 13px;
+  height: 13px;
+  margin: -7px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+}
+
+.crop-corner--tl { left: 0; top: 0; cursor: nwse-resize; }
+.crop-corner--tr { right: 0; top: 0; cursor: nesw-resize; }
+.crop-corner--bl { left: 0; bottom: 0; cursor: nesw-resize; }
+.crop-corner--br { right: 0; bottom: 0; cursor: nwse-resize; }
+
+/* The shared hint style pushes itself right inside a flex row; here it is a
+   block of its own under the frame, so that has to go. */
+.crop-hint {
+  margin: 8px 0 0;
+}
+
+.crop-size {
+  margin-top: 4px;
+  font-size: 15px;
+  font-weight: bold;
+  color: #ebebf0;
+}
+
+.crop-zoom {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.crop-zoom__caption {
+  color: #b8b8c0;
+}
+
+.crop-zoom__slider {
+  width: 180px;
+}
+
+/* Fixed width so the row does not shuffle sideways as the figure grows. */
+.crop-zoom__value {
+  width: 40px;
+  text-align: left;
+  color: #b8b8c0;
+}
+
+.crop-note {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #d8a860;
+}
+
+.crop-note[hidden] {
+  display: none;
+}
+
+.crop-presets {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.crop-actions {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+/* Both the preset that set the current box and the Crop button itself, so a
+   crop is visible as being in force without opening the popup to check. The
+   same green the selected quality uses, so "this one is in force" reads the
+   same way wherever it turns up. Dark text because the fill is light enough
+   that the normal light text would wash out. */
+.btn--active,
+button.btn--active:hover:not(:disabled) {
+  background: #78c88c;
+  border-color: #8fd9a1;
+  color: #14210f;
+  font-weight: bold;
+}
+
+button.btn--active:hover:not(:disabled) {
+  background: #86d199;
+}
+
+/* Accept and Remove are coloured for what they do, borrowing the same green and
+   the red the end handle already uses. */
+.crop-accept-btn {
+  background: #78c88c;
+  border-color: #8fd9a1;
+  color: #14210f;
+  font-weight: bold;
+}
+
+button.crop-accept-btn:hover:not(:disabled) {
+  background: #86d199;
+}
+
+.crop-remove-btn {
+  background: #dc7878;
+  border-color: #e89090;
+  color: #210f0f;
+  font-weight: bold;
+}
+
+button.crop-remove-btn:hover:not(:disabled) {
+  background: #e58686;
+}
+
+/* Where the preview has got to, on both timelines. Placed with the same mapping
+   the trim handles use, so the bar and the handles cannot disagree about where
+   a given second sits. pointer-events: none is load-bearing: the bar lies over
+   the waveform and the slider, both of which are dragged. */
+.playhead {
+  position: absolute;
+  width: 1px;
+  background: #ffffff;
+  pointer-events: none;
+}
+
+/* An author display value outranks the UA rule behind the hidden attribute. */
+.playhead[hidden] {
+  display: none;
+}
+
+.playhead--audio {
+  top: 0;
+  bottom: 0;
+}
+
+/* Far shorter than the audio one: the slider is 32px tall and its handles are
+   16px, so the bar stays within them rather than towering over the track. */
+.playhead--trim {
+  top: 10px;
+  height: 12px;
+}
+
+/* ---- drag and drop ---- */
+
+/* Wraps the title and quality frames so a file dragged over the window can be
+   offered them as one target. A flex item is a formatting context root, so the
+   last frame's bottom margin cannot collapse out through it and would sit
+   inside the zone, making the highlight overrun into the gap below. Owning the
+   spacing here instead keeps the zone's box exactly the two frames: gap between
+   them, margin after them. Column gap does not apply to a hidden frame either,
+   so the spacing stays right when the quality frame is not there. */
+.drop-zone {
+  position: relative;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.drop-zone > .section {
+  margin-bottom: 0;
+}
+
+/* While a drop is being offered the two frames read as one, so their own
+   backgrounds go and the hint paints the single frame instead. */
+.drop-zone[data-drop="true"] > .section {
+  background: transparent;
+}
+
+/* visibility, not display: the hint is out of flow, so removing the real
+   content would collapse the zone and take the hint's height with it. Same
+   reasoning as the save confirmation over the Trim frame. */
+.drop-zone[data-drop="true"] > .section > *,
+.audio-section[data-drop="true"] > :not(.drop-hint) {
+  visibility: hidden;
+}
+
+.drop-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+  border-radius: 6px;
+  border: 2px dashed;
+  font-size: 18px;
+  font-weight: bold;
+  text-align: center;
+  /* The frame colour underneath, with the accent laid over it, so the zone
+     reads as one solid frame even across the gap between two of them. */
+  background-color: #2a2a30;
+}
+
+/* An author display value outranks the UA rule behind the hidden attribute. */
+.drop-hint[hidden] {
+  display: none;
+}
+
+/* The start handle's green and the trim fill's blue, so a drop target reads in
+   the same colours as everything else in the app. */
+/* Two tints per zone: faint while both are merely available, stronger on the
+   one the pointer is actually over, so a drag says where it would land rather
+   than lighting the whole window evenly. */
+.drop-hint--main {
+  border-color: #78c88c;
+  color: #8fd9a1;
+  background-image: linear-gradient(rgba(120, 200, 140, 0.07), rgba(120, 200, 140, 0.07));
+}
+
+.drop-hint--audio {
+  border-color: #5a8cdc;
+  color: #8fb4e8;
+  background-image: linear-gradient(rgba(90, 140, 220, 0.07), rgba(90, 140, 220, 0.07));
+}
+
+[data-drop-hover="true"] .drop-hint--main {
+  background-image: linear-gradient(rgba(120, 200, 140, 0.26), rgba(120, 200, 140, 0.26));
+  border-color: #9fe0b2;
+}
+
+[data-drop-hover="true"] .drop-hint--audio {
+  background-image: linear-gradient(rgba(90, 140, 220, 0.26), rgba(90, 140, 220, 0.26));
+  border-color: #8fb4e8;
+}
+
+/* ---- Audio frame ---- */
+
+/* Positions this frame's drop hint against it, not the page. */
+.audio-section {
+  position: relative;
+}
+
+/* Matching edges put the volume control on the row's true centre rather than
+   the centre of whatever space the two ends leave over, the same way the
+   compression group is centred in the save row. The right edge is floored at
+   its own content though: with a replacement loaded it holds the offset box
+   and two buttons, which is more than an equal share at 1000px, and a plain
+   1fr there let its contents overflow leftward across the volume readout.
+   Floored, the centre gives way instead of being overlapped, and once the
+   window is wide enough for an equal share it is exactly centred again. */
+.audio-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr);
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.audio-row__side {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* So the filename can ellipsise instead of pushing the centre off true.
+     Only the left side gets this: it is the one with something that can give. */
+  min-width: 0;
+}
+
+.audio-row__side--end {
+  justify-content: flex-end;
+}
+
+/* The buttons keep their size; the filename is the only thing here that gives. */
+.audio-row__side button {
+  flex: none;
+  white-space: nowrap;
+}
+
+.audio-volume {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.audio-volume__caption {
+  color: #b8b8c0;
+  font-size: 11px;
+}
+
+/* Narrow enough that the row still fits at the 820px minimum window with a
+   replacement loaded, which is the widest this row ever gets. */
+.volume-slider {
+  width: 96px;
+}
+
+/* The file's own audio leaves the offset field and the Use Original button out
+   of the row, and an audio source leaves Change Audio out as well, so the
+   slider takes the space they were holding, and a step of 1% rather than 5% is
+   set with it. Twice the length rather than three times: at 288px the row still
+   fits, but only by ellipsising "Original audio" beside it at the 820px minimum
+   window. Measured, 264px is the most that leaves that label whole. */
+.audio-section[data-wide-volume="true"] .volume-slider {
+  width: 192px;
+}
+
+/* Fixed width so the row does not twitch as the number changes width. */
+.audio-volume__value {
+  color: #b8b8c0;
+  font-size: 11px;
+  width: 30px;
+  text-align: right;
+}
+
+.audio-title {
+  margin-bottom: 0;
+}
+
+/* Takes the slack so the buttons sit at the right edge, and ellipsises rather
+   than pushing them off when a replacement has a long filename. */
+.audio-source {
+  flex: 1;
+  min-width: 0;
+  color: #777780;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.audio-offset {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.audio-offset[hidden] {
+  display: none;
+}
+
+.audio-offset__caption {
+  color: #b8b8c0;
+  font-size: 11px;
+}
+
+.audio-offset__field {
+  width: 104px;
+}
+
+.audio-canvas-wrap {
+  position: relative;
+  height: 72px;
+}
+
+.audio-canvas {
+  display: block;
+  width: 100%;
+  height: 72px;
+  /* Same 33% ground as the save confirmation, so the waveform reads as sitting
+     in a well rather than floating on the frame. */
+  background: rgba(0, 0, 0, 0.33);
+  border-radius: 4px;
+}
+
+/* Only shown when there is nothing to draw: no audio track, or still working. */
+.audio-status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Room for the longer failure messages to wrap instead of running off the
+     ends of the frame now that they are set this large. */
+  padding: 0 12px;
+  text-align: center;
+  color: #777780;
+  /* Half again the usual note size: it is the only thing in an otherwise empty
+     frame, so it carries the whole panel rather than annotating something. */
+  font-size: 18px;
+  font-style: italic;
+}
+
+.audio-status[hidden] {
+  display: none;
+}
+
+/* Only meaningful with a replacement loaded, where dragging changes the offset. */
+.audio-canvas--draggable {
+  cursor: ew-resize;
+}
+
+.audio-section[data-muted="true"] .audio-canvas,
+.audio-section[data-muted="true"] .audio-source {
+  opacity: 0.4;
+}

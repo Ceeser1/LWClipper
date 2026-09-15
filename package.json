@@ -1,0 +1,52 @@
+{
+  "name": "lwclipper",
+  "version": "1.5.5",
+  "description": "Lightweight clipper for local files and video links",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test",
+    "splash": "electron scripts/make-splash.js",
+    "dist": "electron-builder && node scripts/build-launcher.js",
+    "launcher": "node scripts/build-launcher.js"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.ceeser.lwclipper",
+    "productName": "LWClipper",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "renderer/**/*",
+      "images/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "tools",
+        "to": "tools"
+      },
+      {
+        "from": "locales",
+        "to": "locales"
+      },
+      {
+        "from": "icon.ico",
+        "to": "icon.ico"
+      }
+    ],
+    "win": {
+      "target": "dir",
+      "icon": "icon.ico",
+      "signAndEditExecutable": false
+    }
+  },
+  "author": "Ceeser"
+}

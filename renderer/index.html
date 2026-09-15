@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Lightweight Clipper</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <section class="section">
+    <div class="row primary-row">
+      <button id="loadCachedBtn">Open File</button>
+      <input id="urlField" class="url-field" type="text" placeholder="or paste a Video link here..." />
+      <button id="pasteBtn">Paste</button>
+      <button id="loadBtn">Load</button>
+      <!-- Square, and carrying a picture rather than a word, so it is the same
+           button in every language. Its size is measured off the buttons beside
+           it, whose height comes from this row's larger font. -->
+      <button id="settingsBtn" class="settings-btn">
+        <img class="settings-btn__icon" src="../images/settings.png" alt="Settings" />
+      </button>
+    </div>
+  </section>
+
+  <div id="mainDrop" class="drop-zone">
+    <section class="section title-section">
+      <div class="title-main">
+        <div id="titleLabel" class="title-label"></div>
+        <div id="progressRow" class="progress-row" hidden>
+          <progress id="progressBar" value="0" max="1"></progress>
+          <button id="cancelBtn" class="cancel-btn">Cancel</button>
+        </div>
+        <div id="statusLabel" class="status-label">Paste a link above, drag and drop or open a file</div>
+        <div id="errorHint" class="error-hint" hidden></div>
+      </div>
+      <button id="clearBtn" class="clear-btn" disabled>Clear</button>
+    </section>
+
+    <section class="section quality-section" id="qualitySection">
+      <div class="quality-main">
+        <div class="section-title">Select a download quality</div>
+        <div class="row" id="formatRow">
+          <div id="formatPlaceholder" class="format-placeholder">Load a video to see the qualities it offers.</div>
+        </div>
+      </div>
+    </section>
+    <div id="mainDropHint" class="drop-hint drop-hint--main" hidden>Drop Video/Audio File</div>
+  </div>
+
+  <section class="section preview-section" id="previewSection" data-audio="false">
+    <!-- Mirrors the Audio frame's own header. Hidden for an audio source, which
+         has no picture to switch off in the first place. -->
+    <div class="row preview-head" id="videoHead">
+      <div class="section-title">Video</div>
+      <label class="checkbox-label" id="videoEnabledLabel">
+        <input id="videoEnabledToggle" type="checkbox" checked /> Enabled
+      </label>
+      <div class="hint-label">Disable video to save audio only</div>
+      <!-- Centred on the section, which puts it over the middle cell's title,
+           rather than being placed after the controls to its left. -->
+      <div id="renderResolution" class="render-resolution" hidden></div>
+    </div>
+    <div class="preview-grid">
+      <div class="preview-cell">
+        <div class="section-title preview-cell__title">Start Frame</div>
+        <!-- The stage holds the box a crop draws over the picture. It owns the
+             sizing the video used to do itself, so the row is exactly as tall
+             as it was before the overlay existed. -->
+        <div id="startFrameStage" class="frame-stage">
+          <video id="startFrameVideo" class="preview-video" muted preload="auto"></video>
+          <div id="startCropBox" class="crop-outline" hidden></div>
+        </div>
+        <div class="preview-cell__controls">
+          <!-- Only shown for an audio source, where the frame titles above are
+               gone and these boxes would otherwise be unlabelled. -->
+          <span id="startTimeCaption" class="time-caption">Start</span>
+          <input id="startTimeField" class="time-field" type="text" value="00:00:00.000" />
+        </div>
+      </div>
+      <div class="preview-cell">
+        <div class="section-title preview-cell__title" id="previewCellTitle">Preview</div>
+        <div id="previewStage" class="frame-stage">
+          <video id="previewVideo" class="preview-video" controls></video>
+          <!-- The spectrum, drawn only for an audio source, where the picture
+               has nothing to show. Stops short of the bottom so the video
+               element's own controls are still reachable underneath it. -->
+          <canvas id="eqCanvas" class="eq-canvas" hidden></canvas>
+          <!-- The transport for a source whose picture is switched off. Chromium
+               picks a control layout from the media in the element rather than
+               from CSS, so a video element gets the video bar however it is
+               styled; an audio element is the only way to the compact bar, and
+               it plays the audio line of a video container quite happily. -->
+          <audio id="previewSound" class="preview-sound" controls></audio>
+          <div id="previewCropBox" class="crop-outline" hidden></div>
+        </div>
+        <!-- Carries a replacement track so the preview sounds like the saved
+             clip will. Never shown; it rides the video element's clock. -->
+        <audio id="previewAudio" hidden></audio>
+        <div class="preview-cell__controls">
+          <button id="playSelectionBtn" disabled>Play selection</button>
+          <button id="cropBtn" disabled>Crop</button>
+        </div>
+      </div>
+      <div class="preview-cell">
+        <div class="section-title preview-cell__title">End Frame</div>
+        <div id="endFrameStage" class="frame-stage">
+          <video id="endFrameVideo" class="preview-video" muted preload="auto"></video>
+          <div id="endCropBox" class="crop-outline" hidden></div>
+        </div>
+        <div class="preview-cell__controls">
+          <span id="endTimeCaption" class="time-caption">End</span>
+          <input id="endTimeField" class="time-field" type="text" value="00:00:00.000" />
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section audio-section" id="audioSection">
+    <div class="row audio-row">
+      <div class="audio-row__side">
+        <div class="section-title audio-title">Audio</div>
+        <label class="checkbox-label" id="audioEnabledLabel">
+          <input id="audioEnabledToggle" type="checkbox" checked /> Enabled
+        </label>
+        <div id="audioSource" class="audio-source">Original audio</div>
+      </div>
+      <div class="audio-volume">
+        <span class="audio-volume__caption">Volume:</span>
+        <input id="volumeSlider" class="volume-slider" type="range"
+               min="0" max="200" step="5" value="100" />
+        <span id="volumeValue" class="audio-volume__value">100%</span>
+      </div>
+      <div class="audio-row__side audio-row__side--end">
+        <div id="audioOffsetGroup" class="audio-offset" hidden>
+          <span class="audio-offset__caption">Offset</span>
+          <input id="audioOffsetField" class="time-field audio-offset__field" type="text" value="+00:00:00.000" />
+        </div>
+        <button id="resetAudioBtn" hidden>Use Original</button>
+        <button id="changeAudioBtn">Change Audio</button>
+      </div>
+    </div>
+    <div class="audio-canvas-wrap">
+      <canvas id="audioCanvas" class="audio-canvas"></canvas>
+      <div id="audioPlayhead" class="playhead playhead--audio" hidden></div>
+      <div id="audioStatus" class="audio-status" hidden></div>
+    </div>
+    <div id="audioDropHint" class="drop-hint drop-hint--audio" hidden>Drop Audio File</div>
+  </section>
+
+  <section class="section trim-section">
+    <div class="row trim-head">
+      <div class="section-title">Trim</div>
+      <div id="hintLabel" class="hint-label">Hold Shift while dragging Audio or Trim Sliders for 10x finer control, Ctrl for 100x</div>
+    </div>
+    <div id="trimSlider" class="trim-slider">
+      <div class="trim-slider__track">
+        <div id="trimFill" class="trim-slider__fill"></div>
+      </div>
+      <div id="trimPlayhead" class="playhead playhead--trim" hidden></div>
+      <div id="startHandle" class="trim-slider__handle trim-slider__handle--start"></div>
+      <div id="endHandle" class="trim-slider__handle trim-slider__handle--end"></div>
+    </div>
+    <div class="row span-row">
+      <div id="spanLabel" class="span-label"></div>
+    </div>
+    <div id="saveNotice" class="save-notice" hidden>
+      <span id="saveNoticeText"></span>
+      <div class="save-notice__actions">
+        <button id="openSavedBtn">Open</button>
+        <button id="dismissNoticeBtn">Dismiss</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="row save-row">
+      <!-- Hidden for audio-only sources: frames there are about 26 ms, so a
+           copied cut already lands within one of the asked-for point and there
+           is nothing for the option to buy. -->
+      <label id="accurateLabel" class="checkbox-label"><input id="accurateToggle" type="checkbox" checked /> Frame-accurate cut</label>
+      <div class="compression-group">
+        <label class="checkbox-label"><input id="compressionToggle" type="checkbox" /> File Compression</label>
+        <input id="compressionSlider" class="compression-slider" type="range"
+               min="0" max="75" step="25" value="75" disabled />
+        <span id="compressionValue" class="compression-value">75%</span>
+      </div>
+      <!-- Filled in from the same table the encoders read, so the buttons
+           cannot offer a format the app cannot actually write. -->
+      <div class="format-group">
+        <span class="format-label">Output Format:</span>
+        <div id="formatToggle" class="format-toggle"></div>
+      </div>
+      <div class="save-actions">
+        <button id="quickSaveBtn" class="save-btn" disabled>Quick-Save</button>
+        <button id="saveBtn" class="save-btn" disabled>Save As...</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="section footer-section" id="toolsSection" hidden>
+    <div class="row">
+      <div id="toolsLabel" class="tools-label"></div>
+    </div>
+  </section>
+
+  <div id="settingsModal" class="modal" hidden>
+    <div class="modal__panel" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <div id="settingsTitle" class="modal__title">Settings &amp; Info</div>
+
+      <div class="modal__section">Settings</div>
+
+      <div class="setting-row">
+        <span class="setting-row__label">Language</span>
+        <div class="setting-row__control language-control">
+          <!-- The flag of whatever is chosen, swapped by script. Decorative:
+               the option beside it names the language in both languages, so
+               there is nothing here for a screen reader to repeat. -->
+          <img id="languageFlag" class="flag" alt="" />
+          <select id="languageSelect"></select>
+        </div>
+      </div>
+
+      <div class="setting-row setting-row--group">
+        <!-- The label stays flush left with the other settings and the tick
+             goes over to the right with the dropdown it switches on, which is
+             where every other control in this panel sits. -->
+        <label class="setting-row__label" for="cookiesToggle">Sign in using cookies from</label>
+        <div class="setting-row__control cookie-control">
+          <input id="cookiesToggle" type="checkbox" />
+          <select id="cookieBrowser">
+            <option value="firefox">Firefox</option>
+            <option value="chrome">Chrome</option>
+            <option value="edge">Edge</option>
+            <option value="brave">Brave</option>
+            <option value="chromium">Chromium</option>
+            <option value="opera">Opera</option>
+            <option value="vivaldi">Vivaldi</option>
+            <option value="whale">Whale</option>
+          </select>
+        </div>
+      </div>
+      <p class="setting-note">Some sites may only provide content to logged in accounts</p>
+
+      <div class="setting-row setting-row--group">
+        <span class="setting-row__label">Compression</span>
+        <input id="bestCompressionToggle" class="setting-row__control" type="checkbox" />
+      </div>
+      <p class="setting-note">Auto pre-select best quality to file-size ratio</p>
+
+      <div class="setting-row setting-row--group">
+        <span class="setting-row__label">Cache</span>
+        <!-- Filled in whenever the modal opens, so the size is current rather
+             than whatever it was when the window was built. -->
+        <span id="cacheSummary" class="setting-row__value"></span>
+      </div>
+      <div class="setting-buttons">
+        <button id="openCachedBtn">See cached files</button>
+        <button id="changeCacheBtn">Change cache folder</button>
+        <button id="clearCacheBtn" class="caution-btn">Clear cache</button>
+      </div>
+
+      <div class="setting-row setting-row--group">
+        <span class="setting-row__label">App files</span>
+      </div>
+      <p class="setting-note">
+        The App is not installed but has files inside %LocalAppData%. If you plan on
+        deleting the .exe make sure to also remove these files extracted from the .exe.
+      </p>
+      <div class="setting-buttons setting-buttons--pair">
+        <button id="openAppFilesBtn">See App files</button>
+        <button id="deleteAppFilesBtn" class="danger-btn">Delete App files</button>
+      </div>
+
+      <div class="settings-divider"></div>
+
+      <div class="modal__section">Sources</div>
+      <dl class="modal__list">
+        <dt>Links</dt><dd>YouTube, TikTok, Vimeo, Twitch and every other site yt-dlp can reach</dd>
+        <dt>Open</dt><dd>Any local file if its format is supported</dd>
+      </dl>
+
+      <div class="modal__section">Input Types</div>
+      <dl class="modal__list">
+        <dt>Video</dt><dd id="supportedVideo"></dd>
+        <dt>Audio</dt><dd id="supportedAudio"></dd>
+      </dl>
+
+      <div class="modal__section">Output Types</div>
+      <dl class="modal__list">
+        <dt>Video</dt><dd id="supportedVideoOut"></dd>
+        <dt>Audio</dt><dd id="supportedAudioOut"></dd>
+      </dl>
+
+      <div class="modal__section">Information</div>
+      <!-- The term each note is about is its own text node, so it translates
+           on its own and can be picked out of the sentence behind it. -->
+      <p class="modal__note">
+        <strong>Frame-accurate cut:</strong> Re-encodes the video. Turning it off makes the
+        cut instant but starting at the nearest keyframe, so not as accurate to your
+        Start/End times.
+      </p>
+      <p class="modal__note">
+        <strong>Cropping:</strong> If you crop a video, "Frame-accurate cut" is forced on
+        because re-encoding is required.
+      </p>
+      <p class="modal__note">
+        <strong>File compression:</strong> Optional and has the biggest impact on Video
+        files. Some Types like WAV Audio don't support compression at all.
+      </p>
+      <button id="settingsCloseBtn" class="modal__close">Close</button>
+    </div>
+  </div>
+
+  <div id="cropModal" class="modal" hidden>
+    <div class="modal__panel modal__panel--crop" role="dialog" aria-modal="true" aria-labelledby="cropTitle">
+      <div id="cropTitle" class="modal__title">Crop</div>
+      <!-- The frame is a snapshot of whatever the preview is showing, painted
+           into a canvas rather than a second <video>: it holds no file open and
+           cannot drift off the position the preview is parked at. -->
+      <div class="crop-frame">
+        <!-- Shown on whichever side the zoomed picture runs past the frame, so
+             it is clear there is more that way to pan to. -->
+        <div id="cropArrowUp" class="crop-arrow crop-arrow--up" data-live="false"><span class="crop-arrow__glyph"></span></div>
+        <div id="cropArrowDown" class="crop-arrow crop-arrow--down" data-live="false"><span class="crop-arrow__glyph"></span></div>
+        <div id="cropArrowLeft" class="crop-arrow crop-arrow--left" data-live="false"><span class="crop-arrow__glyph"></span></div>
+        <div id="cropArrowRight" class="crop-arrow crop-arrow--right" data-live="false"><span class="crop-arrow__glyph"></span></div>
+        <!-- Sits in the gutter the upper arrow occupies, level with it and
+             lined up with the left edge of the frame. Only worth saying while
+             there is an arrow to click, so it comes and goes with them. -->
+        <div id="cropPanHint" class="crop-pan-hint" hidden>Click or Hold arrows to pan precise</div>
+      <div id="cropStage" class="crop-stage">
+        <canvas id="cropCanvas" class="crop-canvas"></canvas>
+        <div id="cropBox" class="crop-box">
+          <div class="crop-grip crop-grip--left" data-edge="left"></div>
+          <div class="crop-grip crop-grip--right" data-edge="right"></div>
+          <div class="crop-grip crop-grip--top" data-edge="top"></div>
+          <div class="crop-grip crop-grip--bottom" data-edge="bottom"></div>
+          <!-- A corner works the two bars meeting at it at once, so Shift there
+               mirrors both axes and the opposite corner follows. -->
+          <div class="crop-corner crop-corner--tl" data-corner="tl"></div>
+          <div class="crop-corner crop-corner--tr" data-corner="tr"></div>
+          <div class="crop-corner crop-corner--bl" data-corner="bl"></div>
+          <div class="crop-corner crop-corner--br" data-corner="br"></div>
+        </div>
+      </div>
+      </div>
+      <div id="cropHint" class="hint-label crop-hint">Hold Shift to move bars mirrored, Ctrl on a corner to move it diagonally</div>
+      <div id="cropSize" class="crop-size"></div>
+      <div class="crop-zoom">
+        <span class="crop-zoom__caption">Zoom:</span>
+        <input id="cropZoomSlider" class="crop-zoom__slider" type="range"
+               min="100" max="400" step="1" value="100" />
+        <span id="cropZoomValue" class="crop-zoom__value">100%</span>
+      </div>
+      <div id="cropEncodeNote" class="crop-note" hidden>
+        Frame-accurate cut is off, but a crop cannot ride a stream copy, so saving re-encodes anyway.
+      </div>
+      <div class="crop-presets" id="cropPresets"></div>
+      <div class="crop-actions">
+        <button id="cropAcceptBtn" class="crop-accept-btn">Accept</button>
+        <button id="cropRemoveBtn" class="crop-remove-btn">Remove</button>
+        <button id="cropCancelBtn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
