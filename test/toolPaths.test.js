@@ -152,3 +152,115 @@ test('cacheSizeBytes counts what is in the folder and survives an empty one', ()
   fs.writeFileSync(path.join(picked, NAME, 'b.mp4'), 'y'.repeat(24));
   assert.equal(toolPaths.cacheSizeBytes(), 1024);
 });
+
+// ---- the claims folder, which Step 18 put inside the cache ----
+
+// A claim file as the app writes one, with whatever name the test needs.
+function claimIn(dir, id, body) {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, id + '.lwcref'), body || '{}');
+}
+
+test('the claims folder is named inside the cache, and not made on the way past', () => {
+  const picked = tempDir('lwc-claims-');
+  settings.set({ cacheDir: picked });
+  assert.equal(toolPaths.projectsDir(), path.join(picked, NAME, 'projects'));
+  // Reading is the common case; an empty folder in the user's Videos before
+  // anything has ever claimed is clutter with nothing behind it.
+  assert.equal(fs.existsSync(toolPaths.projectsDir()), false);
+});
+
+test('moveCache takes the claims with it', () => {
+  // Without this the folder is simply left behind at the old location and
+  // nothing reports it: every project quietly loses its protection.
+  const { from, to } = twoFolders('lwc-mc-', { 'a.mp4': 'aaa' });
+  claimIn(path.join(from, 'projects'), 'holiday', '{"one":1}');
+  assert.equal(toolPaths.moveCache(from, to), 2, 'the clip and the claim');
+  assert.deepEqual(fs.readdirSync(path.join(to, 'projects')), ['holiday.lwcref']);
+  assert.equal(fs.readFileSync(path.join(to, 'projects', 'holiday.lwcref'), 'utf8'), '{"one":1}');
+  assert.equal(fs.existsSync(from), false, 'and the old folder goes, subtree and all');
+});
+
+test('a claim whose name is already taken at the destination is renamed, not dropped', () => {
+  // Unlike a clip, where the name is a content key and a duplicate is the same
+  // file. Two claims of the same name may be two different projects, and
+  // dropping one would silently unprotect it.
+  const { from, to } = twoFolders('lwc-mcc-', {});
+  claimIn(path.join(from, 'projects'), 'holiday', '{"mine":true}');
+  claimIn(path.join(to, 'projects'), 'holiday', '{"theirs":true}');
+  assert.equal(toolPaths.moveCache(from, to), 1);
+  assert.deepEqual(fs.readdirSync(path.join(to, 'projects')).sort(),
+    ['holiday-2.lwcref', 'holiday.lwcref']);
+  assert.equal(fs.readFileSync(path.join(to, 'projects', 'holiday.lwcref'), 'utf8'),
+    '{"theirs":true}', 'the one already there is the one that keeps the name');
+});
+
+test('moveCache still leaves a folder that is not the claims one', () => {
+  const { from, to } = twoFolders('lwc-mco-', {});
+  fs.mkdirSync(path.join(from, 'something_else'));
+  claimIn(path.join(from, 'projects'), 'x');
+  assert.equal(toolPaths.moveCache(from, to), 1);
+  assert.deepEqual(fs.readdirSync(from), ['something_else'], 'not ours, not touched');
+});
+
+// ---- clearing ----
+
+test('clearCache takes the clips and leaves the claims', () => {
+  // By rule now. This used to walk readdir and unlink everything, and the
+  // folder survived only because unlink threw on it and the catch swallowed it.
+  const picked = tempDir('lwc-clear-');
+  settings.set({ cacheDir: picked });
+  const dir = path.join(picked, NAME);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'a.mp4'), 'x'.repeat(500));
+  claimIn(path.join(dir, 'projects'), 'holiday', '{"kept":true}');
+  assert.equal(toolPaths.clearCache(), 500, 'only the clip counts as freed');
+  assert.deepEqual(fs.readdirSync(dir), ['projects']);
+  assert.equal(fs.readFileSync(path.join(dir, 'projects', 'holiday.lwcref'), 'utf8'),
+    '{"kept":true}');
+});
+
+test('cacheFileNames lists the clips and not the folder among them', () => {
+  const picked = tempDir('lwc-names-');
+  settings.set({ cacheDir: picked });
+  const dir = path.join(picked, NAME);
+  fs.mkdirSync(path.join(dir, 'projects'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'a.mp4'), 'x');
+  assert.deepEqual(toolPaths.cacheFileNames(), ['a.mp4']);
+});
+
+test('cacheSizeBytes counts the claims too, because they are in the folder', () => {
+  const picked = tempDir('lwc-size2-');
+  settings.set({ cacheDir: picked });
+  const dir = path.join(picked, NAME);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'a.mp4'), 'x'.repeat(1000));
+  claimIn(path.join(dir, 'projects'), 'holiday', 'y'.repeat(24));
+  assert.equal(toolPaths.cacheSizeBytes(), 1024);
+});
+
+test('clearCache takes only the files it is given', () => {
+  // Step 18. Which files those are is a question about projects, decided by
+  // src/claim.js; this end only has to do as it is told.
+  const picked = tempDir('lwc-clearsome-');
+  settings.set({ cacheDir: picked });
+  const dir = path.join(picked, NAME);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'kept.mp4'), 'x'.repeat(300));
+  fs.writeFileSync(path.join(dir, 'gone.mp4'), 'x'.repeat(200));
+  assert.equal(toolPaths.clearCache(['gone.mp4']), 200);
+  assert.deepEqual(fs.readdirSync(dir), ['kept.mp4']);
+});
+
+test('an empty list takes nothing, which is not the same as taking everything', () => {
+  // A real answer rather than a missing one: every cached file is claimed and
+  // no project was ticked. Letting the empty list fall through to the default
+  // would delete precisely what the modal was asked to protect.
+  const picked = tempDir('lwc-clearnone-');
+  settings.set({ cacheDir: picked });
+  const dir = path.join(picked, NAME);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'a.mp4'), 'x'.repeat(100));
+  assert.equal(toolPaths.clearCache([]), 0);
+  assert.deepEqual(fs.readdirSync(dir), ['a.mp4']);
+});

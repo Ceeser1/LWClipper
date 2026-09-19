@@ -5,7 +5,10 @@ const assert = require('node:assert/strict');
 // trimmer.js requires 'electron' via toolPaths.js; stub it out so these pure
 // buildTrimArgs tests can run under plain `node --test` without Electron.
 require.cache[require.resolve('electron')] = { exports: { app: { isPackaged: false, getPath: () => '' } } };
-const { buildTrimArgs } = require('../src/trimmer');
+const { buildTrimArgs, parseFrameRate, discardPartial } = require('../src/trimmer');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 // probeMedia always reports these, so a call without them is describing a state
 // the app cannot actually be in. Named here so the argv tests read as real cuts.
@@ -556,4 +559,64 @@ test('an audio source is unaffected by a switch it does not have', () => {
 test('dropping the picture still keeps the sound', () => {
   const args = noVideo('d.mp3');
   assert.ok(!args.includes('-an'), 'an output with neither stream is not a clip');
+});
+
+// ---- Step 15: the frame rate a project is seeded from ----
+
+test('a frame rate arrives from ffprobe as a fraction and leaves as a number', () => {
+  assert.equal(parseFrameRate('30/1'), 30);
+  assert.equal(parseFrameRate('60/1'), 60);
+  assert.equal(parseFrameRate('24/1'), 24);
+});
+
+test('29.97 and 30 stay different rates', () => {
+  // Rounding to a whole number here would tell a project seeded from NTSC
+  // material that it is 30fps, and the export would drift against its source.
+  assert.equal(parseFrameRate('30000/1001'), 29.97);
+  assert.equal(parseFrameRate('24000/1001'), 23.976);
+  assert.notEqual(parseFrameRate('30000/1001'), parseFrameRate('30/1'));
+});
+
+test('anything ffprobe will not commit to is no rate at all', () => {
+  // 0/0 is what it writes for a stream with no rate to report, and every audio
+  // file has no video stream to ask in the first place.
+  assert.equal(parseFrameRate('0/0'), 0);
+  assert.equal(parseFrameRate('30/0'), 0);
+  assert.equal(parseFrameRate(''), 0);
+  assert.equal(parseFrameRate(undefined), 0);
+  assert.equal(parseFrameRate('N/A'), 0);
+  assert.equal(parseFrameRate('30'), 0);
+});
+
+// ---- the partial file a cancelled encode leaves, Step 16 ----
+
+test('a cancelled encode leaves nothing behind under the name that was chosen', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lwc-partial-'));
+  const half = path.join(dir, 'clip.mp4');
+  fs.writeFileSync(half, 'the first four seconds');
+  discardPartial(half);
+  assert.equal(fs.existsSync(half), false);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a destination that was never written is not an error', () => {
+  // Cancel can land before ffmpeg has opened the file at all, and there is
+  // nothing wrong with that: the job still ended with no output, which is what
+  // this has to leave behind either way.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lwc-partial-'));
+  discardPartial(path.join(dir, 'never-written.mp4'));
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a path that cannot be removed is swallowed rather than thrown', () => {
+  // A directory where a file was expected: rmSync refuses it without recursive,
+  // which stands in for the handle another process might still hold. Cancel has
+  // already happened, and failing to tidy up is not a second failure to report.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lwc-partial-'));
+  const blocked = path.join(dir, 'clip.mp4');
+  fs.mkdirSync(blocked);
+  fs.writeFileSync(path.join(blocked, 'inside.txt'), 'x');
+  discardPartial(blocked);
+  assert.equal(fs.existsSync(blocked), true);
+  fs.rmSync(dir, { recursive: true, force: true });
 });

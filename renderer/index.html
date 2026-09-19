@@ -21,9 +21,13 @@
     </div>
   </section>
 
+  <!-- Two frames in simple editing, one in advanced. The pieces below are the
+       same nodes either way: updateMainFrame() moves the title column, the
+       buttons and Cancel between the two sections rather than the app owning
+       two status lines and two progress bars that could disagree. -->
   <div id="mainDrop" class="drop-zone">
-    <section class="section title-section">
-      <div class="title-main">
+    <section class="section title-section" id="titleSection">
+      <div class="title-main" id="titleMain">
         <div id="titleLabel" class="title-label"></div>
         <div id="progressRow" class="progress-row" hidden>
           <progress id="progressBar" value="0" max="1"></progress>
@@ -32,14 +36,18 @@
         <div id="statusLabel" class="status-label">Paste a link above, drag and drop or open a file</div>
         <div id="errorHint" class="error-hint" hidden></div>
       </div>
-      <button id="clearBtn" class="clear-btn" disabled>Clear</button>
+      <div id="mainActions" class="main-actions">
+        <button id="clearBtn" class="clear-btn" disabled>Clear</button>
+      </div>
     </section>
 
     <section class="section quality-section" id="qualitySection">
-      <div class="quality-main">
-        <div class="section-title">Select a download quality</div>
-        <div class="row" id="formatRow">
-          <div id="formatPlaceholder" class="format-placeholder">Load a video to see the qualities it offers.</div>
+      <div class="main-frame__body" id="mainFrameBody">
+        <div class="quality-main" id="qualityMain">
+          <div class="section-title">Select a download quality</div>
+          <div class="row" id="formatRow">
+            <div id="formatPlaceholder" class="format-placeholder">Load a video to see the qualities it offers.</div>
+          </div>
         </div>
       </div>
     </section>
@@ -67,6 +75,14 @@
              as it was before the overlay existed. -->
         <div id="startFrameStage" class="frame-stage">
           <video id="startFrameVideo" class="preview-video" muted preload="auto"></video>
+          <!-- Advanced editing's start frame. The composite at the trim
+               point, which is a picture of whatever covers that moment
+               rather than of one file, so it cannot be a video element.
+               Rebuilt on release rather than during the drag: seeking
+               every covering layer is about a second at 1080p, and the
+               spinner is what says so. -->
+          <canvas id="startFrameCanvas" class="frame-canvas" hidden></canvas>
+          <div id="startFrameBusy" class="frame-busy" hidden><div class="frame-busy__spin"></div></div>
           <div id="startCropBox" class="crop-outline" hidden></div>
         </div>
         <div class="preview-cell__controls">
@@ -90,12 +106,25 @@
                styled; an audio element is the only way to the compact bar, and
                it plays the audio line of a video container quite happily. -->
           <audio id="previewSound" class="preview-sound" controls></audio>
+          <!-- Advanced editing's picture: every layer covering the playhead,
+               composited onto one canvas at the project's own shape. It takes
+               the video element's place rather than sitting beside it, because
+               in advanced mode the single media file is not what the preview is
+               of any more. -->
+          <canvas id="compositeCanvas" class="composite-canvas" hidden></canvas>
           <div id="previewCropBox" class="crop-outline" hidden></div>
         </div>
         <!-- Carries a replacement track so the preview sounds like the saved
              clip will. Never shown; it rides the video element's clock. -->
         <audio id="previewAudio" hidden></audio>
+        <!-- One decoder per video layer. They have to be in the document to
+             decode, and none of them is ever meant to be looked at: the canvas
+             above is the only picture. -->
+        <div id="compositePool" class="composite-pool"></div>
         <div class="preview-cell__controls">
+          <!-- Advanced editing's transport. The video element's own control bar
+               belongs to one file, and the composite is not one file. -->
+          <button id="compositePlayBtn" hidden>Play</button>
           <button id="playSelectionBtn" disabled>Play selection</button>
           <button id="cropBtn" disabled>Crop</button>
         </div>
@@ -104,6 +133,14 @@
         <div class="section-title preview-cell__title">End Frame</div>
         <div id="endFrameStage" class="frame-stage">
           <video id="endFrameVideo" class="preview-video" muted preload="auto"></video>
+          <!-- Advanced editing's end frame. The composite at the trim
+               point, which is a picture of whatever covers that moment
+               rather than of one file, so it cannot be a video element.
+               Rebuilt on release rather than during the drag: seeking
+               every covering layer is about a second at 1080p, and the
+               spinner is what says so. -->
+          <canvas id="endFrameCanvas" class="frame-canvas" hidden></canvas>
+          <div id="endFrameBusy" class="frame-busy" hidden><div class="frame-busy__spin"></div></div>
           <div id="endCropBox" class="crop-outline" hidden></div>
         </div>
         <div class="preview-cell__controls">
@@ -146,22 +183,70 @@
     <div id="audioDropHint" class="drop-hint drop-hint--audio" hidden>Drop Audio File</div>
   </section>
 
-  <section class="section trim-section">
-    <div class="row trim-head">
-      <div class="section-title">Trim</div>
-      <div id="hintLabel" class="hint-label">Hold Shift while dragging Audio or Trim Sliders for 10x finer control, Ctrl for 100x</div>
-    </div>
-    <div id="trimSlider" class="trim-slider">
-      <div class="trim-slider__track">
-        <div id="trimFill" class="trim-slider__fill"></div>
+  <!-- The two editing frames and the one overlay they share. Simple editing
+       shows Trim, advanced editing shows the timeline, and the save
+       confirmation covers whichever of them is up, which is why it sits out
+       here rather than inside either one. The wrapper carries the frame's
+       bottom margin so the overlay's inset:0 still lands on the frame exactly,
+       corners included. -->
+  <div class="edit-area">
+    <section class="section trim-section">
+      <div class="row trim-head">
+        <div class="section-title">Trim</div>
+        <div id="hintLabel" class="hint-label">Hold Shift while dragging Audio or Trim Sliders for 10x finer control, Ctrl for 100x</div>
       </div>
-      <div id="trimPlayhead" class="playhead playhead--trim" hidden></div>
-      <div id="startHandle" class="trim-slider__handle trim-slider__handle--start"></div>
-      <div id="endHandle" class="trim-slider__handle trim-slider__handle--end"></div>
-    </div>
-    <div class="row span-row">
-      <div id="spanLabel" class="span-label"></div>
-    </div>
+      <div id="trimSlider" class="trim-slider">
+        <div class="trim-slider__track">
+          <div id="trimFill" class="trim-slider__fill"></div>
+        </div>
+        <div id="trimPlayhead" class="playhead playhead--trim" hidden></div>
+        <div id="startHandle" class="trim-slider__handle trim-slider__handle--start"></div>
+        <div id="endHandle" class="trim-slider__handle trim-slider__handle--end"></div>
+      </div>
+      <div class="row span-row">
+        <div id="spanLabel" class="span-label"></div>
+      </div>
+    </section>
+
+    <!-- The ruler, the playhead and the two trim markers. The stack below them
+         is empty until Step 7 puts layer rows in it, but it is already the
+         surface the playhead runs down and a click seeks on. -->
+    <section class="section timeline-section">
+      <div class="row timeline-head">
+        <div class="section-title">Timeline</div>
+        <!-- Step 17. Save Project has lived on the save row since Step 15, so
+             the header keeps only the one thing that row cannot offer: a way
+             into a timeline that is still empty. It goes as soon as there is
+             anything to lose, and comes back if the timeline is emptied. The
+             dot appears when there is work that is not in the file yet. -->
+        <button id="openProjectBtn" class="project-btn" hidden>Open Project</button>
+        <div id="projectName" class="project-name" hidden></div>
+        <div id="timelineHint" class="hint-label">Wheel to zoom, Shift and wheel to scroll, drag the markers to trim</div>
+      </div>
+      <div id="timelineStage" class="timeline-stage">
+        <div class="timeline-ruler-row">
+          <!-- Empty, and exactly as wide as a layer's header, so the ruler
+               above the tracks starts where the tracks do. -->
+          <div class="timeline-gutter"></div>
+          <canvas id="timelineRuler" class="timeline-ruler"></canvas>
+        </div>
+        <div id="timelineStack" class="timeline-stack"></div>
+        <!-- Everything placed by time lives in here, and the lane starts where
+             the track area starts, so x is measured from the same zero the
+             ruler is drawn against and timelineView needs no offset at all.
+             The lane takes no clicks; the two markers inside it opt back in. -->
+        <div id="timelineLane" class="timeline-lane">
+          <!-- Covers the empty headroom past the end of the content, ruler and
+               tracks together, so the two cannot disagree about where the
+               material ends. -->
+          <div id="timelineBeyond" class="timeline-beyond" hidden></div>
+          <div id="timelinePlayhead" class="playhead playhead--timeline" hidden></div>
+          <div id="timelineTrimIn" class="timeline-marker timeline-marker--in" hidden></div>
+          <div id="timelineTrimOut" class="timeline-marker timeline-marker--out" hidden></div>
+        </div>
+      </div>
+    </section>
+
     <div id="saveNotice" class="save-notice" hidden>
       <span id="saveNoticeText"></span>
       <div class="save-notice__actions">
@@ -169,7 +254,7 @@
         <button id="dismissNoticeBtn">Dismiss</button>
       </div>
     </div>
-  </section>
+  </div>
 
   <section class="section">
     <div class="row save-row">
@@ -177,6 +262,15 @@
            copied cut already lands within one of the asked-for point and there
            is nothing for the option to buy. -->
       <label id="accurateLabel" class="checkbox-label"><input id="accurateToggle" type="checkbox" checked /> Frame-accurate cut</label>
+      <!-- Step 16, and it takes the slot the checkbox above vacates in advanced
+           editing. The two never show together: a composite always re-encodes,
+           so there is no copy mode to choose, and the rate the project renders
+           at is the decision that belongs in that space instead. Options are
+           filled in by script, because the list carries the project's own rate
+           when that is not one of the five. -->
+      <label id="fpsLabel" class="fps-label" hidden>Frame rate:
+        <select id="fpsSelect" class="fps-select"></select>
+      </label>
       <div class="compression-group">
         <label class="checkbox-label"><input id="compressionToggle" type="checkbox" /> File Compression</label>
         <input id="compressionSlider" class="compression-slider" type="range"
@@ -247,6 +341,12 @@
       <p class="setting-note">Auto pre-select best quality to file-size ratio</p>
 
       <div class="setting-row setting-row--group">
+        <span class="setting-row__label">Use advanced Editing</span>
+        <input id="advancedEditingToggle" class="setting-row__control" type="checkbox" />
+      </div>
+      <p class="setting-note">Layer several video and audio tracks on a timeline instead of trimming one file</p>
+
+      <div class="setting-row setting-row--group">
         <span class="setting-row__label">Cache</span>
         <!-- Filled in whenever the modal opens, so the size is current rather
              than whatever it was when the window was built. -->
@@ -310,6 +410,25 @@
     </div>
   </div>
 
+  <!-- Step 13. The one modal that answers back. Both existing modals open and
+       close through listeners and neither returns a decision; this one blocks
+       whatever asked until a button is pressed. Its title, message, list and
+       buttons are all written by showChoice, so the markup is only the shape. -->
+  <div id="choiceModal" class="modal" hidden>
+    <div class="modal__panel modal__panel--choice" role="dialog" aria-modal="true" aria-labelledby="choiceTitle">
+      <div id="choiceTitle" class="modal__title"></div>
+      <!-- A container rather than the paragraph itself since Step 18: Clear
+           cache puts two warnings up and either of them can be absent. -->
+      <div id="choiceMessage"></div>
+      <!-- Scrollable rather than capped. A native dialog would have run fifty
+           entries off the screen, which is the only reason the first draft of
+           this was going to limit the list. -->
+      <div id="choiceList" class="choice-list" hidden></div>
+      <p id="choiceFooter" class="modal__note"></p>
+      <div id="choiceButtons" class="choice-buttons"></div>
+    </div>
+  </div>
+
   <div id="cropModal" class="modal" hidden>
     <div class="modal__panel modal__panel--crop" role="dialog" aria-modal="true" aria-labelledby="cropTitle">
       <div id="cropTitle" class="modal__title">Crop</div>
@@ -363,6 +482,17 @@
     </div>
   </div>
 
+  <!-- Before app.js, which reads the bindings these declare. The renderer is
+       sandboxed and cannot require() anything, so code it shares with the main
+       process has to arrive as a plain script. timeline.js is the same file
+       main requires, which is the point: one layer model, not two that have to
+       be kept agreeing. -->
+  <script src="../src/timeline.js"></script>
+  <script src="../src/geometry.js"></script>
+  <script src="../src/history.js"></script>
+  <script src="../src/project.js"></script>
+  <script src="../src/claim.js"></script>
+  <script src="timelineView.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

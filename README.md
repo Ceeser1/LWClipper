@@ -4,6 +4,12 @@ A lightweight clipper for local video and audio files and for links, built on
 Electron. Paste a link or open a file, trim it, crop it, replace or adjust its
 audio, and save it as MP4, WebM, MOV, MP3, WAV, OGG, AAC or FLAC.
 
+Switch on **Use advanced Editing** in the settings and the same window becomes a
+small multi-track editor instead: several video and audio layers on one
+timeline, each trimmed, moved, cropped and mixed on its own, composited into one
+file. A project is saved as a `.lwc` file, which holds the arrangement and
+references the media rather than copying it.
+
 Windows only. The interface is in English and German.
 
 ## The three tools are not in this repo
@@ -68,5 +74,13 @@ icon or the wording ever change.
 - `src/` is the work: `ytdlp.js` fetches, `trimmer.js` builds the ffmpeg argv,
   `backend.js` holds the format table every encoder decision reads from,
   `waveform.js` renders the audio peaks, `toolPaths.js` locates everything.
+- Advanced editing adds its own half of `src/`, none of which touches the DOM so
+  that all of it can be tested under plain `node --test`: `timeline.js` is the
+  layer model, `geometry.js` places a layer in the output frame, `composer.js`
+  turns both into an ffmpeg filter graph, `history.js` is the undo stack,
+  `project.js` reads and writes `.lwc`, `filmstrip.js` extracts clip thumbnails
+  and `progress.js` reads ffmpeg's own progress blocks for the bar and the ETA.
+  `renderer/timelineView.js` is the zoom and scroll arithmetic, and the only one
+  of them that lives with the window.
 - `locales/` holds the translations. English text is the key, so an untranslated
   string falls through to English rather than to a blank.

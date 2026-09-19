@@ -5,6 +5,7 @@ const path = require('path');
 const { app } = require('electron');
 const { safeFilename, containerFor } = require('./backend');
 const settings = require('./settings');
+const projectClaim = require('./claim');
 
 // In a packaged build, tools/ ships under process.resourcesPath (see
 // extraResources in package.json). In dev, it's just the tools/ folder
@@ -102,19 +103,48 @@ function cacheDir() {
   return dir;
 }
 
-// Same reasoning: a size that cannot be taken is 0 rather than a throw, and one
-// file that cannot be stat'd costs only itself. A download finishing between
-// the listing and the stat is enough to hit this.
-function cacheSizeBytes() {
-  const dir = cacheDir();
-  let total = 0;
+/**
+ * Where the claim files live: one folder inside the cache, holding a .lwcref
+ * per project that wants something in here.
+ *
+ * Not created on the way past, unlike cacheDir. Reading the claims is the
+ * common case and an empty folder appearing in the user's Videos before any
+ * project has ever claimed anything is clutter with nothing behind it. The one
+ * caller that writes makes it.
+ */
+function projectsDir() {
+  return path.join(cacheDir(), projectClaim.FOLDER);
+}
+
+// The plain files in a folder, with anything that is not one skipped. This is
+// what keeps the claims folder out of every listing that means "the clips".
+function fileNamesIn(dir) {
   let names;
   try {
     names = fs.readdirSync(dir);
   } catch {
-    return 0;
+    return [];
   }
-  for (const f of names) {
+  return names.filter((f) => {
+    try {
+      return fs.statSync(path.join(dir, f)).isFile();
+    } catch {
+      return false; // Gone since the listing, or unreadable.
+    }
+  });
+}
+
+/** The cached clips, by name. A name in here is a content key. */
+function cacheFileNames() {
+  return fileNamesIn(cacheDir());
+}
+
+// A size that cannot be taken is 0 rather than a throw, and one file that
+// cannot be stat'd costs only itself. A download finishing between the listing
+// and the stat is enough to hit this.
+function dirSizeBytes(dir) {
+  let total = 0;
+  for (const f of fileNamesIn(dir)) {
     try {
       total += fs.statSync(path.join(dir, f)).size;
     } catch {
@@ -122,6 +152,12 @@ function cacheSizeBytes() {
     }
   }
   return total;
+}
+
+// The clips plus the claims. The claims are kilobytes against gigabytes, but
+// the readout says what is in the folder and they are in the folder.
+function cacheSizeBytes() {
+  return dirSizeBytes(cacheDir()) + dirSizeBytes(projectsDir());
 }
 
 /**
@@ -134,24 +170,36 @@ function cacheSizeBytes() {
  * destination is the same clip: the old copy is dropped rather than carried
  * over under a second name. Returns how many files arrived.
  */
-function moveCache(from, to) {
-  if (!from || !to) return 0;
-  if (path.resolve(from).toLowerCase() === path.resolve(to).toLowerCase()) return 0;
-  let names;
+/**
+ * One folder's plain files carried into another, with the two collision rules
+ * this app has.
+ *
+ * `onCollision` is 'drop' for clips, because a name in the cache is a content
+ * key and a file already at the destination is the same clip. It is 'rename'
+ * for claims, where a shared name means only that two projects were called the
+ * same thing, and dropping one would silently unprotect a project.
+ */
+function moveFiles(from, to, onCollision) {
+  const names = fileNamesIn(from);
+  if (!names.length) return 0;
   try {
-    names = fs.readdirSync(from);
+    fs.mkdirSync(to, { recursive: true });
   } catch {
-    return 0; // Never created, or already gone. Nothing to carry.
+    return 0; // Nowhere to put them; they stay where they are.
   }
   let moved = 0;
   for (const name of names) {
     const src = path.join(from, name);
-    const dest = path.join(to, name);
+    let dest = path.join(to, name);
     try {
-      if (!fs.statSync(src).isFile()) continue;
       if (fs.existsSync(dest)) {
-        fs.unlinkSync(src);
-        continue;
+        if (onCollision === 'drop') {
+          fs.unlinkSync(src);
+          continue;
+        }
+        const ext = path.extname(name);
+        const taken = fileNamesIn(to).map((f) => path.basename(f, path.extname(f)));
+        dest = path.join(to, projectClaim.idFor(path.basename(name, ext), taken) + ext);
       }
       try {
         fs.renameSync(src, dest);
@@ -165,6 +213,24 @@ function moveCache(from, to) {
       // and so does the folder around it.
     }
   }
+  return moved;
+}
+
+function moveCache(from, to) {
+  if (!from || !to) return 0;
+  if (path.resolve(from).toLowerCase() === path.resolve(to).toLowerCase()) return 0;
+  let moved = moveFiles(from, to, 'drop');
+  // Step 18. The claims travel with the cache they describe. Without this the
+  // folder would simply be left behind at the old location, and nothing would
+  // report it: every project would quietly lose its protection the first time
+  // the cache folder was changed.
+  const fromClaims = path.join(from, projectClaim.FOLDER);
+  moved += moveFiles(fromClaims, path.join(to, projectClaim.FOLDER), 'rename');
+  try {
+    fs.rmdirSync(fromClaims);
+  } catch {
+    // Never existed, or something in it could not be moved.
+  }
   try {
     // Only ever a folder this app made, and only once it is empty: rmdir
     // refuses one with anything left in it, so a file that could not be moved
@@ -176,10 +242,24 @@ function moveCache(from, to) {
   return moved;
 }
 
-function clearCache() {
+/**
+ * Clear the clips, keeping the claims.
+ *
+ * `names` is which files to take, and defaults to all of them, which is what
+ * this meant before a project could claim one. Step 18 gives the caller the say
+ * because the rule that decides is about projects rather than about paths: it
+ * lives in src/claim.js, and only the side holding the claims can apply it.
+ *
+ * The claims folder survives either way, because cacheFileNames lists files and
+ * it is not one. That is the rule rather than the accident it used to be: this
+ * walked readdir and unlinked everything, and a folder survived only because
+ * unlink threw on it and the catch swallowed the error.
+ */
+function clearCache(names) {
+  const dir = cacheDir();
   let freed = 0;
-  for (const f of fs.readdirSync(cacheDir())) {
-    const full = path.join(cacheDir(), f);
+  for (const f of names || cacheFileNames()) {
+    const full = path.join(dir, f);
     try {
       freed += fs.statSync(full).size;
       fs.unlinkSync(full);
@@ -210,6 +290,7 @@ function quickSaveTarget(title, isAudio, format) {
 module.exports = {
   findYtDlp, findFfmpeg, findFfprobe, cacheDir, isCacheFolder, cacheSizeBytes, clearCache,
   moveCache,
+  projectsDir, cacheFileNames,
   quickSaveTarget,
   appIconPath,
 };

@@ -194,6 +194,34 @@ button:disabled {
   gap: 10px;
 }
 
+/* An author display value outranks the UA rule behind the hidden attribute, so
+   without this the frame would stay up in advanced editing, where the quality
+   frame has taken its job. Same reasoning as the quality section above. */
+.title-section[hidden] {
+  display: none;
+}
+
+/* Whatever the frame is currently about, in a column. One child in simple
+   editing, where it is only the quality picker and this changes nothing; two in
+   advanced, where the title column moved in above it. */
+.main-frame__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Cancel and Clear, which are never both up: Clear hides itself for the length
+   of a job and Cancel appears for exactly that length. The row is here so the
+   pair occupy one slot rather than the layout shifting as they trade places. */
+.main-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .title-main {
   flex: 1;
   min-width: 0;
@@ -390,6 +418,97 @@ progress {
   max-height: 27px;
 }
 
+/* Advanced editing's preview. Laid over the frame the same way the spectrum is,
+   and for the same reason: a canvas left to size itself takes its intrinsic
+   300x150 and sits in the corner of the box. object-fit is what letterboxes a
+   project whose shape is not the frame's, exactly as it does for the video
+   element this replaces. */
+.composite-canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: #121214;
+  object-fit: contain;
+}
+
+.composite-canvas[hidden] {
+  display: none;
+}
+
+/* Step 10e. The Start and End cells, for the same reason as the one above: at a
+   trim point the frame is a composite of whatever covers that moment, which no
+   video element can hold. Absolute, so the spinner can sit over it. */
+.frame-canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: #121214;
+  object-fit: contain;
+}
+
+.frame-canvas[hidden] {
+  display: none;
+}
+
+/* Over the last frame rather than instead of it, so the cell keeps showing the
+   picture it had while the next one is decoded. A trim point on a project with
+   five 1080p layers is about a second of seeking away, which is long enough
+   that a cell going blank would read as a bug. */
+.frame-busy {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(18, 18, 20, 0.45);
+}
+
+.frame-busy[hidden] {
+  display: none;
+}
+
+.frame-busy__spin {
+  width: 26px;
+  height: 26px;
+  border: 3px solid rgba(255, 255, 255, 0.22);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: frame-busy-spin 0.8s linear infinite;
+}
+
+@keyframes frame-busy-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* The decoders. display: none still decodes and still draws, which is what the
+   vertical slice proved before any of this was wired to the window. */
+.composite-pool {
+  display: none;
+}
+
+/* The single media file is not what advanced mode's preview is of, so its
+   element goes entirely rather than playing on underneath the composite. By id,
+   because the start and end frames are .preview-video as well and they still
+   show the file the Trim frame is about. */
+/* Advanced editing owns this frame. The single media file is not what it is a
+   preview of, picture or no picture, so neither element belongs in it: with a
+   video output the composite canvas has the space, with an audio one the
+   spectrum does, and the timeline's own Play button is the transport for both.
+   Leaving either element here would put a second control bar on screen driving
+   a file the mode is not showing. */
+.preview-section[data-composite="true"] #previewVideo,
+.preview-section[data-composite="true"] #startFrameVideo,
+.preview-section[data-composite="true"] #endFrameVideo,
+.preview-section[data-composite="true"] .preview-sound {
+  display: none;
+}
+
 /* Sized in percentages, not by left/right/bottom offsets: a canvas is a
    replaced element, so width: auto resolves to its intrinsic 300px and the
    right offset is simply dropped, which drew the whole spectrum into the left
@@ -496,6 +615,7 @@ progress {
    floating in the middle of it. nowrap because the hint is long enough to wrap
    at the minimum window width, which would make the frame taller. */
 .trim-head,
+.timeline-head,
 .preview-head {
   flex: none;
   justify-content: flex-start;
@@ -527,6 +647,7 @@ progress {
 /* The title carries its own bottom margin for the normal stacked case; inside
    this row the row owns the spacing. */
 .trim-head .section-title,
+.timeline-head .section-title,
 .preview-head .section-title {
   margin-bottom: 0;
 }
@@ -582,6 +703,36 @@ progress {
 }
 
 .save-row > .checkbox-label { white-space: nowrap; }
+
+/* Step 16. Stands where Frame-accurate cut stands and is laid out to the same
+   nowrap rule, so swapping one for the other cannot change how the row wraps.
+   The select itself is the app's plain one; only the pairing with its text is
+   said here. */
+.fps-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+/* display: flex above outranks the attribute on its own, the same explicit
+   case every other laid-out element here needs. */
+.fps-label[hidden] {
+  display: none;
+}
+
+/* Five numbers and at most one more, so it needs no more room than its widest
+   entry. Padded tighter than the app's default select, which is sized for the
+   settings panel where it sits alone in a row. */
+.fps-select {
+  padding: 4px 6px;
+}
+
+/* Matches .checkbox-label:has(input:disabled) below: the whole control dims,
+   not only the box. */
+.fps-label:has(select:disabled) {
+  opacity: 0.5;
+}
 
 .compression-group {
   display: flex;
@@ -682,9 +833,719 @@ progress {
   white-space: nowrap;
 }
 
-/* Positions the save confirmation overlay against this frame, not the page. */
-.trim-section {
+/* Holds the two editing frames and positions the save confirmation overlay
+   against whichever of them is showing, rather than against the page. The 10px
+   a frame carried between itself and the save row moves out here, so this box
+   is exactly the visible frame's box and the overlay's inset:0 covers it
+   corner to corner rather than overhanging into the gap. */
+.edit-area {
   position: relative;
+  flex: none;
+  margin-bottom: 10px;
+}
+
+.edit-area > .section {
+  margin-bottom: 0;
+}
+
+/* The layout switch. Exactly one frame is in the flow at a time, so with
+   advanced editing off the column is laid out the way it was before the
+   timeline existed. */
+.timeline-section {
+  display: none;
+}
+
+body.advanced .trim-section {
+  display: none;
+}
+
+/* Step 10c. Every control in the Audio frame has a timeline equivalent by now:
+   Enabled and Volume are per-layer, Change Audio is the empty Audio row, the
+   waveform is drawn per clip and the Offset field is the clip itself being
+   dragged. Hidden rather than deleted, because simple mode still is 1.5.5 and
+   keeps all of it. */
+body.advanced .audio-section {
+  display: none;
+}
+
+/* Step 13. The project buttons sit after the Timeline title and before the
+   hint, which keeps the hint where it has always been: last and stretched. */
+.project-btn {
+  padding: 3px 10px;
+  font-size: 12px;
+}
+
+.project-name {
+  font-size: 12px;
+  color: #b4b4be;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The unsaved dot. On the name rather than on the button, because it is a fact
+   about the document and not about what the button does. */
+.project-name[data-dirty="true"]::after {
+  content: " \2022";
+  color: #dcc878;
+}
+
+.modal__panel--choice {
+  width: min(560px, 90vw);
+}
+
+.choice-list {
+  max-height: 34vh;
+  overflow-y: auto;
+  margin: 10px 0;
+  border: 1px solid #3a3a42;
+  border-radius: 4px;
+  background: #1a1a1e;
+}
+
+.choice-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 9px;
+  border-bottom: 1px solid #26262c;
+}
+
+.choice-row:last-child {
+  border-bottom: none;
+}
+
+/* Monospace, because these are paths and the eye reads a changed folder out of
+   a column far faster than out of proportional text. */
+.choice-row__path {
+  flex: 1;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 11px;
+  color: #c8c8d2;
+  overflow-wrap: anywhere;
+}
+
+.choice-row__badge {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 9px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  background: #4a2a2a;
+  color: #e0a0a0;
+}
+
+.choice-row__badge[data-state="replaced"] {
+  background: #4a412a;
+  color: #dcc878;
+}
+
+/* Step 18. The rows Clear cache draws: a box, the project, and what letting it
+   go would free. A label rather than a div, so the whole row toggles the box. */
+.choice-row--check {
+  cursor: pointer;
+}
+
+.choice-row__check {
+  flex: none;
+  margin: 0;
+}
+
+.choice-row__name {
+  flex: 1;
+  font-size: 12px;
+  color: #d8d8e2;
+  overflow-wrap: anywhere;
+}
+
+/* Tabular figures and no shrinking, so the sizes stand in a column that can be
+   read down however long the names beside them are. */
+.choice-row__size {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: #a0a0aa;
+}
+
+.choice-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* Step 18. The first question in the app whose two answers are not equally
+   reversible, so the one that deletes is coloured for it. The same red Remove
+   and the end handle use; the green is already what a primary answer wears. */
+.choice-buttons button[data-tone="danger"] {
+  background: #dc7878;
+  border-color: #e89090;
+  color: #210f0f;
+  font-weight: bold;
+}
+
+.choice-buttons button[data-tone="danger"]:hover:not(:disabled) {
+  background: #e58686;
+}
+
+body.advanced .timeline-section {
+  display: block;
+}
+
+/* The ruler and the stack under one roof, because the playhead and the trim
+   markers are single lines that cross both. Darker than the frame around it,
+   like the waveform above. overflow: hidden is what clips a marker that the
+   current zoom has pushed off the side, so nothing has to check for it. */
+.timeline-stage {
+  position: relative;
+  background: #1e1e22;
+  border-radius: 4px;
+  overflow: hidden;
+  /* Measured in JS, because the stack's scrollbar appears and disappears with
+     the number of rows and its width is the browser's business, not CSS's. The
+     ruler and the lane both step back by it, or a scrollbar would make the
+     tracks narrower than the ruler above them and every clip would sit fifteen
+     pixels wide of the mark it is drawn against. */
+  --timeline-scrollbar: 0px;
+  /* The wheel zooms here rather than scrolling anything, and a touchpad swipe
+     must not rubber-band the window behind it either. */
+  overscroll-behavior: contain;
+  touch-action: none;
+}
+
+/* The one horizontal measurement the whole frame agrees on. Every layer's
+   header is this wide, the ruler is inset by it, and the lane the playhead and
+   the clips live in starts at it, so a second is at the same x on every row. */
+:root {
+  --timeline-gutter: 150px;
+}
+
+.timeline-ruler-row {
+  display: flex;
+  align-items: stretch;
+  padding-right: var(--timeline-scrollbar);
+}
+
+.timeline-gutter {
+  flex: none;
+  width: var(--timeline-gutter);
+  border-right: 1px solid #33333c;
+  border-bottom: 1px solid #33333c;
+}
+
+/* Pinned: the stack scrolls under it, this never does. The ruler is the one
+   surface that slides sideways under a drag, and the only one that says so on
+   hover; the tracks below it belong to the layers. */
+.timeline-ruler {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  border-bottom: 1px solid #33333c;
+  cursor: ew-resize;
+}
+
+/* The rows, as tall as they need to be until there are more than about five,
+   and scrolling under the pinned ruler after that. A fixed height would either
+   waste the frame on an empty timeline or cut the third layer in half. */
+.timeline-stack {
+  max-height: 240px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* Where everything positioned by time lives. Starts at the gutter, so x inside
+   it is measured from the same zero the ruler is drawn against, and the view
+   arithmetic needs no offset anywhere. Clips whatever the current zoom has
+   pushed off either side. */
+.timeline-lane {
+  position: absolute;
+  left: var(--timeline-gutter);
+  right: var(--timeline-scrollbar);
+  top: 0;
+  bottom: 0;
+  overflow: hidden;
+  /* So the ruler and the track rows underneath still take the clicks. The two
+     trim markers opt back in for themselves. */
+  pointer-events: none;
+}
+
+/* Past the end of the content. Reachable, so a layer can be dragged out into
+   it, but empty, and darker than the frame so the difference between "timeline
+   you can use" and "material that exists" is visible rather than implied. The
+   output is only ever as long as its last layer, so this costs nothing. */
+.timeline-beyond {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  background: rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+.timeline-beyond[hidden] {
+  display: none;
+}
+
+/* Runs the full height of the frame so the trim range reads through the stack
+   and not just across the ruler. The hit area is 9px wide because a 1px line
+   cannot be grabbed; the line and the tab at its top are drawn inside it, so
+   the part you see is not the part you have to hit. */
+.timeline-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 9px;
+  cursor: ew-resize;
+  touch-action: none;
+  /* The lane around these takes no clicks; a marker has to be dragged. */
+  pointer-events: auto;
+}
+
+.timeline-marker::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: currentColor;
+}
+
+.timeline-marker::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  width: 9px;
+  height: 9px;
+  background: currentColor;
+}
+
+/* Both flags lean into the selection, in pointing right and out pointing left.
+   Not a decorative choice: a marker sitting on the very start or the very end
+   of the clip would otherwise have half its grab area clipped off the side of
+   the frame, and the one at the end would have none of it left, since the frame
+   ends at exactly the pixel the line is on. Leaning inwards keeps the whole of
+   it reachable at both extremes. */
+.timeline-marker--in { margin-left: 0; }
+.timeline-marker--in::before { left: 0; }
+.timeline-marker--in::after { left: 0; border-radius: 0 0 2px 0; }
+
+.timeline-marker--out { margin-left: -9px; }
+.timeline-marker--out::before { right: 0; }
+.timeline-marker--out::after { right: 0; border-radius: 0 0 0 2px; }
+
+/* The same green and red as the trim handles, so a boundary here reads as the
+   same boundary as the one in the Trim frame. */
+.timeline-marker--in { color: #78c88c; }
+.timeline-marker--out { color: #dc7878; }
+
+/* An author display value outranks the UA rule behind the hidden attribute. */
+.timeline-marker[hidden] {
+  display: none;
+}
+
+/* On the tracks, starting below the ruler rather than crossing it. The ruler
+   carries the time marks and the two trim flags, and a third line drawn through
+   them only makes those harder to read. 25px is the ruler plus its border.
+
+   Draggable, so it is 11px of grab area with the 1px line drawn down the middle
+   of it, the same trick the trim markers use: a 1px line cannot be hit. The
+   negative margin keeps the visible line on exactly the x updatePlayhead puts
+   the element at, so widening the hit area moved nothing.
+
+   It takes the press before the tracks underneath, which is the point: a
+   project whose layers cover the whole timeline has no bare track left to
+   scrub on, and without this the only thing under the cursor is a clip. */
+.playhead--timeline {
+  top: 25px;
+  bottom: 0;
+}
+
+/* The class twice on purpose. The base .playhead sets width, background and
+   pointer-events, and it is further down this file at the same specificity, so
+   a single class here loses all three to it and the line stays a 1px mark that
+   cannot be hit. Doubling the class wins on specificity instead of on order,
+   which is the part that will not break when either block moves. */
+.playhead.playhead--timeline {
+  width: 11px;
+  margin-left: -5px;
+  background: transparent;
+  cursor: ew-resize;
+  touch-action: none;
+  /* The lane around it takes no clicks; this opts back in, as the markers do. */
+  pointer-events: auto;
+}
+
+.playhead--timeline::before {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: #ffffff;
+}
+
+/* Something to aim at. Without a head the line is 1px of white on a dark track
+   and reads as a mark rather than as a control. */
+.playhead--timeline::after {
+  content: "";
+  position: absolute;
+  left: 1px;
+  top: 0;
+  width: 9px;
+  height: 7px;
+  background: #ffffff;
+  border-radius: 0 0 2px 2px;
+}
+
+body.layer-dragging .playhead--timeline,
+body.layer-trimming .playhead--timeline {
+  /* Out of the way of a gesture that has already started somewhere else, or the
+     line can end up swallowing the pointer as the clip travels under it. */
+  pointer-events: none;
+}
+
+/* ---- layer rows ---- */
+
+.layer-row {
+  display: flex;
+  align-items: stretch;
+  height: 48px;
+  border-bottom: 1px solid #26262d;
+}
+
+/* The controls, in a column the same width as the ruler's gutter so every row
+   lines up with every other and with the ruler above them. */
+.layer-head {
+  flex: none;
+  width: var(--timeline-gutter);
+  border-right: 1px solid #33333c;
+  padding: 4px 6px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  min-width: 0;
+}
+
+.layer-head__top {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.layer-name {
+  flex: 1;
+  min-width: 0;
+  color: #c8c8d2;
+  font-size: 11px;
+  font-weight: bold;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Square and small, so four of them fit the header without crowding the name.
+   The picture-free ones carry a character rather than an icon, which keeps them
+   the same button in every language. */
+.layer-btn {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  line-height: 1;
+  font-size: 11px;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.layer-btn--delete {
+  color: #e8a0a0;
+  border-color: #5c4046;
+}
+
+.layer-btn--delete:hover:not(:disabled) {
+  background: #6b3a3a;
+  color: #ffe4e4;
+}
+
+.layer-head__row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.layer-enabled {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  color: #9a9aa4;
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.layer-enabled input {
+  margin: 0;
+}
+
+/* Audio only. Narrow enough to sit beside the checkbox in a 150px header. */
+.layer-volume {
+  flex: 1;
+  min-width: 0;
+  height: 12px;
+  margin: 0;
+}
+
+.layer-volume__value {
+  flex: none;
+  color: #777780;
+  font-size: 10px;
+  min-width: 26px;
+  text-align: right;
+}
+
+/* The part of a row that time runs across. Positioned so a clip inside it is
+   placed the same way the playhead in the lane is. */
+.layer-track {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.layer-clip {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: #38507e;
+  border: 1px solid #4c6ba6;
+  cursor: grab;
+}
+
+/* The clip being dragged, ringed in the same green the selection uses. The
+   clip moving is the real feedback; this only says which one of several under
+   a crowded pointer actually took the drag. */
+.layer-clip--dragging {
+  box-shadow: 0 0 0 1px rgba(120, 200, 140, 0.8);
+}
+
+/* The two edge grips. Over the art rather than beside it, so trimming does not
+   cost the clip any width, and above it in the stack so a press on the first
+   few pixels is a trim and not a move. Their width is set in script: a clip too
+   narrow to spare the room gives each edge a third and keeps a body to grab. */
+.layer-clip__edge {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  z-index: 2;
+  cursor: ew-resize;
+}
+
+.layer-clip__edge--start {
+  left: 0;
+}
+
+.layer-clip__edge--end {
+  right: 0;
+}
+
+/* A grip line, so an edge looks like something to take hold of rather than an
+   invisible region found by accident. */
+.layer-clip__edge::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  width: 2px;
+  border-radius: 1px;
+  background: rgba(238, 242, 250, 0.35);
+}
+
+.layer-clip__edge--start::after {
+  left: 2px;
+}
+
+.layer-clip__edge--end::after {
+  right: 2px;
+}
+
+.layer-clip__edge:hover::after {
+  background: rgba(238, 242, 250, 0.9);
+}
+
+/* While a clip is being dragged the pointer is captured, so it keeps sending
+   events after it has left the clip, but the cursor under it is still whatever
+   it happens to be over. These hold the gesture's own cursor for its duration. */
+body.layer-dragging,
+body.layer-dragging * {
+  cursor: grabbing !important;
+}
+
+body.layer-trimming,
+body.layer-trimming * {
+  cursor: ew-resize !important;
+}
+
+.layer-row--audio .layer-clip {
+  background: #3d5e46;
+  border-color: #56865f;
+}
+
+/* The thumbnails or the waveform. Only as wide as the part of the clip that is
+   on screen, and placed at that part's offset, so a clip zoomed to a quarter of
+   a million pixels still draws onto a canvas the width of the frame. */
+.layer-clip__art {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  display: block;
+}
+
+/* The group marker and the crop control, at the top right of the clip.
+
+   Step 17 moved them up out of the middle. Only the top is decided here: how
+   far in from the right they sit is placeClipMarks', because it depends on how
+   much of the clip the current zoom has left on screen.
+
+   The container takes no clicks and the buttons in it do, so the clip stays
+   draggable everywhere except on the two controls themselves. Above the grips
+   in the stack, which only matters if the two ever overlap; placeClipMarks
+   insets them so that they do not. */
+.layer-clip__marks {
+  position: absolute;
+  top: 4px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  pointer-events: none;
+}
+
+.layer-clip__marks[hidden] {
+  display: none;
+}
+
+/* Square, the same 17px placeClipMarks measures them at. Dark and translucent
+   rather than flat, so they read as sitting on the thumbnails rather than
+   punching a hole in them. */
+.clip-mark {
+  pointer-events: auto;
+  flex: none;
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  line-height: 1;
+  font-size: 11px;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(16, 18, 26, 0.72);
+  border: 1px solid rgba(238, 242, 250, 0.25);
+  color: #dfe4ee;
+}
+
+.clip-mark:hover:not(:disabled) {
+  background: rgba(16, 18, 26, 0.92);
+  border-color: rgba(238, 242, 250, 0.6);
+}
+
+/* The marker's own colour is set in script, from the group it stands for, so
+   only the weight is decided here. */
+.clip-mark--group {
+  font-size: 12px;
+}
+
+/* A layer that is actually cropped says so without the popup having to be
+   opened to find out. Same green the Crop button in the preview head uses for
+   the same state. */
+.clip-mark--on {
+  background: rgba(120, 200, 140, 0.9);
+  border-color: #8fd9a1;
+  color: #14210f;
+}
+
+.clip-mark--on:hover:not(:disabled) {
+  background: rgba(134, 209, 153, 1);
+}
+
+/* A layer switched off keeps its place and its clip, and says so by going
+   quiet rather than by disappearing. */
+.layer-row--off .layer-clip {
+  opacity: 0.35;
+}
+
+.layer-row--off .layer-name {
+  color: #77777f;
+}
+
+/* The selection, as a faint green glow around the row rather than a border, so
+   nothing moves by a pixel when a row is picked. */
+.layer-row--selected {
+  background: rgba(120, 200, 140, 0.07);
+  box-shadow: inset 0 0 0 1px rgba(120, 200, 140, 0.45);
+}
+
+/* An empty track: what it is, and the two ways to fill it. */
+.layer-empty {
+  position: absolute;
+  inset: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border: 1px dashed #3d3d47;
+  border-radius: 3px;
+  color: #6e6e78;
+  font-size: 11px;
+}
+
+.layer-empty button {
+  flex: none;
+  font-size: 11px;
+  padding: 2px 8px;
+}
+
+/* While a file is over it. Same green the rest of the app uses for a drop. */
+.layer-track--dropping .layer-empty,
+.layer-track--dropping {
+  border-color: #78c88c;
+  background: rgba(120, 200, 140, 0.10);
+}
+
+/* The row that adds another layer of its kind. Not a layer itself, so it is
+   shorter and carries no header controls. */
+.layer-add {
+  display: flex;
+  align-items: center;
+  height: 24px;
+  border-bottom: 1px solid #26262d;
+}
+
+.layer-add__head {
+  flex: none;
+  width: var(--timeline-gutter);
+  border-right: 1px solid #33333c;
+  display: flex;
+  align-items: center;
+  padding: 0 6px;
+}
+
+.layer-add__btn {
+  font-size: 11px;
+  padding: 1px 8px;
+  line-height: 1.3;
 }
 
 /* While the confirmation is up the frame shows only that. Driven by :has()
@@ -693,7 +1554,7 @@ progress {
    visibility, not display: the overlay is out of flow, so display:none on the
    real content would collapse the frame to nothing and take the overlay's
    height with it. */
-.trim-section:has(.save-notice:not([hidden])) > :not(.save-notice) {
+.edit-area:has(.save-notice:not([hidden])) > .section > * {
   visibility: hidden;
 }
 

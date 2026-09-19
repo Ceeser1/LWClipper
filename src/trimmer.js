@@ -4,10 +4,11 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const {
-  fmtTime, compressionSetting, volumeFactor, cropFilter, containerFor, canCopyInto,
+  compressionSetting, volumeFactor, cropFilter, containerFor, canCopyInto,
 } = require('./backend');
 const toolPaths = require('./toolPaths');
-const { runProcess } = require('./processRunner');
+const progress = require('./progress');
+const { runProcess, ProcessCancelledError } = require('./processRunner');
 
 const MIN_SPAN = 0.05;
 
@@ -190,9 +191,30 @@ function buildTrimArgs(src, dst, start, span, isAudio, accurate, compression = n
   return args;
 }
 
-const OUT_TIME_RE = /^out_time=(\d+):(\d\d):(\d\d(?:\.\d+)?)/;
-const NOISE_PREFIXES = ['frame=', 'fps=', 'stream_', 'bitrate=', 'total_size=', 'out_time',
-  'dup_frames=', 'drop_frames=', 'speed=', 'progress='];
+/**
+ * Throw away what a cancelled encode had written.
+ *
+ * ffmpeg writes straight to the destination, so pressing Cancel leaves however
+ * many seconds it got through sitting under the name the user chose in the Save
+ * dialog. That file plays, and it is not the clip they asked for: it is the
+ * front of it, with no container index if the cut came early enough. A missing
+ * file says "cancelled" the way a truncated one never does.
+ *
+ * Shared with composer.js so the two save paths cannot disagree about it, and
+ * only ever called on the way out with a cancellation: a file that failed to
+ * encode keeps its remains, because there the question is why, and the answer
+ * is sometimes in what was written.
+ *
+ * Failing to remove it is not worth reporting. The file was already going to be
+ * left behind, and the encode is over either way.
+ */
+function discardPartial(file) {
+  try {
+    fs.rmSync(file, { force: true });
+  } catch {
+    // Something else has it open. Leaving it is what used to happen anyway.
+  }
+}
 
 async function trim(media, dst, start, end, accurate, compression, audio, crop, video,
   onProgress, cancelToken) {
@@ -216,18 +238,21 @@ async function trim(media, dst, start, end, accurate, compression, audio, crop, 
     { video: media.videoCodec, audio: media.audioCodec }, video);
 
   const tail = [];
-  const result = await runProcess(ffmpeg, args, (line) => {
-    const m = OUT_TIME_RE.exec(line);
-    if (m) {
-      const done = parseInt(m[1], 10) * 3600 + parseInt(m[2], 10) * 60 + parseFloat(m[3]);
-      if (onProgress) {
-        onProgress(Math.min(done / span, 1.0),
-          `Writing   ${fmtTime(done, false)} / ${fmtTime(span, false)}`);
+  const reader = progress.ffmpegProgress(span);
+  let result;
+  try {
+    result = await runProcess(ffmpeg, args, (line) => {
+      const update = reader.line(line);
+      if (update) {
+        if (onProgress) onProgress(update.frac, update.text);
+      } else if (line.trim() && !progress.isProgressLine(line)) {
+        tail.push(line.trim());
       }
-    } else if (line.trim() && !NOISE_PREFIXES.some((p) => line.trim().startsWith(p))) {
-      tail.push(line.trim());
-    }
-  }, cancelToken);
+    }, cancelToken);
+  } catch (e) {
+    if (e instanceof ProcessCancelledError) discardPartial(dstFull);
+    throw e;
+  }
 
   if (result.exitCode !== 0) {
     const detail = tail.length ? tail.join('\n') : `exit code ${result.exitCode}`;
@@ -238,9 +263,27 @@ async function trim(media, dst, start, end, accurate, compression, audio, crop, 
 }
 
 const NO_MEDIA = {
-  duration: 0, hasAudio: false, width: 0, height: 0, videoCodec: '', audioCodec: '',
+  duration: 0, hasAudio: false, width: 0, height: 0, fps: 0, videoCodec: '', audioCodec: '',
   audioBitrate: 0,
 };
+
+/**
+ * ffprobe writes a frame rate as a fraction, and "30000/1001" is not something
+ * anything downstream should have to know about. 0 for anything unreadable,
+ * which is every audio file and a variable-rate stream that declines to guess.
+ *
+ * Rounded to three places rather than to a whole number: 29.97 and 30 are
+ * different rates and a project seeded from the first would drift against its
+ * source if it were told they were the same.
+ */
+function parseFrameRate(text) {
+  const m = /^(\d+)\/(\d+)$/.exec(String(text || '').trim());
+  if (!m) return 0;
+  const den = Number(m[2]);
+  if (!den) return 0;
+  const fps = Number(m[1]) / den;
+  return Number.isFinite(fps) && fps > 0 ? Math.round(fps * 1000) / 1000 : 0;
+}
 
 /**
  * Duration, whether there is an audio stream, and the frame size, from a single
@@ -256,7 +299,8 @@ function probeMedia(filePath) {
     const out = execFileSync(ffprobe, [
       '-v', 'error',
       '-show_entries',
-      'format=duration,bit_rate:stream=codec_type,codec_name,width,height,bit_rate',
+      'format=duration,bit_rate'
+        + ':stream=codec_type,codec_name,width,height,bit_rate,r_frame_rate',
       '-of', 'json', filePath,
     ], { encoding: 'utf8', timeout: 30000, windowsHide: true });
     const info = JSON.parse(out);
@@ -271,6 +315,11 @@ function probeMedia(filePath) {
       hasAudio: streams.some((st) => st.codec_type === 'audio'),
       width: size(video.width),
       height: size(video.height),
+      // The project's own rate is seeded from its first source, so this has to
+      // travel as far as the layer does. Without it every export would be
+      // written at the composer's 30fps default, which silently halves 60fps
+      // material.
+      fps: parseFrameRate(video.r_frame_rate),
       // Only saving to WebM cares about these, to work out whether the streams
       // could be copied into one or have to be encoded for it.
       videoCodec: String(video.codec_name || ''),
@@ -289,4 +338,9 @@ function probeDuration(filePath) {
   return probeMedia(filePath).duration;
 }
 
-module.exports = { buildTrimArgs, trim, probeMedia, probeDuration, MIN_SPAN };
+module.exports = {
+  buildTrimArgs, trim, probeMedia, probeDuration, parseFrameRate, discardPartial, MIN_SPAN,
+  // Exported for composer.js, so advanced mode encodes with exactly the same
+  // codec choices rather than growing a second copy of the x264 line.
+  videoTrackArgs, videoAudioTrackArgs, audioFileArgs,
+};

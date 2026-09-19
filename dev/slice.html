@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8" /><title>V2 vertical slice</title>
+<style>
+  body { margin: 0; padding: 12px; background: #1e1e22; color: #d2d2d8;
+         font-family: "Segoe UI", sans-serif; font-size: 13px; }
+  canvas { background: #000; display: block; }
+  .row { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+  button { font-size: 14px; padding: 6px 12px; }
+  #log { white-space: pre; font-family: Consolas, monospace; font-size: 12px;
+         margin-top: 10px; max-height: 260px; overflow: auto; }
+  video { display: none; }
+</style>
+</head>
+<body>
+  <canvas id="stage" width="853" height="480"></canvas>
+  <div class="row">
+    <button id="playBtn">Play</button>
+    <button id="exportBtn">Export</button>
+    <span id="clock">0.00s</span>
+  </div>
+  <div id="log"></div>
+  <div id="pool"></div>
+  <script src="sliceRenderer.js"></script>
+</body>
+</html>

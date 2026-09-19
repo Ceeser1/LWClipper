@@ -264,6 +264,11 @@ const loadBtn = el('loadBtn');
 const formatRow = el('formatRow');
 const formatPlaceholder = el('formatPlaceholder');
 const qualitySection = el('qualitySection');
+const qualityMain = el('qualityMain');
+const titleSection = el('titleSection');
+const titleMain = el('titleMain');
+const mainFrameBody = el('mainFrameBody');
+const mainActions = el('mainActions');
 const cancelBtn = el('cancelBtn');
 const titleLabel = el('titleLabel');
 const progressBar = el('progressBar');
@@ -274,6 +279,13 @@ const previewAudio = el('previewAudio');
 const previewSection = el('previewSection');
 const previewCellTitle = el('previewCellTitle');
 const eqCanvas = el('eqCanvas');
+const compositeCanvas = el('compositeCanvas');
+const compositePool = el('compositePool');
+const compositePlayBtn = el('compositePlayBtn');
+const startFrameCanvas = el('startFrameCanvas');
+const endFrameCanvas = el('endFrameCanvas');
+const startFrameBusy = el('startFrameBusy');
+const endFrameBusy = el('endFrameBusy');
 const startFrameVideo = el('startFrameVideo');
 const endFrameVideo = el('endFrameVideo');
 const previewStage = el('previewStage');
@@ -283,6 +295,15 @@ const previewCropBox = el('previewCropBox');
 const startCropBox = el('startCropBox');
 const endCropBox = el('endCropBox');
 const playSelectionBtn = el('playSelectionBtn');
+const openProjectBtn = el('openProjectBtn');
+const projectNameLabel = el('projectName');
+const choiceModal = el('choiceModal');
+const choiceTitle = el('choiceTitle');
+const choiceMessage = el('choiceMessage');
+const choiceList = el('choiceList');
+const choiceFooter = el('choiceFooter');
+const choiceButtons = el('choiceButtons');
+
 const cropBtn = el('cropBtn');
 const cropModal = el('cropModal');
 const cropStage = el('cropStage');
@@ -308,6 +329,8 @@ const hintLabel = el('hintLabel');
 const spanLabel = el('spanLabel');
 const accurateToggle = el('accurateToggle');
 const accurateLabel = el('accurateLabel');
+const fpsLabel = el('fpsLabel');
+const fpsSelect = el('fpsSelect');
 const videoEnabledToggle = el('videoEnabledToggle');
 const renderResolution = el('renderResolution');
 const videoHead = el('videoHead');
@@ -332,12 +355,15 @@ const languageFlag = el('languageFlag');
 const cacheSummary = el('cacheSummary');
 const changeCacheBtn = el('changeCacheBtn');
 const bestCompressionToggle = el('bestCompressionToggle');
+const advancedEditingToggle = el('advancedEditingToggle');
 const openAppFilesBtn = el('openAppFilesBtn');
 const deleteAppFilesBtn = el('deleteAppFilesBtn');
 
 // ---- settings ----
 
-let appSettings = { language: 'en', cacheDir: null, bestCompression: false };
+let appSettings = {
+  language: 'en', cacheDir: null, bestCompression: false, advancedEditing: false,
+};
 
 // The picture shown beside the language dropdown, per language code.
 const LANGUAGE_FLAGS = { en: 'english', de: 'german' };
@@ -372,6 +398,44 @@ function applyBestCompression() {
   compressionSlider.value = BEST_COMPRESSION_STEPS[format.key] || BEST_COMPRESSION_DEFAULT;
 }
 
+/**
+ * One class on the body, which the stylesheet reads to decide which of the two
+ * editing frames is in the flow. Kept as the only thing the switch does, so
+ * that with it off there is nothing left for the window to be different about.
+ */
+function applyAdvancedEditing() {
+  document.body.classList.toggle('advanced', !!appSettings.advancedEditing);
+  // The trim means a different thing on each side of this switch.
+  applyTrimSubject();
+  // The timeline frame has no width at all while it is out of the flow, so it
+  // can only be drawn once the class is on. Ordered after the toggle for that
+  // reason, not by accident.
+  applyCompositeMode();
+  // Step 11. The crop's subject is the media on one side of this switch and a
+  // layer on the other, and the white outline belongs only to the first.
+  updateCropBtn();
+  updateCropOverlays();
+  updateProjectUi();
+  updateMainFrame();
+  // Step 15. Quick-Save exists because it is instant and asks nothing, and in
+  // advanced editing every save re-encodes a composite, so neither half is
+  // true: it becomes Save Project, which is the thing here that really is
+  // instant. And Save As renders a timeline for minutes rather than cutting a
+  // clip out of a file, which is what Export says and Save As does not.
+  const advanced = timelineDriving();
+  // Written as four t() calls rather than two with a ternary inside, because
+  // check-locales.js reads literals and a string it cannot see is a string
+  // nobody is told is missing.
+  quickSaveBtn.textContent = advanced ? t('Save Project') : t('Quick-Save');
+  saveBtn.textContent = advanced ? t('Export...') : t('Save As...');
+  buildFormatToggle();
+  drawTimeline();
+  updatePlayhead();
+  // The two frames are not the same height, so the section above them has a
+  // different amount of room to scale the previews into.
+  fitWindow();
+}
+
 function applySettingsPayload(payload) {
   appSettings = payload.settings;
   // Kept before the table is swapped: it is the language currently on screen
@@ -396,6 +460,10 @@ function applySettingsPayload(payload) {
   languageFlag.hidden = !flag;
   if (flag) languageFlag.src = '../images/' + flag + '.png';
   bestCompressionToggle.checked = !!appSettings.bestCompression;
+  advancedEditingToggle.checked = !!appSettings.advancedEditing;
+  // The rows carry text written by script, so translateDom cannot reach them.
+  renderLayerRows();
+  applyAdvancedEditing();
   translateDom(document.body, wasShowing);
   // The buttons this one is measured against have just been relabelled.
   sizeSettingsBtn();
@@ -447,6 +515,18 @@ const audioDropHint = el('audioDropHint');
 const audioPlayhead = el('audioPlayhead');
 const trimPlayhead = el('trimPlayhead');
 const trimSliderEl = el('trimSlider');
+const timelineStage = el('timelineStage');
+const timelineRuler = el('timelineRuler');
+// Where time is measured from. The lane starts after the layer headers, so x
+// inside it is the same x the ruler is drawn against and the view arithmetic
+// needs no offset anywhere.
+const timelineLane = el('timelineLane');
+const timelineStack = el('timelineStack');
+const timelineBeyond = el('timelineBeyond');
+const timelinePlayhead = el('timelinePlayhead');
+const timelineTrimIn = el('timelineTrimIn');
+const timelineTrimOut = el('timelineTrimOut');
+const timelineHint = el('timelineHint');
 const progressRow = el('progressRow');
 
 // Captured from the markup rather than duplicated as a literal, so the
@@ -555,7 +635,9 @@ function setBusy(v) {
     errorHint.hidden = true;
     saveNotice.hidden = true;
   }
-  setTrimEnabled(!v && media !== null);
+  updateMainFrame();
+  setTrimEnabled(!v && trimmable());
+  updateCompositeUi();
   updateClearBtn();
   updateAudioUi();
   updateStatusScale();
@@ -567,6 +649,68 @@ function setBusy(v) {
 function updateClearBtn() {
   clearBtn.hidden = busy;
   clearBtn.disabled = !media;
+}
+
+// ---- the frame at the top of the window ----
+//
+// Simple editing keeps the two frames it has always had: the title with its
+// Clear button, and the quality picker under it.
+//
+// Advanced editing has one. The title frame there is a headline for a single
+// media file that advanced mode is not a view of, and the quality frame below
+// it spends almost all of its life saying that no video is loaded, so between
+// them they were most of the height above the timeline and were about nothing.
+// Merged, one frame says whichever of those four things is currently true.
+//
+// The nodes are moved, not duplicated. There is one status line, one progress
+// bar, one Cancel button and one Clear button in the document however the
+// switch is set, which is the only way the two layouts cannot come to disagree
+// about what the app is doing.
+
+// Whether the quality picker has a place in the layout at all. Simple editing
+// shows it with its placeholder from the moment a link is loaded, and hides it
+// for a local file, which has no qualities to offer.
+let qualityListWanted = true;
+
+// Whether it is actually waiting for a choice. Advanced editing shows it only
+// then: "when a load is done, and hidden again once a button is clicked".
+let qualitiesPending = false;
+
+let mainFrameSignature = '';
+
+function updateMainFrame() {
+  const advanced = timelineDriving();
+
+  // Relocation, guarded so this is free to call as often as anything changes.
+  if (advanced) {
+    if (titleMain.parentElement !== mainFrameBody) mainFrameBody.prepend(titleMain);
+    if (mainActions.parentElement !== qualitySection) qualitySection.appendChild(mainActions);
+    // Out of the progress row and in beside Clear, which is free exactly when
+    // Cancel is needed: Clear hides itself for the duration of a job.
+    if (cancelBtn.parentElement !== mainActions) mainActions.prepend(cancelBtn);
+  } else {
+    if (titleMain.parentElement !== titleSection) titleSection.prepend(titleMain);
+    if (mainActions.parentElement !== titleSection) titleSection.appendChild(mainActions);
+    if (cancelBtn.parentElement !== progressRow) progressRow.appendChild(cancelBtn);
+  }
+
+  titleSection.hidden = advanced;
+  // The merged frame is always up: it is the only one, and it always has at
+  // least the prompt to show.
+  qualitySection.hidden = advanced ? false : !qualityListWanted;
+  qualityMain.hidden = advanced ? !qualitiesPending : false;
+  // In simple editing the progress row hides Cancel by hiding itself. In
+  // advanced editing it lives outside that row and has to say so on its own.
+  cancelBtn.hidden = advanced && !busy;
+
+  // The frame changes height when the picker or the progress row comes and
+  // goes, and the window is sized to its contents. Only on a real change,
+  // because this runs on every busy transition.
+  const now = [advanced, titleSection.hidden, qualitySection.hidden,
+    qualityMain.hidden, cancelBtn.hidden].join(',');
+  if (now === mainFrameSignature) return;
+  mainFrameSignature = now;
+  fitWindow();
 }
 
 // Whichever line is actually informative gets the large treatment: before a
@@ -594,8 +738,31 @@ let outputFormat = 'mp4';
 // off produces an audio file, so the whole save row follows this rather than
 // following what the source happens to be.
 function outputIsAudio() {
+  // In advanced editing the project decides, not a media file this mode is not
+  // a view of. The design's "no global video switch any more": with every video
+  // layer disabled or gone there is no picture to write, so the output is audio
+  // and the preview frame shows the spectrum instead of the composite.
+  if (timelineDriving()) {
+    // An empty project is not an audio project, it is an empty one, and
+    // announcing it as audio would put an equalizer where a user has not yet
+    // put anything at all.
+    if (!layers.length) return false;
+    return !layers.some((l) => l.type === 'video' && l.enabled && l.src);
+  }
   if (!media) return false;
   return !!media.isAudio || !videoEnabledToggle.checked;
+}
+
+/**
+ * Whether there is anything for the save row to write.
+ *
+ * Not trimmable(), which deliberately answers yes to either subject so that a
+ * file loaded before the switch keeps its slider. The save row writes one
+ * particular file, and which subject it comes from is the whole question here:
+ * an empty project with a media file still loaded has nothing to export.
+ */
+function savable() {
+  return timelineDriving() ? layers.length > 0 : !!media;
 }
 
 function currentOutputs() {
@@ -644,9 +811,95 @@ function buildFormatToggle() {
 function markActiveFormat() {
   formatToggle.querySelectorAll('button').forEach((b) => {
     b.classList.toggle('btn--active', b.dataset.format === outputFormat);
-    b.disabled = busy || !media;
+    b.disabled = busy || !savable();
   });
 }
+
+/**
+ * Which of the two controls has the first slot of the save row.
+ *
+ * Frames in an audio file are about 26 ms, so a copied cut already lands within
+ * one of the asked-for point and Frame-accurate cut has nothing to offer. And
+ * every composite is re-encoded from a filter graph, so in advanced editing
+ * there is no copy mode for it to choose between either. Hidden rather than
+ * disabled in both cases: it is not a decision, so it is not shown as one.
+ *
+ * Advanced editing has a decision to put there instead, and only there: the
+ * rate the project renders at. Neither control shows for an audio-only output,
+ * which has no frames to be accurate about and no rate to write.
+ */
+function updateCutControls() {
+  const audio = outputIsAudio();
+  accurateLabel.hidden = audio || timelineDriving();
+  fpsLabel.hidden = audio || !timelineDriving();
+  updateFpsChoices();
+}
+
+// What the design asks the dropdown to offer. Whole numbers, because these are
+// the rates someone picks on purpose; a project that came in at 29.97 keeps it
+// through the extra entry below rather than by this list growing every
+// broadcast rate there has ever been.
+const FPS_CHOICES = [15, 24, 30, 48, 60];
+
+/**
+ * Fill the dropdown and put the project's own rate in it.
+ *
+ * Three things go in the list: the five standard rates, every rate a source on
+ * this timeline actually runs at, and whatever the project is set to now.
+ *
+ * The middle one is what makes the control reversible. A 29.97 source seeds a
+ * 29.97 project, and offering only the five after that would mean picking 24 by
+ * accident costs you the source's own rate, with Ctrl+Z the only way back and
+ * only until the next few edits bury it. The sources are on the timeline and
+ * can be asked at any time, so there is no reason for their rates to expire.
+ *
+ * The project's own rate is in there for the case where it came from a source
+ * that has since been deleted. Showing the nearest of the five instead would
+ * say the project renders at a rate it does not.
+ *
+ * Rebuilt rather than patched, because the extra entries come and go with the
+ * layers and half a dozen options is not something worth diffing. The signature
+ * is what keeps that from happening on every redraw.
+ */
+function updateFpsChoices() {
+  if (fpsLabel.hidden) return;
+  const round = (n) => Math.round(n * 1000) / 1000;
+  const current = round(projectFrame().fps);
+  const offered = [...new Set(FPS_CHOICES
+    .concat(layers.map((l) => round(l.sourceFps || 0)))
+    .concat([current])
+    .filter((fps) => fps > 0))].sort((a, b) => a - b);
+  const signature = offered.join(',') + '@' + current;
+  if (fpsSelect.dataset.signature === signature) return;
+  fpsSelect.dataset.signature = signature;
+  fpsSelect.textContent = '';
+  for (const fps of offered) {
+    const option = document.createElement('option');
+    option.value = String(fps);
+    // A number in every language, so deliberately not a translatable string.
+    option.textContent = String(fps);
+    fpsSelect.appendChild(option);
+  }
+  fpsSelect.value = String(current);
+}
+
+/**
+ * The project renders at a different rate from now on.
+ *
+ * A commit point, unlike the format buttons and the compression slider it sits
+ * beside. Those say how to write this one file and are gone the moment it is
+ * written; this is written into the .lwc and changes what every later export
+ * is, which puts it on the document's side of that line however close together
+ * the two sit on screen.
+ */
+fpsSelect.addEventListener('change', () => {
+  const fps = Number(fpsSelect.value);
+  if (!timelineDriving() || busy || !(fps > 0)) return;
+  compositeFrame = { ...projectFrame(), fps };
+  updateFpsChoices();
+  updateProjectUi();
+  commitHistory();
+});
 
 async function loadOutputChoices() {
   const types = await window.lwclipper.supportedTypes();
@@ -663,8 +916,9 @@ function updateCompressionState() {
   // A format with nothing to compress does not get to keep a ticked box.
   if (!steps) compressionToggle.checked = false;
   const isAudio = outputIsAudio();
-  const modeAllows = isAudio || (accurateToggle.checked && !accurateToggle.disabled);
-  const canCompress = !!steps && modeAllows && !!media && !busy;
+  const modeAllows = isAudio || timelineDriving()
+    || (accurateToggle.checked && !accurateToggle.disabled);
+  const canCompress = !!steps && modeAllows && savable() && !busy;
   compressionToggle.disabled = !canCompress;
   compressionSlider.disabled = !canCompress || !compressionToggle.checked;
   const index = Math.round(Number(compressionSlider.value) / 25);
@@ -694,12 +948,18 @@ function setTrimEnabled(on) {
   startTimeField.disabled = !on;
   endTimeField.disabled = !on;
   accurateToggle.disabled = !on;
-  saveBtn.disabled = !(on && !busy);
-  quickSaveBtn.disabled = !(on && !busy);
+  // The other occupant of that slot, gated the same way: an empty project has
+  // no rate worth choosing and a running render has already been handed one.
+  fpsSelect.disabled = !on;
+  saveBtn.disabled = !(on && !busy && savable());
+  quickSaveBtn.disabled = !(on && !busy && savable());
   updateCompressionState();
   playSelectionBtn.disabled = !on;
   updateCropBtn();
   if (!on) spanLabel.textContent = '';
+  // Every path that loads or clears a file comes through here, which is the one
+  // place the timeline has to be redrawn from whatever else it also does.
+  drawTimeline();
 }
 
 // Sites that gate content behind an account fail in a way that says nothing
@@ -804,7 +1064,9 @@ function adoptLocalMedia(data) {
   formatRow.querySelectorAll('button').forEach((b) => b.remove());
   formatPlaceholder.hidden = false;
   selectedFormatBtn = null;
-  qualitySection.hidden = true;
+  qualityListWanted = false;
+  qualitiesPending = false;
+  updateMainFrame();
   onMediaReady(data);
 }
 
@@ -906,12 +1168,21 @@ function setDropActive(on) {
 function setDropHover(zone) {
   mainDrop.dataset.dropHover = String(zone === mainDrop);
   audioSection.dataset.dropHover = String(zone === audioSection && audioDropAllowed());
+  for (const track of document.querySelectorAll('.layer-track[data-empty-type]')) {
+    track.classList.toggle('layer-track--dropping', track === zone);
+  }
 }
 
 function dropZoneUnder(evt) {
   const node = evt.target;
   if (!node || !node.closest) return null;
-  return node.closest('#mainDrop, #audioSection');
+  // An empty layer row is a drop zone too, and it wins over the frames behind
+  // it, which is what closest() already gives since it is the deeper element.
+  //
+  // #audioSection stays named here and goes inert on its own in advanced mode:
+  // Step 10c hides it, and a display:none element is never an event target, so
+  // closest() cannot reach it. The empty Audio row is the drop zone there.
+  return node.closest('.layer-track[data-empty-type], #mainDrop, #audioSection');
 }
 
 document.addEventListener('dragenter', (evt) => {
@@ -936,13 +1207,20 @@ document.addEventListener('dragleave', (evt) => {
   if (dragDepth === 0) setDropActive(false);
 });
 
-// Catches everything the two zones do not, so a file dropped on the preview or
-// the footer is simply ignored rather than navigating the window.
+// Catches everything the zones do not, so a file dropped on the preview or the
+// footer is simply ignored rather than navigating the window. An empty layer
+// row is handled here rather than with a listener of its own, because the rows
+// are rebuilt from the model and a per-row listener would have to be reattached
+// every time they are.
 document.addEventListener('drop', (evt) => {
   if (!isFileDrag(evt)) return;
   evt.preventDefault();
   dragDepth = 0;
+  const zone = dropZoneUnder(evt);
   setDropActive(false);
+  if (!zone || !zone.dataset.emptyType || busy) return;
+  const filePath = droppedPath(evt);
+  if (filePath) openIntoLayer(zone.dataset.emptyType, filePath);
 });
 
 // A drag that ends abnormally, Escape being the usual way, need not leave a
@@ -970,9 +1248,23 @@ function droppedPath(evt) {
 
 async function handleMainDrop(filePath) {
   const result = await window.lwclipper.describeMedia(filePath);
+  // A .lwc is not media and never was: this used to reach ffprobe, which
+  // reported that it could not find a duration in it, which is true and useless.
+  if (result.project) {
+    await openProjectPath(result.path);
+    return;
+  }
   if (!result.ok) {
     reportFailure(result);
     updateStatusScale();
+    return;
+  }
+  // Advanced editing has no single media file to replace: the project is the
+  // timeline. So a file dropped up here becomes a track, which is what dropping
+  // it on the app can usefully mean, rather than loading into a clip that
+  // nothing in this mode is a view of. Which row it joins follows the file.
+  if (appSettings.advancedEditing) {
+    addLayerFromMedia(result.data.isAudio ? 'audio' : 'video', result.data);
     return;
   }
   adoptLocalMedia(result.data);
@@ -980,6 +1272,13 @@ async function handleMainDrop(filePath) {
 
 async function handleAudioDrop(filePath) {
   const result = await window.lwclipper.describeMedia(filePath);
+  // The only zone that does not open it. This one means "replace this clip's
+  // sound with that file", and a project is not a sound, so it says so rather
+  // than quietly doing something else with the drop.
+  if (result.project) {
+    setAudioStatus(t('That is a LWClipper project, not an audio file.'));
+    return;
+  }
   if (!result.ok) {
     setAudioStatus(result.error || t('That file could not be read.'));
     return;
@@ -1022,6 +1321,9 @@ audioSection.addEventListener('drop', (evt) => {
 // are placed from the frames' own width, which moves with the window too.
 window.addEventListener('resize', () => {
   drawWaveform();
+  // Before updatePlayhead, which places the timeline bar from a view that this
+  // is what re-fits to the new width.
+  drawTimeline();
   updatePlayhead();
   updateCropOverlays();
   resizeCropStage();
@@ -1031,7 +1333,7 @@ window.addEventListener('resize', () => {
 videoEnabledToggle.addEventListener('change', () => {
   applyPreviewMode();
   buildFormatToggle();
-  accurateLabel.hidden = outputIsAudio();
+  updateCutControls();
   updateAudioUi();
   updateCompressionState();
   updateCropBtn();
@@ -1058,7 +1360,9 @@ loadBtn.addEventListener('click', async () => {
   formatRow.querySelectorAll('button').forEach((b) => b.remove());
   formatPlaceholder.hidden = false;
   selectedFormatBtn = null;
-  qualitySection.hidden = false;
+  qualityListWanted = true;
+  qualitiesPending = false;
+  updateMainFrame();
   setTrimEnabled(false);
   titleLabel.textContent = '';
 
@@ -1080,6 +1384,8 @@ loadBtn.addEventListener('click', async () => {
       btn.addEventListener('click', () => onFormatClicked(format, btn));
       formatRow.appendChild(btn);
     }
+    qualitiesPending = true;
+    updateMainFrame();
     // The quality row just went from one line of text to a row of buttons.
     fitWindow();
   });
@@ -1087,6 +1393,10 @@ loadBtn.addEventListener('click', async () => {
 
 async function onFormatClicked(format, btn) {
   if (busy || !probed) return;
+  // "Hidden again once a button is clicked". The list has done its job the
+  // moment one is pressed, and what follows is a download with a bar.
+  qualitiesPending = false;
+  updateMainFrame();
   if (selectedFormatBtn) selectedFormatBtn.classList.remove('format-btn--selected');
   selectedFormatBtn = btn;
   btn.classList.add('format-btn--selected');
@@ -1127,7 +1437,7 @@ function onMediaReady(m) {
   applyBestCompression();
   // Frames in an audio file are about 26 ms, so a copied cut already lands
   // within one of the asked-for point and the option has nothing to offer.
-  accurateLabel.hidden = outputIsAudio();
+  updateCutControls();
   saveNotice.hidden = true;
   updateClearBtn();
   // A rectangle measured on the frame of some other file means nothing here,
@@ -1149,6 +1459,8 @@ function onMediaReady(m) {
   const offset = (probed && probed.startOffset) || 0;
   const startAt = Math.min(Math.max(0, offset), Math.max(0, duration - slider.minSpan));
   slider.setRange(duration, startAt, duration);
+  // A new clip is shown whole, whatever the last one was zoomed to.
+  resetTimelineView();
   refreshSelection(null);
   setTrimEnabled(duration > 0);
 
@@ -1183,9 +1495,76 @@ function refreshSelection(skipField) {
   startFrame.seek(start);
   endFrame.seek(end);
   drawWaveform();
+  drawTimeline();
+  // The trim markers are part of the document, so moving them is unsaved work.
+  // Here rather than at each of the four ways they move, because every one of
+  // those comes through this.
+  updateProjectUi();
 }
 
 slider.onChange = () => refreshSelection(null);
+
+// What the trim applies to: the single media file in simple editing, the
+// project in advanced. Only ever widens what is enabled, never narrows it, so
+// a file loaded before the switch keeps everything it had.
+function trimmable() {
+  return media !== null || timelineModel.totalDuration(layers) > 0;
+}
+
+// The length the trim currently spans, so a project that grows can be told from
+// one that was merely redrawn.
+let trimSpan = 0;
+// Which subject the slider was last ranged for, so re-applying the same mode
+// does not re-range it. applyAdvancedEditing runs on every settings change,
+// language included, and re-ranging there would wipe a trim in progress.
+let trimSubjectAdvanced = null;
+
+/**
+ * Follow a project that has just got longer or shorter.
+ *
+ * The end follows the project only while it was already sitting at the end.
+ * Once it has been pulled in deliberately it stays where it was put, or setting
+ * an out point and then nudging any clip would silently undo it.
+ */
+function syncProjectTrim() {
+  if (!appSettings.advancedEditing) return;
+  const total = timelineModel.totalDuration(layers);
+  if (total === trimSpan) return;
+  const wasWhole = slider.end >= trimSpan - 0.001;
+  trimSpan = total;
+  if (total <= 0) {
+    slider.reset();
+  } else {
+    const start = Math.min(slider.start, Math.max(0, total - slider.minSpan));
+    const end = wasWhole ? total
+      : Math.min(Math.max(slider.end, start + slider.minSpan), total);
+    slider.setRange(total, start, end);
+  }
+  setTrimEnabled(!busy && trimmable());
+  refreshSelection(null);
+}
+
+/**
+ * The trim's subject changed because the mode did.
+ *
+ * Shows the whole of whichever it now is rather than carrying a trim across to
+ * a different length of material, where the same numbers would mean something
+ * else. Mode switching is rare; silently keeping a stale in and out would not
+ * be worth the confusion the first time it bit.
+ */
+function applyTrimSubject() {
+  const advanced = !!appSettings.advancedEditing;
+  if (trimSubjectAdvanced === advanced) return;
+  trimSubjectAdvanced = advanced;
+  const total = advanced
+    ? timelineModel.totalDuration(layers)
+    : (media ? media.duration || 0 : 0);
+  trimSpan = advanced ? total : 0;
+  if (total <= 0) slider.reset();
+  else slider.setRange(total, 0, total);
+  setTrimEnabled(!busy && trimmable());
+  refreshSelection(null);
+}
 
 // ---- audio frame ----
 
@@ -1527,23 +1906,47 @@ let videoGain = null;
 let soundGain = null;
 let trackGain = null;
 
+// One context for the window. The three fixed preview elements want one and so
+// does the timeline's mix bus, and a second context would be a second output
+// path's worth of latency for nothing. Tried once: a window with no Web Audio
+// at all must not retry on every slider move.
+let audioContextTried = false;
+
+function ensureAudioContext() {
+  if (gainCtx) return gainCtx;
+  if (audioContextTried) return null;
+  audioContextTried = true;
+  try {
+    gainCtx = new AudioContext();
+  } catch {
+    // Callers fall back to plain element playback, which caps at 100%.
+    gainCtx = null;
+  }
+  return gainCtx;
+}
+
 let eqAnalyser = null;
 let eqLowAnalyser = null;
 // Routing an element is a one-way door, so a half-built chain must not be
 // retried: the second attempt would throw on the element already wired and
 // leave the app trying forever. One flag, set whether it worked or not.
 let gainChainTried = false;
+// Separate from gainCtx, which no longer implies this: the mix bus may have
+// made the context long before the volume slider is touched.
+let gainChainBuilt = false;
 
-function ensureGainChain() {
-  if (gainCtx) return true;
-  if (gainChainTried) return false;
-  gainChainTried = true;
+// What anything audible connects into. Step 10d pulled this out of
+// ensureGainChain so the timeline's mix bus can reach the analysers without
+// the three fixed preview elements having been wired first: in advanced mode
+// they are silent, and before this the spectrum was a picture of that silence
+// while the mix played on past it straight to the output.
+let eqTail = null;
+
+function ensureAnalysers() {
+  if (eqTail) return eqTail;
+  const ctx = ensureAudioContext();
+  if (!ctx) return null;
   try {
-    const ctx = new AudioContext();
-    // Both elements meet at the analyser and it passes them on to the output,
-    // so the spectrum shows whatever is audible. Only one of them sounds at a
-    // time, and a muted element contributes silence, which is what makes a
-    // replacement track show up here in place of the original.
     // Two of them, because resolution and speed pull against each other: the
     // window that tells one low bar from the next is longer than the one that
     // keeps a hi-hat looking sharp. Measured at 48 kHz, on a 60 Hz note:
@@ -1570,22 +1973,43 @@ function ensureGainChain() {
     };
     const analyser = shape(ctx.createAnalyser(), 8192);
     const lowAnalyser = shape(ctx.createAnalyser(), 16384);
-    const wire = (elem) => {
-      const gain = ctx.createGain();
-      ctx.createMediaElementSource(elem).connect(gain);
-      gain.connect(analyser);
-      return gain;
-    };
-    videoGain = wire(previewVideo);
-    soundGain = wire(previewSound);
-    trackGain = wire(previewAudio);
     // An analyser passes its input straight through, so chaining them puts the
     // same signal into both without a splitter, and the sound still comes out.
     analyser.connect(lowAnalyser);
     lowAnalyser.connect(ctx.destination);
     eqAnalyser = analyser;
     eqLowAnalyser = lowAnalyser;
-    gainCtx = ctx;
+    eqTail = analyser;
+  } catch {
+    // No analysers to be had; the spectrum stays a flat line and everything
+    // else goes to the output as before.
+    return null;
+  }
+  return eqTail;
+}
+
+function ensureGainChain() {
+  if (gainChainBuilt) return true;
+  if (gainChainTried) return false;
+  gainChainTried = true;
+  const ctx = ensureAudioContext();
+  const tail = ensureAnalysers();
+  if (!ctx || !tail) return false;
+  try {
+    // All three meet at the analysers and are passed on to the output, so the
+    // spectrum shows whatever is audible. Only one of them sounds at a time,
+    // and a muted element contributes silence, which is what makes a
+    // replacement track show up here in place of the original.
+    const wire = (elem) => {
+      const gain = ctx.createGain();
+      ctx.createMediaElementSource(elem).connect(gain);
+      gain.connect(tail);
+      return gain;
+    };
+    videoGain = wire(previewVideo);
+    soundGain = wire(previewSound);
+    trackGain = wire(previewAudio);
+    gainChainBuilt = true;
   } catch {
     // No gain chain to be had; the preview just stays at its own volume and
     // the spectrum stays a flat line.
@@ -1596,8 +2020,9 @@ function ensureGainChain() {
 
 function applyPreviewGain() {
   const gain = volumeGain();
-  // Nothing to apply and nothing built yet: leave the plain path alone.
-  if (gain === 1 && !gainCtx) return;
+  // Nothing to apply and nothing wired yet: leave the plain path alone. Asked
+  // of the chain rather than of the context, which the mix bus may have built.
+  if (gain === 1 && !gainChainBuilt) return;
   if (!ensureGainChain()) return;
   videoGain.gain.value = gain;
   soundGain.gain.value = gain;
@@ -1741,6 +2166,9 @@ function drawSpectrum() {
 // Whether anything is actually making sound right now. A paused preview should
 // settle to the flat line rather than hold the last frame it drew.
 function previewSounding() {
+  // The timeline's transport belongs to no element, so there is nothing here to
+  // ask but the compositor itself.
+  if (compositePlaying) return true;
   if (!transport.paused && !transport.ended) return true;
   return !previewAudio.paused && !previewAudio.ended && !!previewAudio.src;
 }
@@ -1787,6 +2215,7 @@ function applyPreviewMode() {
   // case, being the only way back to the picture.
   const audioOnly = outputIsAudio();
   previewSection.dataset.audio = String(audioOnly);
+  updateCutControls();
   // A source that has a picture, switched off. It differs from a real audio
   // file in two ways the frame has to answer for: the picture would carry on
   // playing behind the spectrum, and Chromium hands the element its full video
@@ -1800,13 +2229,18 @@ function applyPreviewMode() {
   useTransport(pictureOff ? previewSound : previewVideo);
   previewCellTitle.textContent = audioOnly ? 'Equalizer' : 'Preview';
   eqCanvas.hidden = !audioOnly;
+  applyCompositeMode();
   if (!audioOnly) {
     stopSpectrum();
     return;
   }
-  // The spectrum needs the graph the volume slider builds lazily, so for an
-  // audio source it is built up front rather than on the first slider move.
-  if (ensureGainChain() && gainCtx.state === 'suspended') gainCtx.resume();
+  // The spectrum needs analysers, which the volume slider would otherwise build
+  // lazily on its first move, so for an audio source they are built up front.
+  // In advanced mode the elements behind ensureGainChain are silent and the
+  // sound comes from the mix bus, so only the analysers are wanted there.
+  if (timelineDriving()) ensureAnalysers();
+  else ensureGainChain();
+  if (gainCtx && gainCtx.state === 'suspended') gainCtx.resume();
   drawSpectrum();
   startSpectrum();
 }
@@ -1900,14 +2334,35 @@ function resetAudioState() {
 // Read from the markup rather than repeated here, for the same reason as
 // IDLE_STATUS: two copies of the same sentence drift apart.
 const HINT_IDLE = hintLabel.textContent;
+const TIMELINE_HINT_IDLE = timelineHint.textContent;
 // Read before translateDom runs, so it holds the English, which is the key.
 
 // Shared by the trim handles and the waveform drag, so the readout says the
 // same thing whichever one is being dragged.
+// Both frames, because a marker dragged on the timeline offers the same
+// precision as a handle dragged on the slider and only one of the two frames is
+// ever on screen to say so. Each keeps its own idle text.
+// What the hint lines currently say is not one answer any more: a precision
+// drag and a compositor catching up after a scrub both want the timeline's
+// line. Kept as state plus one writer, so neither can leave the other's
+// message stranded on screen.
+let dragFine = 1.0;
+
 function setDragHint(factor) {
-  hintLabel.textContent = factor === 1.0
-    ? t(HINT_IDLE)
-    : t('Fine dragging: {factor}x slower', { factor: Math.round(1 / factor) });
+  dragFine = factor;
+  refreshHints();
+}
+
+function refreshHints() {
+  const fine = dragFine === 1.0
+    ? null
+    : t('Fine dragging: {factor}x slower', { factor: Math.round(1 / dragFine) });
+  hintLabel.textContent = fine || t(HINT_IDLE);
+  // The compositor before the wheel: a scrub that has left layers behind is the
+  // more urgent thing to say, and a composite that has stopped changing looks
+  // exactly like one that has frozen.
+  const behind = catchingUp() ? t('Catching up...') : null;
+  timelineHint.textContent = fine || behind || t(TIMELINE_HINT_IDLE);
 }
 
 slider.onDragStateChange = setDragHint;
@@ -1916,7 +2371,9 @@ slider.onDragStateChange = setDragHint;
 // frames but never rewrites the box being typed in, and tolerates a
 // half-finished value instead of snapping the text back mid-edit.
 function applyTimeField(field, isStart, normalize) {
-  if (!media) return;
+  // Not media: in advanced editing the trim belongs to the project and there
+  // may be no single file at all. Same subject the markers already use.
+  if (!trimmable()) return;
   let value;
   try {
     value = parseTime(field.value);
@@ -1927,6 +2384,11 @@ function applyTimeField(field, isStart, normalize) {
   if (isStart) slider.setStart(value, false);
   else slider.setEnd(value, false);
   refreshSelection(normalize ? null : field);
+  // normalize is the commit: on blur or Enter, not on every keystroke. Only the
+  // field's own frame, for the same reason a marker drag rebuilds only its own.
+  if (!normalize) return;
+  renderTrimFrames(isStart ? 'start' : 'end');
+  commitHistory();
 }
 
 for (const [field, isStart] of [[startTimeField, true], [endTimeField, false]]) {
@@ -1937,6 +2399,2091 @@ for (const [field, isStart] of [[startTimeField, true], [endTimeField, false]]) 
   });
 }
 
+// ---- timeline ----
+//
+// Advanced editing's replacement for the Trim frame. Step 6 builds the surface
+// only: a ruler, a playhead, click to seek, wheel to zoom and the two trim
+// markers. There are no layers yet, so the one thing on it is the loaded media,
+// which is deliberate. Driving something that already works is what makes this
+// frame's own bugs findable before layers can be blamed for them.
+//
+// The arithmetic lives in timelineView.js and is tested there. What is left
+// here is the part that needs a window: canvases, pointers and wheels.
+
+// How long a marker drag has to hold still before its frame is built where it
+// stands. Set by the user at a quarter second: long enough that a continuous
+// drag never triggers one, short enough that pausing feels like asking.
+const TRIM_DWELL_MS = 250;
+
+const TIMELINE_BAND = 'rgba(90, 140, 220, 0.18)';
+const TIMELINE_TICK_MAJOR = '#8a8a94';
+const TIMELINE_TICK_MINOR = '#4e4e58';
+const TIMELINE_LABEL = '#9a9aa4';
+
+// One wheel notch. Chosen so about four notches double the zoom, which is slow
+// enough to land on a span deliberately and fast enough to cross a long clip.
+const TIMELINE_ZOOM_STEP = 1.19;
+
+// Pixels per second and the second at the left edge. Replaced wholesale on
+// every gesture rather than edited, the same as the layer model.
+let tlView = { scale: 1, scroll: 0 };
+
+// Whether the view is still the one a newly loaded clip gets rather than one
+// the user chose. A fitted view refits when the window changes width; a chosen
+// one is only re-clamped, so widening the window does not throw the zoom away.
+//
+// It has to be tested for exactly, because zooming out no longer stops at the
+// fitted view: it carries on past the end of the clip and out to the headroom,
+// so "at or below the fit scale" would call half the zoom range fitted.
+let tlFitted = true;
+
+/**
+ * How much timeline there is: where the last layer ends, or where the loaded
+ * media ends, whichever is further.
+ *
+ * The media half is temporary. Until Step 10 the preview is still the single
+ * media file, so the ruler has to span it even before any layer exists, or
+ * there is nothing to seek along. Once the compositor lands, the answer is the
+ * layers alone.
+ */
+function timelineDuration() {
+  const fromMedia = media ? media.duration || 0 : 0;
+  return Math.max(fromMedia, timelineModel.totalDuration(layers));
+}
+
+/** Back to showing the whole clip, which is where a newly loaded one starts. */
+function resetTimelineView() {
+  tlFitted = true;
+}
+
+/**
+ * The stack's scrollbar comes and goes with the number of rows, and it narrows
+ * the tracks without narrowing the pinned ruler above them. Stepping the ruler
+ * and the lane back by the same amount is what keeps a second at the same x on
+ * every row. Measured rather than assumed: the width is the browser's business.
+ */
+function syncScrollbarInset() {
+  const bar = Math.max(0, timelineStack.offsetWidth - timelineStack.clientWidth);
+  timelineStage.style.setProperty('--timeline-scrollbar', bar + 'px');
+}
+
+/** Whether the view a gesture just produced is still the fitted one. */
+function noteTimelineFit(width) {
+  tlFitted = tlView.scroll === 0
+    && tlView.scale === timelineView.fitScale(timelineDuration(), width);
+}
+
+/**
+ * Bring the view in line with the width it is actually being drawn at. The
+ * frame is display:none in simple editing, so its width is 0 until the setting
+ * is switched on, and it changes again with every window resize.
+ */
+function syncTimelineView() {
+  const duration = timelineDuration();
+  const width = timelineLane.clientWidth;
+  if (!duration || !width) return;
+  if (tlFitted) {
+    tlView = timelineView.fitView(duration, width);
+    return;
+  }
+  const scale = timelineView.clampScale(tlView.scale, duration, width);
+  tlView = { scale, scroll: timelineView.clampScroll(tlView.scroll, scale, duration, width) };
+}
+
+function positionTimelineMarkers() {
+  const duration = timelineDuration();
+  const show = duration > 0 && timelineLane.clientWidth > 0;
+  timelineTrimIn.hidden = !show;
+  timelineTrimOut.hidden = !show;
+  timelineBeyond.hidden = !show;
+  if (!show) return;
+  timelineTrimIn.style.left = timelineView.timeToX(tlView, slider.start) + 'px';
+  timelineTrimOut.style.left = timelineView.timeToX(tlView, slider.end) + 'px';
+  // Anchored at the right edge, so it only needs its left told to it. Clamped
+  // at zero, or scrolling past the content would put it off the left and leave
+  // a sliver of undimmed headroom at the edge.
+  const endX = Math.max(0, timelineView.timeToX(tlView, duration));
+  timelineBeyond.style.left = endX + 'px';
+}
+
+// Drawn the same way as the waveform: backing store in device pixels, drawing
+// in CSS pixels, so the marks are not blurry on a scaled display. The playhead
+// and the markers are elements over the canvas rather than paint on it, so
+// following playback costs a style write instead of a full redraw.
+function drawTimeline() {
+  // Before anything is measured: this changes the ruler's width, and the whole
+  // frame is measured against that width.
+  syncScrollbarInset();
+  const cssW = timelineRuler.clientWidth;
+  const cssH = timelineRuler.clientHeight;
+  // Zero in simple editing, where the frame is not in the flow at all.
+  if (!cssW || !cssH) return;
+  syncTimelineView();
+
+  const dpr = window.devicePixelRatio || 1;
+  const wantW = Math.round(cssW * dpr);
+  const wantH = Math.round(cssH * dpr);
+  if (timelineRuler.width !== wantW || timelineRuler.height !== wantH) {
+    timelineRuler.width = wantW;
+    timelineRuler.height = wantH;
+  }
+  const ctx = timelineRuler.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+
+  const duration = timelineDuration();
+  positionTimelineMarkers();
+  positionLayerClips();
+  if (!duration) return;
+
+  // The selected span, so the two markers read as the ends of something rather
+  // than as two unrelated lines.
+  const bandX0 = timelineView.timeToX(tlView, slider.start);
+  const bandX1 = timelineView.timeToX(tlView, slider.end);
+  ctx.fillStyle = TIMELINE_BAND;
+  ctx.fillRect(bandX0, 0, Math.max(0, bandX1 - bandX0), cssH);
+
+  ctx.font = '10px -apple-system, "Segoe UI", Roboto, sans-serif';
+  ctx.textBaseline = 'top';
+  const marks = timelineView.ticks(tlView, duration, cssW);
+  // Every label on the ruler takes its shape from the largest time on it, so a
+  // view that has reached an hour does not mix 59:00 with 1:01:00.
+  const longest = marks.length ? marks[marks.length - 1].t : duration;
+  for (const tick of marks) {
+    // Half a pixel, so a one pixel line lands on a pixel instead of across two.
+    const x = Math.round(tick.x) + 0.5;
+    const height = tick.major ? 8 : 4;
+    ctx.strokeStyle = tick.major ? TIMELINE_TICK_MAJOR : TIMELINE_TICK_MINOR;
+    ctx.beginPath();
+    ctx.moveTo(x, cssH - height);
+    ctx.lineTo(x, cssH);
+    ctx.stroke();
+    if (!tick.major) continue;
+    ctx.fillStyle = TIMELINE_LABEL;
+    ctx.fillText(timelineView.tickLabel(tick.t, tick.step, longest), x + 3, 2);
+  }
+}
+
+/**
+ * Move the preview to a point on the timeline. The element drops currentTime
+ * silently while it knows nothing about the file, so a seek before the metadata
+ * has arrived is not attempted rather than being lost without saying so.
+ */
+function seekTimeline(at) {
+  const duration = timelineDuration();
+  if (!duration) return;
+  // In advanced mode the playhead belongs to the compositor, which keeps its
+  // own clock and may have no media file behind it at all.
+  if (timelineDriving()) {
+    seekComposite(at);
+    updatePlayhead();
+    return;
+  }
+  if (!Number.isFinite(transport.duration) || transport.duration <= 0) return;
+  transport.currentTime = Math.min(Math.max(at, 0), duration);
+  updatePlayhead();
+}
+
+// Anything under this many pixels of travel was meant as a click, not a drag.
+// Without it a click with a shaky hand slides the view instead of moving the
+// playhead, which is the more annoying of the two to undo.
+const TIMELINE_DRAG_SLOP = 3;
+
+// A click anywhere seeks. What a drag means depends on where it started:
+//
+//   on the ruler, it slides the timeline back and forth under the window, which
+//   is what the left-right cursor there promises and the only way to reach the
+//   rest of a clip once the view is zoomed past what the frame can show;
+//
+//   on the stack, it scrubs, because that surface belongs to the layers and
+//   sliding the view out from under a layer being dragged is not what anyone
+//   means by it.
+//
+// On the ruler the seek has to wait for the release: until the pointer has
+// moved there is no telling which of the two gestures this was going to be. On
+// the stack there is no such doubt, so it seeks from the press.
+timelineStage.addEventListener('pointerdown', (evt) => {
+  if (evt.button !== 0 || busy || !timelineDuration()) return;
+  const rect = timelineLane.getBoundingClientRect();
+  const toTime = (clientX) => timelineView.xToTime(tlView, clientX - rect.left);
+  // Read now, because pointer capture retargets every event after this one.
+  const onRuler = evt.target === timelineRuler;
+  // A layer's header is controls, not timeline. Clicking one selects the layer
+  // and works its buttons; it must not also move the playhead.
+  const onTrack = !!(evt.target.closest && evt.target.closest('.layer-track'));
+  if (!onRuler && !onTrack) return;
+  // A press on a control inside a row belongs to that control. Capturing the
+  // pointer below retargets the click to the stage, so the button never sees
+  // one, and an empty row's Open File simply stopped responding. It only ever
+  // showed up once something had given the timeline a duration, because with
+  // none this handler returns on the line above and was never in the way.
+  if (evt.target.closest('button, input, select, textarea, label')) return;
+  timelineStage.setPointerCapture(evt.pointerId);
+  const drag = { startX: evt.clientX, lastX: evt.clientX, panning: false };
+  // A press on the stack is a scrub from the moment it lands, click or drag
+  // alike, so a single click seeks the top layer now and lands the rest on the
+  // release exactly as a drag does.
+  if (!onRuler) {
+    beginScrub();
+    seekTimeline(toTime(evt.clientX));
+  }
+
+  const onMove = (ev) => {
+    if (!onRuler) {
+      seekTimeline(toTime(ev.clientX));
+      return;
+    }
+    if (!drag.panning && Math.abs(ev.clientX - drag.startX) < TIMELINE_DRAG_SLOP) return;
+    drag.panning = true;
+    // The content follows the hand, so the view moves the other way: dragging
+    // rightwards brings earlier seconds into the frame.
+    tlView = timelineView.panBy(tlView, drag.lastX - ev.clientX, timelineDuration(), rect.width);
+    drag.lastX = ev.clientX;
+    noteTimelineFit(rect.width);
+    drawTimeline();
+    updatePlayhead();
+  };
+  const onUp = (ev) => {
+    if (timelineStage.hasPointerCapture(ev.pointerId)) {
+      timelineStage.releasePointerCapture(ev.pointerId);
+    }
+    timelineStage.removeEventListener('pointermove', onMove);
+    timelineStage.removeEventListener('pointerup', onUp);
+    timelineStage.removeEventListener('pointercancel', onUp);
+    if (onRuler && !drag.panning) seekTimeline(toTime(ev.clientX));
+    // Unconditional, so a pointercancel lands the layers too. It returns at
+    // once when no scrub was running.
+    endScrub();
+  };
+  timelineStage.addEventListener('pointermove', onMove);
+  timelineStage.addEventListener('pointerup', onUp);
+  timelineStage.addEventListener('pointercancel', onUp);
+});
+
+// Wheel zooms about the cursor, Shift and wheel scrolls sideways. deltaX is
+// added to deltaY for the scroll because a trackpad already reports a
+// horizontal swipe that way, and some of them turn Shift and a vertical swipe
+// into deltaX themselves.
+timelineStage.addEventListener('wheel', (evt) => {
+  const duration = timelineDuration();
+  if (!duration) return;
+  // Over the headers on the left, or over the stack's own scrollbar, the wheel
+  // belongs to the rows. The stack is a fixed height with overflow-y auto, so
+  // it can scroll perfectly well; preventDefault below was the only reason it
+  // never did, and with more rows than fit there was no way to reach the ones
+  // underneath at all. Returning without preventing the default hands the event
+  // back to the browser, which scrolls .timeline-stack itself.
+  if (overTimelineRows(evt)) return;
+  evt.preventDefault();
+  const rect = timelineLane.getBoundingClientRect();
+  if (evt.shiftKey) {
+    tlView = timelineView.panBy(tlView, evt.deltaY + evt.deltaX, duration, rect.width);
+  } else {
+    const notches = -Math.sign(evt.deltaY || evt.deltaX);
+    if (!notches) return;
+    tlView = timelineView.zoomAt(tlView, evt.clientX - rect.left,
+      Math.pow(TIMELINE_ZOOM_STEP, notches), duration, rect.width);
+  }
+  noteTimelineFit(rect.width);
+  drawTimeline();
+  updatePlayhead();
+}, { passive: false });
+
+/**
+ * Whether a wheel belongs to the stack rather than to the view.
+ *
+ * The headers are elements and can be asked for. The scrollbar is not: it is
+ * painted inside the stack's border box but outside its client box, so the only
+ * way to know the pointer is on it is to measure. clientWidth stops at the
+ * scrollbar, which is the same measurement --timeline-scrollbar is computed
+ * from, so the two cannot disagree about where the tracks end.
+ */
+function overTimelineRows(evt) {
+  const node = evt.target;
+  if (node && node.closest && node.closest('.layer-head, .timeline-gutter')) return true;
+  const rect = timelineStack.getBoundingClientRect();
+  if (evt.clientY < rect.top || evt.clientY > rect.bottom) return false;
+  return evt.clientX > rect.left + timelineStack.clientWidth;
+}
+
+// The two markers move the same trim the Trim frame's handles do, through the
+// same slider, so the time boxes, the frames, the waveform and the span line
+// all follow without knowing which frame the drag happened in. Anchor-based
+// and re-anchoring on a modifier change, exactly as TrimSlider does.
+function bindTimelineMarker(markerEl, isStart) {
+  markerEl.addEventListener('pointerdown', (evt) => {
+    if (evt.button !== 0 || busy || !timelineDuration()) return;
+    // Or the click-to-seek surface underneath would take the playhead with it.
+    evt.stopPropagation();
+    evt.preventDefault();
+    markerEl.setPointerCapture(evt.pointerId);
+    const drag = {
+      anchorX: evt.clientX,
+      anchorValue: isStart ? slider.start : slider.end,
+      factor: modifierFactor(evt),
+    };
+    setDragHint(drag.factor);
+    // Step 10e. Only this marker's own frame: dragging the in point leaves the
+    // End frame exactly as correct as it was, and a spinner over it would say
+    // otherwise.
+    const mine = isStart ? 'start' : 'end';
+    // A drag that holds still is a drag that has arrived somewhere, so the
+    // frame is built there and shown without waiting for the button. Re-armed
+    // by every move, so a continuous drag never pays for one.
+    let dwell = null;
+    const armDwell = () => {
+      clearTimeout(dwell);
+      dwell = setTimeout(() => {
+        dwell = null;
+        renderTrimFrames(mine);
+      }, TRIM_DWELL_MS);
+    };
+    if (compositing()) {
+      trimFramesBusy(true, mine);
+      armDwell();
+    }
+
+    const onMove = (ev) => {
+      const factor = modifierFactor(ev);
+      if (factor !== drag.factor) {
+        drag.anchorX = ev.clientX;
+        drag.anchorValue = isStart ? slider.start : slider.end;
+        drag.factor = factor;
+        setDragHint(factor);
+      }
+      // Seconds per pixel is the zoom, so a marker moves under the cursor at
+      // whatever scale the view is showing rather than at a fixed rate.
+      const delta = ((ev.clientX - drag.anchorX) / tlView.scale) * drag.factor;
+      const value = drag.anchorValue + delta;
+      if (isStart) slider.setStart(value);
+      else slider.setEnd(value);
+      if (!compositing()) return;
+      // Whatever is on that frame, and whatever is being built for it, is now a
+      // picture of somewhere the marker has already left.
+      trimDragGen += 1;
+      trimFramesBusy(true, mine);
+      armDwell();
+    };
+    const onUp = (ev) => {
+      if (markerEl.hasPointerCapture(ev.pointerId)) markerEl.releasePointerCapture(ev.pointerId);
+      markerEl.removeEventListener('pointermove', onMove);
+      markerEl.removeEventListener('pointerup', onUp);
+      markerEl.removeEventListener('pointercancel', onUp);
+      setDragHint(1.0);
+      clearTimeout(dwell);
+      // The release is the commit. Cheap when a dwell already built this frame:
+      // seekDecodersTo skips a decoder that is already on the right frame, so
+      // re-rendering an unchanged trim costs nothing but the restore.
+      renderTrimFrames(mine);
+      commitHistory();
+    };
+    markerEl.addEventListener('pointermove', onMove);
+    markerEl.addEventListener('pointerup', onUp);
+    markerEl.addEventListener('pointercancel', onUp);
+  });
+}
+
+bindTimelineMarker(timelineTrimIn, true);
+bindTimelineMarker(timelineTrimOut, false);
+
+/**
+ * Dragging the playhead line itself.
+ *
+ * Step 10b made a press on bare track scrub, which is right but is not enough:
+ * a project whose layers cover the whole timeline has no bare track left to
+ * press, and pressing a clip drags the clip. The line is always there and is
+ * always the playhead, so it is the one grip that cannot be taken away. It
+ * takes the press before the track underneath, so hovering it does not put the
+ * gesture on a clip.
+ */
+timelinePlayhead.addEventListener('pointerdown', (evt) => {
+  if (evt.button !== 0 || busy || !timelineDuration()) return;
+  // The clip underneath would start moving and the stage would scrub from
+  // wherever the press landed. This press means the playhead and nothing else.
+  evt.stopPropagation();
+  evt.preventDefault();
+  timelinePlayhead.setPointerCapture(evt.pointerId);
+  // Read once: the playhead moves out from under the cursor as it is dragged,
+  // and the lane is what x is measured against either way.
+  const rect = timelineLane.getBoundingClientRect();
+  beginScrub();
+
+  const onMove = (ev) => {
+    seekTimeline(timelineView.xToTime(tlView, ev.clientX - rect.left));
+  };
+  const onUp = (ev) => {
+    if (timelinePlayhead.hasPointerCapture(ev.pointerId)) {
+      timelinePlayhead.releasePointerCapture(ev.pointerId);
+    }
+    timelinePlayhead.removeEventListener('pointermove', onMove);
+    timelinePlayhead.removeEventListener('pointerup', onUp);
+    timelinePlayhead.removeEventListener('pointercancel', onUp);
+    endScrub();
+  };
+  timelinePlayhead.addEventListener('pointermove', onMove);
+  timelinePlayhead.addEventListener('pointerup', onUp);
+  timelinePlayhead.addEventListener('pointercancel', onUp);
+});
+
+// ---- layer rows ----
+//
+// Step 7. The rows are built from the model in src/timeline.js, which the
+// window loads as a plain script beside this one because it cannot require()
+// anything. That is deliberate: the main process encodes from the same file, so
+// there is one layer model rather than two that have to be kept agreeing.
+//
+// Nothing here plays yet. The preview is still the single-media one Step 6
+// wired up, and Step 10 replaces it with the compositor. What this step has to
+// get right is that the model and the screen say the same thing after any
+// sequence of adding, removing, reordering and switching layers off.
+
+// The whole document, and the only thing an undo snapshot would need to hold.
+let layers = [];
+let selectedLayerId = null;
+
+// A trailing empty row of each type is always on offer, so there is somewhere
+// to drop a file and somewhere to press Open File. Filling it puts a real layer
+// in its place and a fresh empty one appears below, which is why there is no
+// separate button to add a layer: the empty row is the button.
+// ---- grouping, Step 14 ----
+//
+// A video file dropped into a video layer also makes an audio layer for its
+// sound, and the two are marked as one.
+
+// Shape and colour together rather than colour alone, so that two green groups
+// are still a star and a circle. Six shapes against five colours, so both
+// change from one group to the next and thirty go by before any pair repeats.
+const GROUP_SHAPES = ['★', '●', '▲', '■', '◆', '✦'];
+const GROUP_COLOURS = ['#78c88c', '#78a8dc', '#dcc878', '#dc8c78', '#b48cdc'];
+
+/**
+ * The shape and colour that stand for a group.
+ *
+ * Chosen by where the group first appears in the layer list, so no two groups
+ * on screen can be handed the same marker, and so a project reopened from a
+ * file gets the same markers it was saved with: the list order is saved too.
+ * The cost is that deleting a group shifts the markers of the ones after it,
+ * which is visible and harmless where a hash collision would be neither.
+ */
+function groupMarker(groupId) {
+  if (!groupId) return null;
+  const index = timelineModel.groupIds(layers).indexOf(groupId);
+  if (index < 0) return null;
+  return {
+    shape: GROUP_SHAPES[index % GROUP_SHAPES.length],
+    colour: GROUP_COLOURS[index % GROUP_COLOURS.length],
+  };
+}
+
+function layersOfType(type) {
+  return layers.filter((l) => l.type === type);
+}
+
+function layerOrdinal(layer) {
+  return layersOfType(layer.type).indexOf(layer) + 1;
+}
+
+/** What a layer is called, which is its position among its own kind. */
+function layerLabel(type, ordinal) {
+  return type === 'audio' ? t('Audio {n}', { n: ordinal }) : t('Video {n}', { n: ordinal });
+}
+
+/**
+ * Selection repaints rather than rebuilding, and that is load-bearing rather
+ * than an optimisation. Selecting happens on pointerdown, so rebuilding the
+ * rows here would destroy the very checkbox or button the press landed on
+ * before it could receive its own click: pressing Enabled on an unselected row
+ * selected the row and did not switch the layer off.
+ */
+function paintLayerSelection() {
+  for (const row of timelineStack.querySelectorAll('.layer-row[data-layer-id]')) {
+    row.classList.toggle('layer-row--selected', row.dataset.layerId === selectedLayerId);
+  }
+}
+
+function selectLayer(id) {
+  if (selectedLayerId === id) return;
+  selectedLayerId = id;
+  paintLayerSelection();
+  // The Crop button acts on the selected layer, so selecting one is what
+  // enables it and what decides which layer its tooltip names. Step 11.
+  updateCropBtn();
+}
+
+/**
+ * Replace the document. Every change goes through here, so there is one place
+ * that redraws and one place an undo commit will hook into at Step 12.
+ */
+function setLayers(next) {
+  layers = next;
+  if (selectedLayerId && !timelineModel.layerById(layers, selectedLayerId)) {
+    selectedLayerId = null;
+  }
+  renderLayerRows();
+  syncComposite();
+  // Before the redraw: the markers are placed from the slider, so the slider
+  // has to know how long the project is first.
+  syncProjectTrim();
+  // And the layers decide whether this project has a picture at all, so the
+  // preview frame may have just become the equalizer or stopped being it.
+  applyPreviewMode();
+  // Step 15. The same answer decides which formats the save row offers, and
+  // whether there is anything to export at all. syncProjectTrim below only
+  // re-gates the row when the project's length changed, and unticking the last
+  // video layer changes neither its length nor its media file.
+  if (timelineDriving()) {
+    buildFormatToggle();
+    setTrimEnabled(!busy && trimmable());
+  }
+  // Step 11. Which layer the Crop button acts on, whether it has a crop, and
+  // what size the project renders at are all answers about the list that has
+  // just changed.
+  updateCropBtn();
+  updateRenderResolution();
+  updateProjectUi();
+  // A layer added, removed, moved or trimmed changes what covers the trim
+  // points, so the two frames are no longer pictures of this project.
+  renderTrimFrames();
+  drawTimeline();
+  updatePlayhead();
+  fitWindow();
+}
+
+/**
+ * A file becoming one or two layers.
+ *
+ * Step 14: a video file with sound in it makes a video layer and an audio
+ * layer, linked. That is the only way a video's own sound reaches the output,
+ * because a video layer is picture only: the encoder builds its audio graph
+ * from the audio layers and nothing else.
+ *
+ * Only on the video path. A video dropped into an audio row is a deliberate
+ * "take the sound and leave the picture", and answering it with a picture as
+ * well would be ignoring what was asked.
+ */
+function addLayerFromMedia(type, data) {
+  const duration = Math.max(0, data.duration || 0);
+  if (!duration) return;
+  const paired = type === 'video' && !!data.hasAudio;
+  const groupId = paired ? timelineModel.newGroupId() : null;
+  const layer = timelineModel.createLayer({
+    type,
+    name: data.title || String(data.path).split(/[\\/]/).pop(),
+    src: data.path,
+    start: 0,
+    sourceDuration: duration,
+    // Carried from the probe at the moment the layer is made, because a crop
+    // set later has to be measured against the same numbers the encoder will
+    // crop with. Step 11.
+    sourceWidth: data.width,
+    sourceHeight: data.height,
+    // Step 15. The project's rate is seeded from its first source, and the
+    // export is written at the project's rate.
+    sourceFps: data.fps,
+    groupId,
+  });
+  let next = timelineModel.addLayer(layers, layer);
+  if (paired) {
+    // The same file, the same place, the same part of it. addLayer puts it at
+    // the end of the audio block, which is where an audio row belongs whatever
+    // it is grouped with.
+    next = timelineModel.addLayer(next, timelineModel.createLayer({
+      type: 'audio',
+      name: layer.name,
+      src: layer.src,
+      start: layer.start,
+      sourceIn: layer.sourceIn,
+      duration: layer.duration,
+      sourceDuration: layer.sourceDuration,
+      groupId,
+    }));
+  }
+  // The picture, not the sound: it is the one the eye is on and the one the
+  // crop button acts on.
+  selectedLayerId = layer.id;
+  setLayers(next);
+  commitHistory();
+}
+
+/**
+ * A file chosen or dropped onto an empty row of the given type. A video dropped
+ * into an audio row keeps only its sound, which costs nothing here because the
+ * layer records the type it was made as and the encoder reads that.
+ */
+async function openIntoLayer(type, filePath) {
+  if (busy) return;
+  const result = filePath
+    ? await window.lwclipper.describeMedia(filePath)
+    : await window.lwclipper.loadLocalMedia();
+  if (!result || result.cancelled) return;
+  // Still "open this project". There is nothing else a .lwc can mean, and
+  // answering a track drop differently from the zone above would only mean
+  // learning which corner of the window opens projects.
+  if (result.project) {
+    await openProjectPath(result.path);
+    return;
+  }
+  if (!result.ok) {
+    reportFailure(result);
+    return;
+  }
+  addLayerFromMedia(type, result.data);
+}
+
+/**
+ * A small control living on a clip rather than in the header.
+ *
+ * It stops the press and not only the click, which a header button does not
+ * have to: the clip underneath turns a pointerdown into a drag or a trim, so a
+ * button that only stopped the click would start a drag on the way to being
+ * pressed and then never be pressed at all.
+ */
+function makeClipMark(className, label, title, onClick) {
+  const btn = document.createElement('button');
+  btn.className = 'clip-mark ' + className;
+  btn.textContent = label;
+  btn.title = title;
+  btn.addEventListener('pointerdown', (evt) => evt.stopPropagation());
+  btn.addEventListener('click', (evt) => {
+    evt.stopPropagation();
+    onClick();
+  });
+  return btn;
+}
+
+function makeButton(className, label, title, onClick) {
+  const btn = document.createElement('button');
+  btn.className = className;
+  btn.textContent = label;
+  if (title) btn.title = title;
+  btn.addEventListener('click', (evt) => {
+    evt.stopPropagation();
+    onClick();
+  });
+  return btn;
+}
+
+/** One row per layer, then the trailing empty row for that type. */
+function buildLayerRow(layer) {
+  const row = document.createElement('div');
+  row.className = 'layer-row layer-row--' + layer.type;
+  row.dataset.layerId = layer.id;
+  if (!layer.enabled) row.classList.add('layer-row--off');
+  if (layer.id === selectedLayerId) row.classList.add('layer-row--selected');
+
+  const head = document.createElement('div');
+  head.className = 'layer-head';
+
+  const top = document.createElement('div');
+  top.className = 'layer-head__top';
+  // The group marker and the crop button used to sit here, either side of the
+  // name, and between them and the arrows the name had about six characters of
+  // room. Both now ride the end of the clip instead, where the thing they are
+  // about actually is. The head keeps the name and the two things that are not
+  // about one clip: where the layer sits in the stack, and whether it stays.
+  const marker = groupMarker(layer.groupId);
+
+  const name = document.createElement('div');
+  name.className = 'layer-name';
+  name.textContent = layerLabel(layer.type, layerOrdinal(layer));
+  name.title = layer.name || '';
+  top.appendChild(name);
+
+  // Up and down only on video: a mix does not care what order it sums in, so
+  // there is nothing for the arrows to mean on an audio layer.
+  if (layer.type === 'video') {
+    const siblings = layersOfType('video');
+    const at = siblings.indexOf(layer);
+    const reorder = (delta) => {
+      setLayers(timelineModel.reorderLayer(layers, layer.id, delta));
+      commitHistory();
+    };
+    const up = makeButton('layer-btn', '▲', t('Move layer up'), () => reorder(-1));
+    const down = makeButton('layer-btn', '▼', t('Move layer down'), () => reorder(1));
+    up.disabled = at === 0;
+    down.disabled = at === siblings.length - 1;
+    top.appendChild(up);
+    top.appendChild(down);
+  }
+
+  top.appendChild(makeButton('layer-btn layer-btn--delete', '✕', t('Delete layer'), () => {
+    // The design's rule: only the clicked layer goes, the pair is unlinked by
+    // its going, and the survivor keeps the marker so it is visible which one
+    // it was. removeLayer does all of that by doing nothing clever.
+    setLayers(timelineModel.removeLayer(layers, layer.id));
+    commitHistory();
+  }));
+  head.appendChild(top);
+
+  const controls = document.createElement('div');
+  controls.className = 'layer-head__row';
+  const enabledLabel = document.createElement('label');
+  enabledLabel.className = 'layer-enabled';
+  const enabled = document.createElement('input');
+  enabled.type = 'checkbox';
+  enabled.checked = layer.enabled;
+  enabled.addEventListener('click', (evt) => evt.stopPropagation());
+  enabled.addEventListener('change', () => {
+    setLayers(timelineModel.setLayer(layers, layer.id, { enabled: enabled.checked }));
+  });
+  enabledLabel.appendChild(enabled);
+  enabledLabel.appendChild(document.createTextNode(t('Enabled')));
+  controls.appendChild(enabledLabel);
+
+  // Per-layer volume, which is what replaces the single global slider.
+  if (layer.type === 'audio') {
+    const vol = document.createElement('input');
+    vol.type = 'range';
+    vol.className = 'layer-volume';
+    vol.min = '0';
+    vol.max = '200';
+    vol.step = '5';
+    vol.value = String(Math.round(layer.volume * 100));
+    const readout = document.createElement('span');
+    readout.className = 'layer-volume__value';
+    readout.textContent = vol.value + '%';
+    vol.addEventListener('click', (evt) => evt.stopPropagation());
+    // Written straight into the model on input rather than on change, but
+    // without a re-render: rebuilding the rows mid-drag would take the slider
+    // out from under the pointer.
+    vol.addEventListener('input', () => {
+      readout.textContent = vol.value + '%';
+      layers = timelineModel.setLayer(layers, layer.id, { volume: Number(vol.value) / 100 });
+      // Live, because the slider is how a level gets found and finding it means
+      // hearing it move. Read back out of the model rather than trusting the
+      // value in hand, so what is heard is what was written.
+      const updated = timelineModel.layerById(layers, layer.id);
+      if (updated) applyPlayerGain(updated);
+      // Written straight into the list, so nothing else is going to notice.
+      updateProjectUi();
+    });
+    controls.appendChild(vol);
+    controls.appendChild(readout);
+  }
+  head.appendChild(controls);
+
+  const track = document.createElement('div');
+  track.className = 'layer-track';
+  track.dataset.layerId = layer.id;
+  const clip = document.createElement('div');
+  clip.className = 'layer-clip';
+  // Step 17. The file's own name with its extension. This was layer.src, the
+  // whole path, which is longer than a tooltip usefully is; layer.name is not
+  // it either, because a download's title arrives there instead of a filename.
+  clip.title = (layer.src || '').split(/[\\/]/).pop();
+  // The thumbnails or the waveform, on a canvas only as wide as the part of the
+  // clip that is actually on screen. Sizing it to the whole clip would ask for
+  // a 260000px canvas at full zoom on a ten minute layer.
+  const art = document.createElement('canvas');
+  art.className = 'layer-clip__art';
+  clip.appendChild(art);
+  // The grips, over the art. Their width is set in
+  // positionLayerClips, which is the only place that knows how wide the clip
+  // has ended up on screen.
+  for (const side of ['start', 'end']) {
+    const handle = document.createElement('div');
+    handle.className = 'layer-clip__edge layer-clip__edge--' + side;
+    handle.dataset.edge = side;
+    handle.title = t('Drag to trim this edge');
+    clip.appendChild(handle);
+  }
+
+  // The group marker and the crop control, at the top right of the clip. Last,
+  // so they take a press before the end grip does; placeClipMarks then insets
+  // them by the grip's width so the two never actually overlap.
+  //
+  // Step 17 moved them from the middle of the clip's end to its top corner.
+  // They stay the clip's, not the row's: they say something about this layer's
+  // media and they belong where that media is.
+  const marks = document.createElement('div');
+  marks.className = 'layer-clip__marks';
+  if (marker) {
+    // One control, not a marker beside an Ungroup button. It says which group
+    // the clip is in and breaking that group is the only thing there is to do
+    // about it. A stray press is a normal undo step, which is what makes one
+    // control safe enough to be worth the room.
+    const mark = makeClipMark('clip-mark--group', marker.shape,
+      t('Grouped with its sound, click to ungroup'), () => {
+        setLayers(timelineModel.ungroup(layers, layer.groupId));
+        commitHistory();
+      });
+    mark.style.color = marker.colour;
+    marks.appendChild(mark);
+  }
+  // Video only: there is nothing to crop out of a waveform.
+  if (layer.type === 'video') {
+    const crop = makeClipMark('clip-mark--crop', '⛶', t('Crop layer'), () => {
+      selectLayer(layer.id);
+      openCrop(layer.id);
+    });
+    // Lit when this layer is actually cropped, so the row says so without
+    // anything having to be opened to find out.
+    crop.classList.toggle('clip-mark--on', !!layer.crop);
+    marks.appendChild(crop);
+  }
+  if (marks.childElementCount) clip.appendChild(marks);
+
+  bindClipDrag(clip, layer.id);
+  track.appendChild(clip);
+
+  row.appendChild(head);
+  row.appendChild(track);
+  row.addEventListener('pointerdown', () => selectLayer(layer.id));
+  return row;
+}
+
+// ---- moving and trimming a clip ----
+//
+// Step 9. Three gestures on one element: slide the clip along the timeline, or
+// pull either edge in and out.
+//
+// The model does every piece of clamping, which is what Step 1 being a pure
+// module bought. moveLayer will not go below zero, trimLayer will not run past
+// the source or shrink a clip away to nothing, and both round, so nothing here
+// has to know those rules or worry about drift.
+//
+// Trimming is non-destructive in the literal sense: the source file is never
+// touched and the layer only records how much of it to show, so an edge pulled
+// all the way in can always be pulled back out to where it started.
+
+// How wide an edge grip is at most. Seven pixels is about the least a hand
+// reliably lands on, and it is what the timeline's trim markers already use.
+const CLIP_EDGE_GRAB = 7;
+
+function bindClipDrag(clip, layerId) {
+  clip.addEventListener('pointerdown', (evt) => {
+    if (evt.button !== 0 || busy) return;
+    const layer = timelineModel.layerById(layers, layerId);
+    if (!layer) return;
+    // The stage underneath would scrub, and the row above would select on the
+    // way past. Selecting here instead means the press does one thing.
+    evt.stopPropagation();
+    evt.preventDefault();
+    selectLayer(layerId);
+
+    const grip = evt.target.closest && evt.target.closest('.layer-clip__edge');
+    const edge = grip ? grip.dataset.edge : null;
+    // What the gesture is dragging: the clip's position, or the edge's own
+    // place on the timeline.
+    const valueOf = (l) => (edge === 'end' ? timelineModel.endOf(l) : l.start);
+
+    clip.setPointerCapture(evt.pointerId);
+    const rect = timelineLane.getBoundingClientRect();
+    // The fit is frozen for the duration of the drag. A layer dragged
+    // rightwards on a fitted view makes the project longer, which would rescale
+    // the ruler under the drag and leave the clip forever chasing the cursor.
+    // noteTimelineFit on release works out whether it is the fitted view again.
+    tlFitted = false;
+    const drag = {
+      anchorX: evt.clientX,
+      anchorValue: valueOf(layer),
+      factor: modifierFactor(evt),
+      moved: false,
+    };
+    clip.classList.add('layer-clip--dragging');
+    document.body.classList.add(edge ? 'layer-trimming' : 'layer-dragging');
+    setDragHint(drag.factor);
+
+    // Written straight into the list without setLayers, for the same reason the
+    // volume slider is: setLayers rebuilds the rows, which would destroy the
+    // very clip the pointer is captured on. The commit happens on release.
+    // Step 14. A grouped clip drags its whole group, which for the common case
+    // is a picture and its own sound. moveGroup and trimGroup fall through to
+    // the single-layer versions when there is no group, so there is one path
+    // here rather than two.
+    const apply = (value) => {
+      layers = edge
+        ? timelineModel.trimGroup(layers, layerId, edge, value)
+        : timelineModel.moveGroup(layers, layerId, value);
+      drawTimeline();
+      updatePlayhead();
+    };
+
+    const onMove = (ev) => {
+      if (!drag.moved) {
+        if (Math.abs(ev.clientX - drag.anchorX) < TIMELINE_DRAG_SLOP) return;
+        drag.moved = true;
+      }
+      const factor = modifierFactor(ev);
+      if (factor !== drag.factor) {
+        // Re-anchored on the layer as it stands now, so the new rate carries on
+        // from where the clip is rather than jumping. Read back from the model
+        // rather than tracked, because the model may have clamped the last move.
+        const now = timelineModel.layerById(layers, layerId);
+        if (!now) return;
+        drag.anchorX = ev.clientX;
+        drag.anchorValue = valueOf(now);
+        drag.factor = factor;
+        setDragHint(factor);
+      }
+      // Seconds per pixel is the zoom, so a clip travels with the cursor at
+      // whatever the view is showing rather than at some fixed rate.
+      const delta = ((ev.clientX - drag.anchorX) / tlView.scale) * drag.factor;
+      apply(drag.anchorValue + delta);
+    };
+    const onUp = (ev) => {
+      if (clip.hasPointerCapture(ev.pointerId)) clip.releasePointerCapture(ev.pointerId);
+      clip.removeEventListener('pointermove', onMove);
+      clip.removeEventListener('pointerup', onUp);
+      clip.removeEventListener('pointercancel', onUp);
+      clip.classList.remove('layer-clip--dragging');
+      document.body.classList.remove('layer-dragging', 'layer-trimming');
+      setDragHint(1.0);
+      noteTimelineFit(rect.width);
+      // The commit point, and so Step 12's undo snapshot. A press that never
+      // moved changed nothing and does not rebuild the rows, let alone take a
+      // step.
+      if (drag.moved) {
+        setLayers(layers);
+        commitHistory();
+      }
+    };
+    clip.addEventListener('pointermove', onMove);
+    clip.addEventListener('pointerup', onUp);
+    clip.addEventListener('pointercancel', onUp);
+  });
+}
+
+function buildEmptyRow(type) {
+  const row = document.createElement('div');
+  row.className = 'layer-row layer-row--' + type + ' layer-row--empty';
+
+  const head = document.createElement('div');
+  head.className = 'layer-head';
+  const name = document.createElement('div');
+  name.className = 'layer-name';
+  name.textContent = layerLabel(type, layersOfType(type).length + 1);
+  head.appendChild(name);
+
+  const track = document.createElement('div');
+  track.className = 'layer-track';
+  track.dataset.emptyType = type;
+  const empty = document.createElement('div');
+  empty.className = 'layer-empty';
+  const text = document.createElement('span');
+  text.textContent = type === 'audio' ? t('No Audio track') : t('No Video track');
+  empty.appendChild(makeButton('', t('Open File'), '', () => openIntoLayer(type, null)));
+  empty.appendChild(text);
+  track.appendChild(empty);
+
+  row.appendChild(head);
+  row.appendChild(track);
+  return row;
+}
+
+function renderLayerRows() {
+  const stack = timelineStack;
+  stack.replaceChildren();
+  for (const layer of layersOfType('video')) stack.appendChild(buildLayerRow(layer));
+  stack.appendChild(buildEmptyRow('video'));
+  for (const layer of layersOfType('audio')) stack.appendChild(buildLayerRow(layer));
+  stack.appendChild(buildEmptyRow('audio'));
+  positionLayerClips();
+}
+
+/** Every clip placed against the same view the ruler is drawn against. */
+function positionLayerClips() {
+  const trackW = timelineLane.clientWidth;
+  for (const track of timelineStack.querySelectorAll('.layer-track[data-layer-id]')) {
+    const layer = timelineModel.layerById(layers, track.dataset.layerId);
+    const clip = track.querySelector('.layer-clip');
+    if (!layer || !clip) continue;
+    const x0 = timelineView.timeToX(tlView, layer.start);
+    const x1 = timelineView.timeToX(tlView, timelineModel.endOf(layer));
+    const width = Math.max(2, x1 - x0);
+    clip.style.left = x0 + 'px';
+    clip.style.width = width + 'px';
+
+    // A clip too narrow to spare two full grips gives each of them a third of
+    // itself, so there is always a body left in the middle and a short clip can
+    // still be moved rather than only trimmed.
+    const gripW = Math.min(CLIP_EDGE_GRAB, Math.floor(width / 3));
+    for (const handle of clip.querySelectorAll('.layer-clip__edge')) {
+      handle.style.width = gripW + 'px';
+    }
+
+    // The canvas covers only the part of the clip inside the frame, placed at
+    // its offset within the clip, so its width is bounded by the track however
+    // far the view is zoomed in.
+    const art = clip.querySelector('.layer-clip__art');
+    if (!art) continue;
+    const from = Math.max(0, -x0);
+    const to = Math.min(width, trackW - x0);
+    const visible = Math.max(0, to - from);
+    art.style.left = from + 'px';
+    art.style.width = visible + 'px';
+    placeClipMarks(clip, width, from, visible, gripW);
+    drawClipArt(layer, art, x0 + from, visible, clip.clientHeight);
+  }
+}
+
+// How wide one clip mark is, and the gap between two, matching the stylesheet.
+// Taken as numbers rather than measured: this runs for every clip on every pan
+// and zoom frame, and reading offsetWidth there is a layout per clip per frame
+// to learn something that never changes.
+const CLIP_MARK_W = 17;
+const CLIP_MARK_GAP = 3;
+
+/**
+ * The marks at the top right of a clip.
+ *
+ * They float at the right of whatever part of the clip is on screen rather
+ * than at its true end, or a clip wider than the frame would keep them
+ * somewhere off to the side of it. Their height is the stylesheet's; this only
+ * decides how far in from the right they sit.
+ *
+ * Inset by the grip's width, but only when the clip's own end is on screen. If
+ * the clip runs off the right of the frame there is no grip there to clear, and
+ * insetting anyway would leave the marks floating short of the edge.
+ */
+function placeClipMarks(clip, width, from, visible, gripW) {
+  const marks = clip.querySelector('.layer-clip__marks');
+  if (!marks) return;
+  const n = marks.childElementCount;
+  const needed = n * CLIP_MARK_W + (n - 1) * CLIP_MARK_GAP;
+  const endOnScreen = from + visible >= width - 0.5;
+  // Room for the marks, the grip they sit beside, and enough clip left over to
+  // still be a clip. Below that they go, because a control the width of its own
+  // row is not a control, it is the row.
+  marks.hidden = visible < needed + gripW + 24;
+  if (marks.hidden) return;
+  marks.style.right = (width - (from + visible) + (endOnScreen ? gripW : 0)) + 'px';
+}
+
+// ---- what a clip looks like ----
+//
+// Thumbnails for a video layer, a waveform for an audio one. Both are derived
+// data fetched from the main process and cached here as well as on disk: this
+// runs on every pan and zoom frame, and a round trip per frame would be absurd.
+//
+// Each cache entry records what density it was fetched at. A finer one is
+// requested when the view has zoomed past what the current one can draw, and
+// the coarse one keeps being drawn until the finer one arrives, so zooming
+// never blanks the strip it is refining.
+
+const stripCache = new Map();   // src -> { want, tiles, info, img, pending }
+const peakCache = new Map();    // src -> { want, buckets, peaks, pending }
+
+function clipArtColours(type) {
+  return type === 'audio'
+    ? { wave: '#a6d8b4', mid: 'rgba(200, 235, 210, 0.35)' }
+    : { wave: '#8fa8d8', mid: 'rgba(200, 215, 240, 0.3)' };
+}
+
+async function ensureStrip(layer, want) {
+  const entry = stripCache.get(layer.src);
+  if (entry && entry.pending) return;
+  // tilesFor doubles, so asking again for a want the current entry already
+  // satisfies would fetch the same sheet forever.
+  if (entry && entry.want >= want) return;
+  stripCache.set(layer.src, { ...(entry || {}), want, pending: true });
+  try {
+    const result = await window.lwclipper.filmstrip(layer.src, layer.sourceDuration, want);
+    if (!result.ok || !result.data) {
+      // No video stream, or ffmpeg could not read one. The clip keeps its plain
+      // bar rather than the frame going quiet about it.
+      stripCache.set(layer.src, { want: Infinity, pending: false });
+      return;
+    }
+    const url = await window.lwclipper.fileUrl(result.data.file);
+    const img = new Image();
+    img.src = url;
+    await img.decode().catch(() => {});
+    stripCache.set(layer.src, { want, info: result.data, img, pending: false });
+    drawTimeline();
+  } catch {
+    stripCache.set(layer.src, { want: Infinity, pending: false });
+  }
+}
+
+async function ensurePeaks(layer, want) {
+  const entry = peakCache.get(layer.src);
+  if (entry && entry.pending) return;
+  if (entry && entry.want >= want) return;
+  peakCache.set(layer.src, { ...(entry || {}), want, pending: true });
+  try {
+    const result = await window.lwclipper.audioPeaks(layer.src, layer.sourceDuration, want);
+    if (!result.ok) {
+      peakCache.set(layer.src, { want: Infinity, pending: false });
+      return;
+    }
+    peakCache.set(layer.src, {
+      want, peaks: result.data.peaks, buckets: result.data.buckets, pending: false,
+    });
+    drawTimeline();
+  } catch {
+    peakCache.set(layer.src, { want: Infinity, pending: false });
+  }
+}
+
+/**
+ * Draw the visible slice of one clip.
+ *
+ * `leftX` is where the canvas starts in lane coordinates, which is what turns a
+ * pixel into a time and then into a position in the source.
+ */
+function drawClipArt(layer, canvas, leftX, width, height) {
+  if (!(width > 0) || !(height > 0) || !layer.src) return;
+  const dpr = window.devicePixelRatio || 1;
+  const wantW = Math.max(1, Math.round(width * dpr));
+  const wantH = Math.max(1, Math.round(height * dpr));
+  if (canvas.width !== wantW || canvas.height !== wantH) {
+    canvas.width = wantW;
+    canvas.height = wantH;
+  }
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+
+  if (layer.type === 'audio') drawClipWaveform(layer, ctx, leftX, width, height);
+  else drawClipFilmstrip(layer, ctx, leftX, width, height);
+}
+
+/**
+ * A layer's crop as fractions of its source frame.
+ *
+ * Fractions rather than pixels because that is the one form that works against
+ * anything measured in that frame whatever size it has been reduced to: a
+ * thumbnail on a sheet here, a video element's intrinsic size in paintLayers.
+ * The whole frame when there is no crop, or when nothing has measured the
+ * source to put one against.
+ */
+function cropWindow(layer) {
+  const whole = { x: 0, y: 0, w: 1, h: 1 };
+  const source = layerSource(layer);
+  if (!layer.crop || !source) return whole;
+  const rect = layerGeometry.sourceRect(source, layer.crop);
+  if (!rect) return whole;
+  // Against the even-down frame sourceRect clamps to, not against the raw
+  // numbers, so the fractions describe the rectangle it actually returned.
+  const w = source.width - (source.width % 2);
+  const h = source.height - (source.height % 2);
+  return { x: rect.x / w, y: rect.y / h, w: rect.width / w, h: rect.height / h };
+}
+
+function drawClipFilmstrip(layer, ctx, leftX, width, height) {
+  const entry = stripCache.get(layer.src);
+  const info = entry && entry.info;
+  // Step 11. The sheet holds whole source frames, so a crop is the same
+  // fractions of a tile that it is of the frame, and the strip shows what the
+  // render will rather than what the file happens to contain.
+  const win = cropWindow(layer);
+  const tileW = info ? info.tileWidth * win.w : 0;
+  const tileH = info ? info.tileHeight * win.h : 0;
+  // How wide one thumbnail is on screen once scaled to the row's height. The
+  // cropped part of it, so a 9:16 crop shows as a narrow thumbnail.
+  const drawW = info ? Math.max(4, tileW * (height / tileH)) : 48;
+  // Thumbnails across the whole source, which is what the sheet holds. It
+  // follows the zoom and not the clip's length: thirty minutes at fit-to-width
+  // asks for the same handful a thirty second clip does.
+  const want = Math.ceil((layer.sourceDuration * tlView.scale) / drawW);
+  ensureStrip(layer, want);
+  if (!info || !entry.img) return;
+
+  for (let px = 0; px < width; px += drawW) {
+    const t = timelineView.xToTime(tlView, leftX + px);
+    const at = timelineModel.sourceTimeFor(layer, t);
+    const index = Math.min(info.tiles - 1,
+      Math.max(0, Math.floor(at / info.interval)));
+    const sx = (index % info.cols) * info.tileWidth + info.tileWidth * win.x;
+    const sy = Math.floor(index / info.cols) * info.tileHeight + info.tileHeight * win.y;
+    ctx.drawImage(entry.img, sx, sy, tileW, tileH,
+      px, 0, Math.min(drawW, width - px), height);
+  }
+}
+
+function drawClipWaveform(layer, ctx, leftX, width, height) {
+  // One bucket per pixel of the source at this zoom, which is what the frame
+  // can actually show.
+  const want = Math.ceil(layer.sourceDuration * tlView.scale);
+  ensurePeaks(layer, want);
+  const entry = peakCache.get(layer.src);
+  if (!entry || !entry.peaks) return;
+
+  const { peaks, buckets } = entry;
+  const mid = height / 2;
+  const half = mid - 2;
+  const colours = clipArtColours(layer.type);
+  ctx.fillStyle = colours.wave;
+  for (let px = 0; px < width; px += 1) {
+    const t = timelineView.xToTime(tlView, leftX + px);
+    const at = timelineModel.sourceTimeFor(layer, t);
+    const b = Math.min(buckets - 1,
+      Math.max(0, Math.floor((at / layer.sourceDuration) * buckets)));
+    const lo = peaks[b * 2];
+    const hi = peaks[b * 2 + 1];
+    const top = mid - hi * half;
+    const bottom = mid - lo * half;
+    ctx.fillRect(px, top, 1, Math.max(1, bottom - top));
+  }
+  ctx.fillStyle = colours.mid;
+  ctx.fillRect(0, mid, width, 1);
+}
+
+// ---- the compositor ----
+//
+// Step 10a. Advanced editing's preview: every video layer covering the playhead
+// drawn onto one canvas, in the order the model hands them back, so Video 1
+// lands on top.
+//
+// Nothing here decides anything about the picture. Where a layer lands comes
+// from geometry.js and when it appears comes from timeline.js, which is what
+// the encoder reads as well, so the preview and the saved file cannot come to
+// different answers. This is dev/sliceRenderer.js generalised from two
+// hardcoded layers to however many the project has.
+//
+// The video elements are muted and stay muted, now permanently rather than
+// until Step 10c. A video layer is picture only in this model: composer.js
+// mixes type 'audio' layers and nothing else, so a video decoder left unmuted
+// would put sound in the preview that the saved file does not have. Step 14's
+// grouping is what gives a dropped video file an audio row of its own to carry
+// its sound. Muted is also what lets an element play without a gesture.
+//
+// Step 10c added the sound below: one audio element per audio layer, each
+// through its own gain node into one bus.
+//
+// Seeking is naive: every covering layer on every playhead move. That is
+// correct and slow, and making it affordable is the whole of Step 10b.
+
+// Until the aspect and resolution dropdowns in the design exist, the project
+// takes its shape from the first source to arrive and then keeps it. Seeded
+// once rather than read off the top layer every time, so reordering the rows
+// does not reshape the project underneath them.
+const COMPOSITE_FALLBACK = { width: 1280, height: 720, fps: 30 };
+
+// How far an element may drift before it is dragged back rather than left to
+// catch up, and the same value as AUDIO_SYNC_SLACK for the same reason: a
+// re-seek costs a decode, so it is worth doing only when an element is
+// genuinely lost. Step 0 measured 2ms of real drift against a wall clock, which
+// never comes near this wall.
+const COMPOSITE_SLACK = 0.25;
+
+// Above 1080p even the top layer alone costs about 450ms to seek, which is not
+// a live scrub by any reading, so a project that size holds its picture through
+// the drag and lands everything when the mouse comes up. Counted in pixels
+// rather than in height, so a 1080x1920 portrait clip is the 1080p it is.
+const SCRUB_PIXELS = 1920 * 1080;
+
+const decoders = new Map();   // layer id -> { el, width, height }
+// Step 10c. One player per audio layer, each with its own gain node, all of
+// them summing into mixBus. A mix does not care what order it sums in, so
+// unlike the decoders these have no order at all.
+const players = new Map();    // layer id -> { el, gain }
+let mixBus = null;
+// Decoders still on their way to the playhead after a scrub let go. Step 0
+// measured this at up to 5s for five 4K layers and 7.4s worst for eight, so it
+// is not something to do quietly: the composite is wrong for that whole time,
+// and a picture that has stopped changing looks exactly like one that froze.
+const landing = new Set();
+let landingTimer = null;
+let compositeScrub = false;   // a drag on the stack is moving the playhead
+// Step 10e is holding the pool at a trim point, so nothing may draw the preview
+// from it. Declared here rather than beside the rest of 10e because
+// drawComposite reads it and is defined long before that block.
+let paintingFrames = false;
+let compositeFrame = null;    // the project's size, seeded from the first source
+let compositeAt = 0;          // where the playhead is, in timeline seconds
+let compositePlaying = false;
+let compositeRaf = null;
+let compositeLast = 0;
+
+const compositeCtx = compositeCanvas.getContext('2d', { alpha: false });
+
+/**
+ * Whether the composite is what the preview frame is showing.
+ *
+ * An audio-only output stays on the single media path with everything it
+ * already has, spectrum included: there is no picture to composite. Step 10c
+ * put the timeline's sound on a mix bus but left this alone, because what an
+ * audio-only preview shows is the spectrum, and moving the spectrum onto the
+ * bus is Step 10d. Until then, choosing MP3 in advanced mode gives the preview
+ * back to the single media path.
+ */
+function compositing() {
+  return timelineDriving() && !outputIsAudio();
+}
+
+/**
+ * Whether the timeline owns the transport and the sound.
+ *
+ * Wider than compositing(), and the difference is the whole of what 10c left
+ * open: with an audio output format there is no picture to draw, but there is
+ * still a project to play. The canvas follows compositing(); the Play button,
+ * the playhead, the space bar and the mix all follow this.
+ */
+function timelineDriving() {
+  return !!appSettings.advancedEditing;
+}
+
+function projectFrame() {
+  return compositeFrame || COMPOSITE_FALLBACK;
+}
+
+function compositeTotal() {
+  return timelineModel.totalDuration(layers);
+}
+
+function sizeCompositeCanvas() {
+  // The rough preview, capped at 854x480 by geometry.js, and deliberately not
+  // scaled by devicePixelRatio the way the ruler and the waveform are. This one
+  // is redrawn every frame with five decoders behind it, and Step 0 spent that
+  // budget on the layers rather than on detail nobody is looking at.
+  const size = layerGeometry.previewCanvasSize(projectFrame());
+  if (!size) return;
+  if (compositeCanvas.width === size.width && compositeCanvas.height === size.height) return;
+  compositeCanvas.width = size.width;
+  compositeCanvas.height = size.height;
+}
+
+/**
+ * Seed the project frame, once, from the first source the project has.
+ *
+ * Walked in list order rather than taken from whichever decoder happened to
+ * report first, or two files opened together would leave the project a
+ * different shape on different runs. Kept afterwards, so dropping a portrait
+ * clip on top of a landscape project does not turn the project portrait: the
+ * design has an aspect and a resolution dropdown for that, and this is what
+ * stands in until they exist.
+ */
+function noteSourceSize() {
+  if (compositeFrame) return;
+  for (const l of layers) {
+    if (l.type !== 'video') continue;
+    const source = layerSource(l);
+    if (!source) continue;
+    // The rate travels with the size for the same reason the size is kept once
+    // it is set: the export is written at the project's rate, and a project
+    // that took its rate from whichever layer happens to be first today would
+    // change what it renders when that layer is deleted.
+    compositeFrame = {
+      width: source.width,
+      height: source.height,
+      fps: Math.round((l.sourceFps || 0) * 1000) / 1000 || COMPOSITE_FALLBACK.fps,
+    };
+    sizeCompositeCanvas();
+    return;
+  }
+}
+
+// The same dance as dropPreviewSources, and for the same reason: on Windows one
+// remaining handle on a file is enough to make a cache clear silently fail.
+function releaseDecoder(entry) {
+  entry.el.pause();
+  entry.el.removeAttribute('src');
+  entry.el.load();
+  entry.el.remove();
+}
+
+function releaseComposite() {
+  for (const entry of decoders.values()) releaseDecoder(entry);
+  decoders.clear();
+  releasePlayers();
+  compositeFrame = null;
+  landing.clear();
+  clearTimeout(landingTimer);
+}
+
+function addDecoder(layer) {
+  const v = document.createElement('video');
+  v.muted = true;
+  v.preload = 'auto';
+  v.playsInline = true;
+  const entry = { el: v, width: 0, height: 0 };
+  decoders.set(layer.id, entry);
+  compositePool.appendChild(v);
+  v.addEventListener('loadedmetadata', () => {
+    entry.width = v.videoWidth;
+    entry.height = v.videoHeight;
+    noteSourceSize();
+    updateRenderResolution();
+    // The seed lands here and nowhere else, so this is where the dropdown finds
+    // out what rate the project ended up with.
+    updateFpsChoices();
+    // And where the step already on the stack finds out too. The layer was
+    // added and committed before this file said what rate it runs at, so
+    // without this the snapshot behind the next gesture claims the project had
+    // no rate, and Ctrl+Z over a rate change would find nothing to go back to.
+    // Not a commit: a decoder answering is not a gesture.
+    undoStack = projectHistory.reseat(undoStack, projectState());
+    // This layer was not in the trim frames when they were last built, because
+    // it had no size to place it by. The token makes a second arrival cancel
+    // the first rather than queue behind it.
+    renderTrimFrames();
+    // It arrives parked at zero, which is the right frame only when the layer
+    // happens to start there.
+    if (compositePlaying) followDecoders();
+    else parkDecoders();
+    drawComposite();
+  });
+  // The frame is not there when currentTime is written, it is there when the
+  // seek lands. Drawing on both is what fills the canvas in without the
+  // scheduler having to wait for anything.
+  v.addEventListener('seeked', () => {
+    if (landing.delete(layer.id)) refreshHints();
+    if (!compositePlaying) drawComposite();
+  });
+  window.lwclipper.fileUrl(layer.src).then((url) => {
+    // The row may have gone while the path was crossing to the main process.
+    if (decoders.get(layer.id) !== entry) return;
+    v.src = url;
+  });
+}
+
+/** One decoder per video layer: made when a layer appears, let go when it goes. */
+function syncDecoders() {
+  const wanted = new Set();
+  for (const l of layers) {
+    if (l.type !== 'video' || !l.src) continue;
+    wanted.add(l.id);
+    if (!decoders.has(l.id)) addDecoder(l);
+  }
+  for (const [id, entry] of decoders) {
+    if (wanted.has(id)) continue;
+    releaseDecoder(entry);
+    decoders.delete(id);
+    // Nothing is going to answer for it now, so stop waiting on it.
+    landing.delete(id);
+  }
+  // An empty project takes its shape from whatever source opens the next one.
+  if (!decoders.size) compositeFrame = null;
+}
+
+/**
+ * Every covering video layer at `at`, drawn onto one canvas.
+ *
+ * Shared by the preview canvas and by Step 10e's two trim frames, so a frame at
+ * the in point and the picture at the playhead cannot be composited by two
+ * different pieces of arithmetic and disagree.
+ *
+ * `only` restricts it to a single layer, which is what a scrub draws.
+ */
+function paintLayers(ctx, canvas, at, only) {
+  const frame = projectFrame();
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  // Back to front, which is the order layersAt hands them back in, so index 0
+  // is drawn last and Video 1 ends up on top.
+  for (const l of timelineModel.layersAt(layers, at)) {
+    if (l.type !== 'video') continue;
+    // Mid-scrub, only the layer that is actually on the playhead's frame. The
+    // others still hold whatever the last position decoded, and a frame from
+    // another moment drawn into the composite has nothing on it to say it is
+    // not the real one.
+    if (only && l.id !== only.id) continue;
+    const entry = decoders.get(l.id);
+    if (!entry || !entry.width) continue;
+    const source = layerSource(l);
+    if (!source) continue;
+    const placement = layerGeometry.placeLayer({
+      source,
+      crop: l.crop,
+      project: frame,
+    });
+    const d = layerGeometry.drawImageArgs(placement, frame, canvas);
+    if (!d) continue;
+    // drawImage measures its source rectangle in the element's own intrinsic
+    // size, which need not be the coded size the crop was set against. So the
+    // rectangle is carried across as a fraction, exactly as paintCropFrame
+    // does, and for the same reason the coded numbers are the ones stored:
+    // they are what ffmpeg will crop with. Both are equal for square pixels,
+    // where kx and ky come out at 1 and nothing is scaled at all.
+    const kx = entry.width / source.width;
+    const ky = entry.height / source.height;
+    ctx.drawImage(entry.el, d.sx * kx, d.sy * ky, d.sw * kx, d.sh * ky,
+      d.dx, d.dy, d.dw, d.dh);
+  }
+}
+
+function drawComposite() {
+  if (compositeCanvas.hidden) return;
+  // The pool is parked at a trim point rather than at the playhead, so whatever
+  // it holds right now is not this canvas's picture. Step 10e.
+  if (paintingFrames) return;
+  const only = compositeScrub ? scrubTarget() : null;
+  // A scrub above 1080p seeks nothing, so there is nothing new to draw and the
+  // canvas keeps the last full composite. Clearing it to black instead would be
+  // less use than the stale picture, not more.
+  if (compositeScrub && !only) return;
+  paintLayers(compositeCtx, compositeCanvas, compositeAt, only);
+}
+
+// Standing still: every covering layer on its exact frame, everything else
+// paused. The tolerance is a thousandth of a second rather than the playing
+// one, because a still frame that is nearly right is simply the wrong frame.
+function parkDecoders() {
+  const only = compositeScrub ? scrubTarget() : null;
+  for (const l of layers) {
+    if (l.type !== 'video') continue;
+    const entry = decoders.get(l.id);
+    if (!entry) continue;
+    if (!entry.el.paused) entry.el.pause();
+    // Mid-scrub, only the top covering layer moves, and above 1080p not even
+    // that. Everything else is landed by endScrub when the mouse comes up.
+    if (compositeScrub && (!only || l.id !== only.id)) continue;
+    if (!entry.width || !l.enabled || !timelineModel.covers(l, compositeAt)) continue;
+    const want = timelineModel.sourceTimeFor(l, compositeAt);
+    if (Math.abs(entry.el.currentTime - want) < 0.001) continue;
+    entry.el.currentTime = want;
+  }
+}
+
+// Running: elements play at their own rate and are only dragged back when they
+// are genuinely lost, since every re-seek is a decode. A layer the playhead has
+// left, or one that has been switched off, stops rather than playing on unseen
+// behind the others.
+function followDecoders() {
+  for (const l of layers) {
+    if (l.type !== 'video') continue;
+    const entry = decoders.get(l.id);
+    if (!entry) continue;
+    const v = entry.el;
+    if (l.enabled && timelineModel.covers(l, compositeAt)) {
+      const want = timelineModel.sourceTimeFor(l, compositeAt);
+      if (Math.abs(v.currentTime - want) > COMPOSITE_SLACK) v.currentTime = want;
+      if (v.paused) v.play().catch(() => {});
+    } else if (!v.paused) {
+      v.pause();
+    }
+  }
+}
+
+/**
+ * The node every audio layer sums into.
+ *
+ * Connected straight to the output. Step 10d is what puts the spectrum's two
+ * analysers on the end of it, which is the whole of that step: the chain
+ * ensureGainChain builds for the three fixed preview elements is already a
+ * three input mix, and this is the same shape generalised to N.
+ */
+function ensureMixBus() {
+  if (mixBus) return mixBus;
+  const ctx = ensureAudioContext();
+  const tail = ensureAnalysers();
+  if (!ctx) return null;
+  mixBus = ctx.createGain();
+  // Step 10d. Into the analysers, not straight to the output. Without this the
+  // spectrum in advanced mode reads the three fixed elements, which are silent
+  // there, so it showed a flat line over a project that was plainly playing.
+  // Falls back to the output if there are no analysers, because being heard
+  // matters more than being drawn.
+  mixBus.connect(tail || ctx.destination);
+  return mixBus;
+}
+
+// A layer that is switched off goes silent rather than being torn down, so
+// ticking the box back on is immediate and costs no reload. Unticking is
+// immediate for the same reason: the gain is set here and nothing has to wait
+// for an element to react.
+function playerGain(layer) {
+  return layer.enabled ? Math.max(0, layer.volume) : 0;
+}
+
+function applyPlayerGain(layer) {
+  const entry = players.get(layer.id);
+  if (!entry) return;
+  if (entry.gain) entry.gain.gain.value = playerGain(layer);
+  // No Web Audio in this window, so the element's own volume is all there is
+  // and the slider simply stops getting louder past 100% rather than failing.
+  else entry.el.volume = Math.min(1, playerGain(layer));
+}
+
+// The same dance as releaseDecoder, and for the same reason: on Windows one
+// remaining handle on a file is enough to make a cache clear silently fail.
+// The source node cannot be detached from the element, since an element only
+// ever has one and it lasts as long as the element does, so what leaves the bus
+// is the gain node.
+function releasePlayer(entry) {
+  entry.el.pause();
+  entry.el.removeAttribute('src');
+  entry.el.load();
+  entry.el.remove();
+  if (entry.gain) entry.gain.disconnect();
+}
+
+function releasePlayers() {
+  for (const entry of players.values()) releasePlayer(entry);
+  players.clear();
+}
+
+function addPlayer(layer) {
+  const a = document.createElement('audio');
+  a.preload = 'auto';
+  const entry = { el: a, gain: null };
+  players.set(layer.id, entry);
+  compositePool.appendChild(a);
+  const bus = ensureMixBus();
+  if (bus) {
+    try {
+      const gain = gainCtx.createGain();
+      gainCtx.createMediaElementSource(a).connect(gain);
+      gain.connect(bus);
+      entry.gain = gain;
+    } catch {
+      // Routing an element is a one-way door and this one did not open, so the
+      // player stays on its own volume for the rest of its life.
+      entry.gain = null;
+    }
+  }
+  applyPlayerGain(layer);
+  window.lwclipper.fileUrl(layer.src).then((url) => {
+    // The row may have gone while the path was crossing to the main process.
+    if (players.get(layer.id) !== entry) return;
+    a.src = url;
+  });
+}
+
+/** One player per audio layer: made when a layer appears, let go when it goes. */
+function syncPlayers() {
+  const wanted = new Set();
+  for (const l of layers) {
+    if (l.type !== 'audio' || !l.src) continue;
+    wanted.add(l.id);
+    if (!players.has(l.id)) addPlayer(l);
+    // Applied here and not only where the controls are, so a layer that arrives
+    // already switched off or already quiet arrives that way.
+    applyPlayerGain(l);
+  }
+  for (const [id, entry] of players) {
+    if (wanted.has(id)) continue;
+    releasePlayer(entry);
+    players.delete(id);
+  }
+}
+
+// Standing still is silence, and nothing is seeked to get there. A scrub calls
+// this on every pointer move, and placing every audio layer on every move would
+// be a decode each for sound nobody can hear while the mouse is down. Where
+// they resume from is settled by followPlayers when the transport starts again.
+function parkPlayers() {
+  for (const entry of players.values()) {
+    if (!entry.el.paused) entry.el.pause();
+  }
+}
+
+/**
+ * Running: every enabled audio layer covering the playhead sounds, placed from
+ * the project's clock exactly the way the replacement track is placed from the
+ * video's, and against the same tolerance.
+ *
+ * force skips that tolerance, for the moments where the playhead jumps rather
+ * than advances and any leftover drift would be plainly audible.
+ */
+function followPlayers(force) {
+  for (const l of layers) {
+    if (l.type !== 'audio') continue;
+    const entry = players.get(l.id);
+    if (!entry) continue;
+    const a = entry.el;
+    if (l.enabled && timelineModel.covers(l, compositeAt)) {
+      const want = timelineModel.sourceTimeFor(l, compositeAt);
+      if (force || Math.abs(a.currentTime - want) > AUDIO_SYNC_SLACK) a.currentTime = want;
+      // A play() interrupted by the next seek rejects; that is not a failure.
+      if (a.paused) a.play().catch(() => {});
+    } else if (!a.paused) {
+      // Past its end, before its start, or switched off. Stopped rather than
+      // left running silently, so it is not still going when the playhead comes
+      // back to it.
+      a.pause();
+    }
+  }
+}
+
+/**
+ * The topmost video layer covering the playhead. layersAt hands them back to
+ * front so that drawing them in order works, which puts the top one last.
+ */
+function topCovering() {
+  const hits = timelineModel.layersAt(layers, compositeAt);
+  for (let i = hits.length - 1; i >= 0; i -= 1) {
+    if (hits[i].type === 'video') return hits[i];
+  }
+  return null;
+}
+
+/**
+ * The one layer a scrub may seek, or null for none at all.
+ *
+ * Step 0 measured seeking every layer at 0.8 to 1.2s at 1080p and 2.3 to 5.0s
+ * at 4K, which is not a scrub, it is a wait. The top covering layer alone
+ * settles in 120 to 200ms at 1080p, and that is a live scrub. At 4K even one
+ * layer is about 450ms, so there the answer is to seek nothing until the mouse
+ * comes up.
+ */
+function scrubTarget() {
+  const top = topCovering();
+  if (!top) return null;
+  const entry = decoders.get(top.id);
+  if (!entry || !entry.width) return null;
+  if (entry.width * entry.height > SCRUB_PIXELS) return null;
+  return top;
+}
+
+function beginScrub() {
+  if (compositeScrub) return;
+  // The scrub takes the playhead over, so playback stops rather than the two of
+  // them fighting over the same clock.
+  if (compositePlaying) pauseComposite();
+  compositeScrub = true;
+}
+
+function endScrub() {
+  if (!compositeScrub) return;
+  compositeScrub = false;
+  landDecoders();
+}
+
+/**
+ * Bring every covering layer onto the playhead's frame, and say so until they
+ * arrive. The picture fills in as each one lands, because every decoder redraws
+ * the composite on its own seeked.
+ */
+function landDecoders() {
+  landing.clear();
+  for (const l of timelineModel.layersAt(layers, compositeAt)) {
+    if (l.type !== 'video') continue;
+    const entry = decoders.get(l.id);
+    if (!entry || !entry.width) continue;
+    const want = timelineModel.sourceTimeFor(l, compositeAt);
+    if (Math.abs(entry.el.currentTime - want) < 0.001) continue;
+    landing.add(l.id);
+    entry.el.currentTime = want;
+  }
+  clearTimeout(landingTimer);
+  if (landing.size) {
+    // A decoder that never answers must not leave the message up for the rest
+    // of the session. Well past the 7.4s worst case Step 0 measured.
+    landingTimer = setTimeout(() => { landing.clear(); refreshHints(); }, 20000);
+  }
+  refreshHints();
+  drawComposite();
+}
+
+function catchingUp() {
+  return landing.size > 0;
+}
+
+// ---- Step 10e, the Start and End frames ----
+//
+// At a trim point the frame is a composite of whatever covers that moment, so
+// it cannot be a video element seeked into one file. It is built from the same
+// decoder pool the preview uses, which is only affordable because it happens on
+// release and never during a drag: seeking every covering layer is about a
+// second at five 1080p layers, and a spinner is what says so.
+//
+// While it runs the pool is parked somewhere other than the playhead, and every
+// decoder redraws the preview on its own seeked, so drawComposite has to be
+// held off for the duration or the preview would flash the trim point's
+// picture. That is the whole of what this flag is for.
+
+const startFrameCtx = startFrameCanvas.getContext('2d', { alpha: false });
+const endFrameCtx = endFrameCanvas.getContext('2d', { alpha: false });
+// The loop that owns the pool, and what it has been asked for: null, 'start',
+// 'end' or 'both'. One loop only, because two renders seeking the same decoders
+// would each be moving the other's.
+let framesRunning = false;
+let framesWanted = null;
+// Bumped by every marker move. A render that finishes on an older generation is
+// already out of date, so it leaves the spinner up for the one that follows it.
+let trimDragGen = 0;
+// A rebuild asked for while the transport was running, to be done when it stops.
+let trimFramesStale = false;
+
+/**
+ * Where the End frame is actually painted.
+ *
+ * The out point is exclusive: composer.js trims to it, so the last frame in the
+ * output is the one just before it, and at the very end of a project nothing
+ * covers that instant at all. Painting exactly there gives a black frame, which
+ * is what the first run of this showed. Backed off the same 0.05s the simple
+ * mode frame seeker backs off from its own limit, for the same reason.
+ */
+function trimFrameOutAt() {
+  return Math.max(slider.start, slider.end - 0.05);
+}
+
+/**
+ * The spinners, by name. Turning them on names which one, because a drag on the
+ * in marker leaves the End frame perfectly current and putting a spinner over
+ * it would be a lie. Turning them off clears both: whoever is clearing is the
+ * only render left, so there is nothing that could still be waiting.
+ */
+function trimFramesBusy(on, which) {
+  if (!on) {
+    startFrameBusy.hidden = true;
+    endFrameBusy.hidden = true;
+    return;
+  }
+  if (which !== 'end') startFrameBusy.hidden = false;
+  if (which !== 'start') endFrameBusy.hidden = false;
+}
+
+function sizeTrimFrameCanvases() {
+  const size = layerGeometry.previewCanvasSize(projectFrame());
+  if (!size) return;
+  for (const canvas of [startFrameCanvas, endFrameCanvas]) {
+    if (canvas.width === size.width && canvas.height === size.height) continue;
+    canvas.width = size.width;
+    canvas.height = size.height;
+  }
+}
+
+/**
+ * Park every covering layer on the frame for `at`, and resolve once they are
+ * all there. A decoder that never answers must not hold the spinner up for the
+ * rest of the session, so each wait has its own way out.
+ */
+function seekDecodersTo(at) {
+  const waits = [];
+  for (const l of timelineModel.layersAt(layers, at)) {
+    if (l.type !== 'video') continue;
+    const entry = decoders.get(l.id);
+    if (!entry || !entry.width) continue;
+    const want = timelineModel.sourceTimeFor(l, at);
+    // Assigning the position it already holds may produce no seeked event at
+    // all, which would leave this waiting for a reply that never comes.
+    if (Math.abs(entry.el.currentTime - want) < 0.001) continue;
+    waits.push(new Promise((resolve) => {
+      const done = () => {
+        entry.el.removeEventListener('seeked', done);
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(done, 10000);
+      entry.el.addEventListener('seeked', done);
+      entry.el.currentTime = want;
+    }));
+  }
+  return Promise.all(waits);
+}
+
+/**
+ * Rebuild both trim frames, then put the pool back where the playhead is.
+ *
+ * Deliberately not called during a drag. The user sets the spinner going on the
+ * press and this runs on the release, which is what makes reusing the live pool
+ * affordable at all.
+ */
+/** 'start' and 'end' together are 'both'; anything with 'both' stays 'both'. */
+function mergeWhich(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  return a === b ? a : 'both';
+}
+
+/**
+ * Ask for a rebuild. Never runs two at once.
+ *
+ * The pool is shared with the preview, so two renders seeking it at the same
+ * time would each be moving the other's decoders. Requests therefore coalesce
+ * into `framesWanted` and one loop drains it, which also means a drag that
+ * dwells repeatedly does not pile up a queue of stale renders: by the time the
+ * loop comes round again, `framesWanted` holds only the latest ask.
+ */
+function renderTrimFrames(which) {
+  if (!compositing()) return;
+  if (compositePlaying) {
+    // Seeking the pool out from under a running transport would stutter the
+    // picture and the sound. Remember, and do it when it stops.
+    trimFramesStale = true;
+    return;
+  }
+  trimFramesStale = false;
+  framesWanted = mergeWhich(framesWanted, which || 'both');
+  trimFramesBusy(true, framesWanted);
+  if (!framesRunning) runTrimFrames();
+}
+
+async function runTrimFrames() {
+  if (framesRunning) return;
+  framesRunning = true;
+  // Nothing may draw the preview from the pool while this has it parked
+  // somewhere other than the playhead.
+  paintingFrames = true;
+  try {
+    while (framesWanted) {
+      const which = framesWanted;
+      framesWanted = null;
+      // Which drag this pass belongs to. If the markers move while it is being
+      // built it is out of date before it lands, and the spinner has to stay up
+      // for the pass that will replace it rather than being cleared here.
+      const gen = trimDragGen;
+      sizeTrimFrameCanvases();
+      const jobs = [];
+      if (which !== 'end') jobs.push([startFrameCtx, startFrameCanvas, slider.start]);
+      if (which !== 'start') jobs.push([endFrameCtx, endFrameCanvas, trimFrameOutAt()]);
+      for (const [ctx, canvas, at] of jobs) {
+        await seekDecodersTo(at);
+        paintLayers(ctx, canvas, at, null);
+      }
+      // Back to the playhead before anything else can look at the pool.
+      await seekDecodersTo(compositeAt);
+      if (gen === trimDragGen && !framesWanted) trimFramesBusy(false);
+    }
+  } finally {
+    framesRunning = false;
+    paintingFrames = false;
+    drawComposite();
+  }
+}
+
+/** Move the project's playhead, which is what the timeline seeks. */
+function seekComposite(at) {
+  compositeAt = Math.min(Math.max(at, 0), compositeTotal());
+  parkDecoders();
+  // A seek is a jump, so the tolerance is skipped: the audio goes exactly where
+  // the playhead went rather than up to a quarter second behind it.
+  if (compositePlaying) followPlayers(true);
+  else parkPlayers();
+  drawComposite();
+}
+
+// The clock is the wall clock rather than any one element's. With N elements
+// there is no obvious one to follow, and the model's own arithmetic is then
+// what every element is held against, which is exactly what the encoder does
+// with the same numbers.
+function compositeTick() {
+  if (!compositePlaying) return;
+  const now = performance.now();
+  const total = compositeTotal();
+  compositeAt = Math.min(total, compositeAt + (now - compositeLast) / 1000);
+  compositeLast = now;
+  // With an audio output there is nothing to draw, so the video layers are left
+  // where they are rather than decoded for a canvas that is hidden.
+  if (compositing()) followDecoders();
+  followPlayers(false);
+  drawComposite();
+  updatePlayhead();
+  // Step 17. Play selection's stop point, which the media elements check in
+  // their timeupdate and the compositor had nowhere to check at all. Ahead of
+  // the end of the project, because it is always the earlier of the two.
+  if (playUntil !== null && compositeAt >= playUntil) {
+    pauseComposite();
+    playUntil = null;
+    return;
+  }
+  if (compositeAt >= total) {
+    pauseComposite();
+    return;
+  }
+  compositeRaf = requestAnimationFrame(compositeTick);
+}
+
+function playComposite() {
+  if (compositePlaying) return;
+  const total = compositeTotal();
+  if (!total) return;
+  // Back to the top when the playhead is already sitting at the end, which is
+  // where every run leaves it.
+  if (compositeAt >= total) compositeAt = 0;
+  // A context made before any click starts suspended, and this is a click.
+  if (gainCtx && gainCtx.state === 'suspended') gainCtx.resume();
+  compositePlaying = true;
+  compositeLast = performance.now();
+  updateCompositeUi();
+  // The same kick the media elements give it through their play listeners.
+  startSpectrum();
+  compositeRaf = requestAnimationFrame(compositeTick);
+}
+
+function pauseComposite() {
+  if (compositeRaf !== null) {
+    cancelAnimationFrame(compositeRaf);
+    compositeRaf = null;
+  }
+  compositePlaying = false;
+  // Stopped where they are rather than parked exactly. They are already within
+  // a couple of milliseconds of the playhead, and re-seeking all of them would
+  // cost a decode each to land on the frame that is already on screen.
+  for (const entry of decoders.values()) entry.el.pause();
+  parkPlayers();
+  updateCompositeUi();
+  // One last frame, so the bars fall back to the line instead of freezing
+  // mid-bounce, exactly as a paused media element leaves them.
+  drawSpectrum();
+  // A trim that moved while this was running is finally safe to build.
+  if (trimFramesStale) renderTrimFrames();
+}
+
+function updateCompositeUi() {
+  compositePlayBtn.textContent = compositePlaying ? t('Pause') : t('Play');
+  compositePlayBtn.disabled = busy || !compositeTotal();
+}
+
+/**
+ * Bring the preview frame in line with the mode it is in. Called wherever
+ * advanced editing or the output format changes, since either of them decides
+ * whether there is a composite to show at all.
+ */
+function applyCompositeMode() {
+  const advanced = timelineDriving();
+  const picture = compositing();
+  // The frame belongs to advanced editing whether or not there is a picture in
+  // it: the single media file is not what this mode is a preview of either way,
+  // so the video element goes and the spectrum or the canvas takes the space.
+  previewSection.dataset.composite = String(advanced);
+  compositeCanvas.hidden = !picture;
+  startFrameCanvas.hidden = !picture;
+  endFrameCanvas.hidden = !picture;
+  if (!picture) trimFramesBusy(false);
+  compositePlayBtn.hidden = !advanced;
+  if (!advanced) pauseComposite();
+  else if (!transport.paused) {
+    // The composite has the preview now, and until 10c the simple path could
+    // still be sounding behind a picture the stylesheet had already hidden.
+    transport.pause();
+    syncPreviewAudio();
+  }
+  if (!advanced) {
+    // Nothing is going to look at them, and each one is a handle on a file the
+    // user may be about to clear out of the cache.
+    releaseComposite();
+    return;
+  }
+  syncDecoders();
+  syncPlayers();
+  sizeCompositeCanvas();
+  parkDecoders();
+  parkPlayers();
+  drawComposite();
+  updateCompositeUi();
+  renderTrimFrames();
+}
+
+/**
+ * Every change to the document. The pool follows the layers, and the playhead
+ * cannot be left past the end of a project that has just got shorter.
+ *
+ * A live drag deliberately does not come through here: it writes `layers` and
+ * redraws the timeline itself, so the picture is one gesture stale rather than
+ * re-seeking every decoder on every pointer move.
+ */
+function syncComposite() {
+  if (!appSettings.advancedEditing) return;
+  syncDecoders();
+  syncPlayers();
+  compositeAt = Math.min(compositeAt, compositeTotal());
+  if (compositePlaying) {
+    followDecoders();
+    followPlayers(false);
+  } else {
+    parkDecoders();
+    parkPlayers();
+  }
+  drawComposite();
+  updateCompositeUi();
+  refreshHints();
+}
+
+compositePlayBtn.addEventListener('click', () => {
+  if (compositePlaying) {
+    pauseComposite();
+  } else {
+    // Plain play, so a stop point Play selection left behind is spent.
+    playUntil = null;
+    playComposite();
+  }
+});
+
 // ---- playhead ----
 
 // Where the preview has got to, shown on the waveform and on the trim slider.
@@ -1945,14 +4492,26 @@ for (const [field, isStart] of [[startTimeField, true], [endTimeField, false]]) 
 // elements rather than into the canvas, so following playback costs two style
 // writes a frame instead of a full waveform redraw.
 function updatePlayhead() {
+  // The timeline's own mapping, not the fraction the other two share: this one
+  // is zoomed and scrolled, so a second is not at a fixed fraction of the width.
+  // In advanced mode it follows the compositor's clock as well, because the
+  // project is the layers and there may be no media file loaded at all.
   const duration = media ? media.duration : 0;
+  const shown = Math.min(Math.max(transport.currentTime || 0, 0), duration);
+  const lineAt = timelineDriving() ? compositeAt : shown;
+  if (timelineDuration() && timelineLane.clientWidth) {
+    timelinePlayhead.style.left = (timelineView.timeToX(tlView, lineAt) - 0.5) + 'px';
+    timelinePlayhead.hidden = false;
+  } else {
+    timelinePlayhead.hidden = true;
+  }
+
   if (!duration) {
     audioPlayhead.hidden = true;
     trimPlayhead.hidden = true;
     return;
   }
-  const at = Math.min(Math.max(transport.currentTime || 0, 0), duration);
-  const frac = at / duration;
+  const frac = shown / duration;
 
   const audioM = sliderMetrics(audioCanvas.clientWidth);
   audioPlayhead.style.left = (audioM.inset + frac * audioM.usable - 0.5) + 'px';
@@ -1991,7 +4550,35 @@ for (const elem of [previewVideo, previewSound]) {
 // here as often as it is a text box.
 const KEEPS_SPACE = ['INPUT', 'TEXTAREA', 'SELECT'];
 
+/**
+ * Whether a popup is in the way, which every keyboard shortcut has to ask.
+ *
+ * One list rather than three. Step 13 added a third modal, and the way that
+ * goes wrong is one of the handlers not being told about it: Space would play
+ * the preview behind an open missing-files panel.
+ */
+function modalOpen() {
+  return !settingsModal.hidden || !cropModal.hidden || !choiceModal.hidden;
+}
+// The same list for Ctrl+Z, and separate on purpose: these two guards are
+// about different keys and there is no reason they should have to move
+// together if one of them ever needs a tag the other does not.
+const KEEPS_UNDO = ['INPUT', 'TEXTAREA', 'SELECT'];
+
 function togglePreview() {
+  // Advanced mode's transport is the compositor's. It belongs to no single
+  // element, and it runs whether or not a media file is loaded behind it.
+  if (timelineDriving()) {
+    if (compositePlaying) {
+      pauseComposite();
+    } else {
+      // The same reason the media branch below clears it: a stop point left
+      // over from Play selection would end this the instant it started.
+      playUntil = null;
+      playComposite();
+    }
+    return;
+  }
   if (!media) return;
   if (transport.paused) {
     // A stop point left over from Play selection would end this the instant it
@@ -2005,10 +4592,10 @@ function togglePreview() {
 
 document.addEventListener('keydown', (evt) => {
   if (evt.code !== 'Space' || evt.repeat) return;
-  if (!settingsModal.hidden || !cropModal.hidden) return;
+  if (modalOpen()) return;
   const focused = document.activeElement;
   if (focused && KEEPS_SPACE.includes(focused.tagName)) return;
-  if (!media) return;
+  if (!media && !timelineDriving()) return;
   // Without this a focused button would be pressed as well, and the preview's
   // own controls would toggle it a second time, cancelling this one out.
   evt.preventDefault();
@@ -2016,6 +4603,16 @@ document.addEventListener('keydown', (evt) => {
 });
 
 playSelectionBtn.addEventListener('click', () => {
+  // Step 17. This did nothing at all in advanced editing, because it opened on
+  // a guard for media that is null there and then drove transport, the preview
+  // element, which is not what plays a composite. The selection itself is the
+  // same slider on both sides of the switch; only what plays it differs.
+  if (timelineDriving()) {
+    playUntil = slider.end;
+    seekComposite(slider.start);
+    playComposite();
+    return;
+  }
   if (!media) return;
   playUntil = slider.end;
   transport.currentTime = slider.start;
@@ -2030,6 +4627,576 @@ for (const elem of [previewVideo, previewSound]) {
     }
   });
 }
+
+// ---- a modal that answers back ----
+//
+// Step 13. Both existing modals open and close through listeners and neither
+// returns a decision. This one blocks whatever asked until a button is pressed,
+// which is what the missing-files question and the unsaved-changes question
+// both need, and what the "a project is already open" question in the design
+// will need after them.
+//
+// A list of buttons rather than a boolean confirm, because the three-button
+// case is the one that cannot be faked and the two-button case is just a list
+// of two.
+
+let choiceSettle = null;
+let choiceCancelId = null;
+
+/**
+ * Put a question up and wait for the answer, which is the id of the button
+ * pressed.
+ *
+ * `cancel` names the id that Escape and a click on the backdrop mean. That is
+ * always the safe direction, matching the settings modal, and it is required
+ * rather than optional so that no question can be put up with no way out of it.
+ *
+ * Step 18 added three things. `message` may be a list of paragraphs, because
+ * Clear cache asks two questions at once and either of them can be absent.
+ * `checks` draws a ticked list, and `footer` may be a function of what is
+ * ticked, which is what lets a total under that list follow the boxes.
+ *
+ * The answer is still the id of the button pressed, in every case. Handing back
+ * a pair when `checks` is passed would give one function two shapes of answer
+ * depending on its arguments, and every existing caller would have to read
+ * around that, so the ticks arrive through `onCheck` instead and the caller
+ * keeps its own copy of them.
+ */
+function showChoice({ title, message, footer, entries, checks, onCheck, buttons, cancel }) {
+  // Nothing may stack: a second question while one is up would strand the
+  // first one's promise forever.
+  if (choiceSettle) settleChoice(choiceCancelId);
+
+  choiceTitle.textContent = title;
+  // A paragraph each rather than one string: the two warnings Clear cache can
+  // put up are separate points, and they run together as a single block.
+  const lines = Array.isArray(message) ? message.filter(Boolean) : (message ? [message] : []);
+  choiceMessage.replaceChildren();
+  choiceMessage.hidden = !lines.length;
+  for (const line of lines) {
+    const note = document.createElement('p');
+    note.className = 'modal__note';
+    note.textContent = line;
+    choiceMessage.appendChild(note);
+  }
+
+  // What is ticked lives here rather than in the caller, so the total under the
+  // list and the answer handed back cannot drift apart: both read this one set.
+  const ticked = new Set();
+  const drawFooter = () => {
+    const text = typeof footer === 'function' ? footer([...ticked]) : footer;
+    choiceFooter.textContent = text || '';
+    choiceFooter.hidden = !text;
+  };
+
+  choiceList.replaceChildren();
+  choiceList.hidden = !(entries && entries.length) && !(checks && checks.length);
+  for (const entry of entries || []) {
+    const row = document.createElement('div');
+    row.className = 'choice-row';
+    const path = document.createElement('div');
+    path.className = 'choice-row__path';
+    path.textContent = entry.path;
+    const badge = document.createElement('span');
+    badge.className = 'choice-row__badge';
+    badge.dataset.state = entry.state;
+    badge.textContent = entry.state === 'replaced' ? t('Replaced') : t('Missing');
+    row.appendChild(path);
+    row.appendChild(badge);
+    choiceList.appendChild(row);
+  }
+
+  // A label rather than a div, so the whole row is the hit area. These rows are
+  // read for their name and their size, and the box on its own is a small
+  // target for a decision about deleting files.
+  for (const row of checks || []) {
+    const line = document.createElement('label');
+    line.className = 'choice-row choice-row--check';
+    if (row.title) line.title = row.title;
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.className = 'choice-row__check';
+    box.checked = !!row.checked;
+    if (box.checked) ticked.add(row.id);
+    const name = document.createElement('div');
+    name.className = 'choice-row__name';
+    name.textContent = row.label;
+    line.appendChild(box);
+    line.appendChild(name);
+    if (row.badge) {
+      const badge = document.createElement('span');
+      badge.className = 'choice-row__badge';
+      badge.textContent = row.badge;
+      line.appendChild(badge);
+    }
+    const size = document.createElement('span');
+    size.className = 'choice-row__size';
+    size.textContent = row.note || '';
+    line.appendChild(size);
+    box.addEventListener('change', () => {
+      if (box.checked) ticked.add(row.id);
+      else ticked.delete(row.id);
+      drawFooter();
+      if (onCheck) onCheck([...ticked]);
+    });
+    choiceList.appendChild(line);
+  }
+  drawFooter();
+  // A row that starts ticked counts from the start rather than from the first
+  // click on it, which is the kind of thing that is only ever found late.
+  if (onCheck) onCheck([...ticked]);
+
+  choiceButtons.replaceChildren();
+  for (const button of buttons) {
+    // Not named el: that is the id lookup every other line in this file uses,
+    // and shadowing it inside a loop is how someone later loses an afternoon.
+    const node = document.createElement('button');
+    node.textContent = button.label;
+    if (button.primary) node.classList.add('btn--active');
+    // Step 18. Red for the answer that deletes something and green for the way
+    // out of it. The app has not had a coloured answer until now, because every
+    // other question in here is answered by buttons that are all reversible.
+    if (button.tone) node.dataset.tone = button.tone;
+    node.addEventListener('click', () => settleChoice(button.id));
+    choiceButtons.appendChild(node);
+  }
+
+  choiceCancelId = cancel;
+  choiceModal.hidden = false;
+  // So Enter and Escape both do something sensible without the pointer having
+  // to travel, and so the panel is where the focus is while it is up.
+  const primary = choiceButtons.querySelector('.btn--active') || choiceButtons.firstChild;
+  if (primary) primary.focus();
+  return new Promise((resolve) => { choiceSettle = resolve; });
+}
+
+function settleChoice(id) {
+  choiceModal.hidden = true;
+  const settle = choiceSettle;
+  choiceSettle = null;
+  choiceCancelId = null;
+  if (settle) settle(id);
+}
+
+// Backdrop only, matching the other two popups: a click on the panel itself
+// must not answer the question.
+choiceModal.addEventListener('click', (evt) => {
+  if (evt.target === choiceModal) settleChoice(choiceCancelId);
+});
+
+// ---- the project file ----
+//
+// Step 13. src/project.js decides what a .lwc says; the main process owns the
+// dialogs and the stat calls. What is left here is the document itself: where
+// it came from, whether it has changed since, and what to do about a file that
+// has moved.
+
+// Where the document was last saved or opened from, and what it was called.
+// Null means it has never been written, which is what makes the Save button
+// Save-or-Save-As without needing two of them.
+let projectPath = null;
+let projectTitle = '';
+
+// The document as the file has it. Everything since is unsaved work.
+let projectSaved = null;
+
+/**
+ * The document, as the file sees it.
+ *
+ * Not the same object undo takes: undo deliberately ignores the Enabled tick
+ * and the volume, and both of those are saved. The project frame is included
+ * because it detaches from its seed the moment it is set, so a project
+ * reopened after its first layer was deleted still renders at the size it was
+ * built at.
+ */
+function projectDocument() {
+  return {
+    layers,
+    // Not projectFrame(), which substitutes a fallback. A project with no
+    // picture in it yet has no frame, and writing a made-up one would give it
+    // one it never had.
+    project: compositeFrame || { width: 0, height: 0, fps: 0 },
+    trim: { start: slider.start, end: slider.end },
+  };
+}
+
+function projectDirty() {
+  if (!timelineDriving()) return false;
+  if (!projectSaved) return layers.length > 0;
+  return !projectFile.sameDocument(projectDocument(), projectSaved);
+}
+
+/** This is now what the file says, so there is nothing unsaved. */
+function markProjectSaved(document) {
+  projectSaved = projectFile.documentOf(document || projectDocument());
+  updateProjectUi();
+}
+
+function updateProjectUi() {
+  if (!timelineDriving()) {
+    projectNameLabel.hidden = true;
+    return;
+  }
+  const dirty = projectDirty();
+  const named = !!projectPath;
+  // Step 17. The button is the way in to a timeline with nothing in it yet.
+  // Once a project is open or anything is loaded it offers nothing the drop
+  // zone, Open File and Ctrl+O do not, and it is a way to lose work by
+  // accident. It comes back if the timeline is emptied again.
+  openProjectBtn.hidden = named || layers.length > 0;
+  projectNameLabel.hidden = !named && !layers.length;
+  projectNameLabel.textContent = named ? projectTitle : t('Unsaved project');
+  projectNameLabel.dataset.dirty = String(named && dirty);
+  projectNameLabel.title = projectPath || '';
+}
+
+/**
+ * Save, asking where only when it has to.
+ *
+ * Deliberately not blocked while a render is running, unlike almost everything
+ * else in the app. A render is minutes and this writes three kilobytes that
+ * touch nothing the render is using, so refusing would be an inconvenience
+ * bought for nothing.
+ */
+async function saveProject(alwaysAsk) {
+  if (!timelineDriving()) return false;
+  let target = projectPath;
+  if (!target || alwaysAsk) {
+    const picked = await window.lwclipper.projectSaveDialog(projectPath || null);
+    if (!picked || !picked.ok) return false;
+    target = picked.path;
+  }
+  // Read once, so what is written and what is recorded as written cannot be
+  // two different moments.
+  const document = projectDocument();
+  // Step 18. Who this project was before this save, so that a Save As renames
+  // the claim in the cache rather than leaving the old one behind. Null on a
+  // project that has never been saved, which has nothing to rename.
+  const result = await window.lwclipper.saveProject(target, document,
+    projectPath ? { path: projectPath, name: projectTitle } : null);
+  if (!result.ok) {
+    reportFailure(result);
+    return false;
+  }
+  projectPath = result.path;
+  projectTitle = result.name;
+  markProjectSaved(document);
+  setStatus('Project saved.');
+  return true;
+}
+
+/**
+ * Say why a project would not open.
+ *
+ * Written as a run of setStatus() calls rather than a code-to-string table,
+ * because scripts/check-locales.js reads the literal that follows t( or
+ * setStatus( and a string sitting in an object never reaches it. A key nothing
+ * can see is a key nobody is told is missing, and these four were reported as
+ * no longer used while being the only thing the window says when an open fails.
+ */
+function setProjectError(code) {
+  if (code === 'notJson' || code === 'notProject') {
+    setStatus('That file is not a LWClipper project.');
+  } else if (code === 'tooNew') {
+    setStatus('That project was saved by a newer version of LWClipper.');
+  } else {
+    setStatus('That project could not be read.');
+  }
+}
+
+async function openProjectFile() {
+  if (!timelineDriving() || busy) return;
+  // Whatever is open now would be replaced, so ask before the file dialog
+  // rather than after: being asked about unsaved work only once a new project
+  // has been chosen is the wrong order.
+  if (!(await confirmDiscard())) return;
+  const result = await window.lwclipper.projectOpenDialog();
+  if (!result || result.cancelled) return;
+  if (!result.ok) {
+    setProjectError(result.error);
+    return;
+  }
+  await adoptProject(result);
+}
+
+/**
+ * Open a project whose path is already known: dropped on the window, or chosen
+ * from the Open File dialog rather than from Open Project.
+ *
+ * The guard runs after the file is named here and before it in openProjectFile
+ * above, which is not an inconsistency: there the dialog has still to happen and
+ * asking first is the only order that makes sense, here the file has already
+ * arrived and there is nothing left to ask first.
+ */
+async function openProjectPath(filePath) {
+  if (busy || !filePath) return;
+  // Advanced editing first, so the guard below is asked in the mode that has a
+  // project to lose. Asked in simple editing it always answers yes, because
+  // projectDirty() reports false there, and a timeline switched away from five
+  // minutes ago would go without a word.
+  //
+  // Switching it is not a liberty: a .lwc is the advanced editing document, so
+  // handing one to the app is asking for the mode it belongs to. It is a
+  // visible setting and one click to put back.
+  const wasSimple = !timelineDriving();
+  if (wasSimple) await setAdvancedEditing(true);
+  // Anything that ends without a project open puts the switch back, because
+  // nothing else about the window changed either.
+  if (!(await confirmDiscard())) {
+    if (wasSimple) await setAdvancedEditing(false);
+    return;
+  }
+  const result = await window.lwclipper.openProject(filePath);
+  if (!result || !result.ok) {
+    if (wasSimple) await setAdvancedEditing(false);
+    setProjectError(result && result.error);
+    return;
+  }
+  await adoptProject(result);
+}
+
+/**
+ * Put an opened project on screen.
+ *
+ * Every reference was resolved by the main process, so what arrives is the
+ * document plus one verdict per layer. Anything that is not where it was gets
+ * named before anything is decided, which is the whole point of the modal:
+ * Cancel has to be a real option and it cannot be if the tracks are already
+ * gone.
+ */
+async function adoptProject(result) {
+  const { layers: resolved, trouble } = projectFile.applyStatuses(result.doc, result.statuses);
+  if (trouble.length) {
+    const choice = await showChoice({
+      title: t('Unable to find source files'),
+      message: t('These files have moved or been deleted:'),
+      entries: trouble,
+      footer: t('You can continue opening the project, but the tracks using these files will be removed. Cancel instead to put the files back where they were, then open the project again.'),
+      buttons: [
+        { id: 'continue', label: t('Continue') },
+        { id: 'cancel', label: t('Cancel'), primary: true },
+      ],
+      cancel: 'cancel',
+    });
+    if (choice !== 'continue') return;
+  }
+
+  // Through the model, which is what says what a layer is. A file carries a
+  // ref block and may carry fields this version has never heard of; createLayer
+  // takes what it knows and clamps it.
+  const built = resolved.map((l) => timelineModel.createLayer(l));
+  const keep = trouble.length ? projectFile.pruneTrouble(built, trouble) : built;
+
+  const frame = result.doc.project;
+  compositeFrame = (frame.width > 1 && frame.height > 1)
+    ? {
+      width: frame.width,
+      height: frame.height,
+      // A project written before Step 15 carries no rate at all, and the rate
+      // the app rendered at then was the composer's own default.
+      fps: frame.fps > 0 ? frame.fps : COMPOSITE_FALLBACK.fps,
+    }
+    : null;
+  sizeCompositeCanvas();
+
+  setLayers(keep);
+  // After setLayers, the same ordering applyHistory needs: syncProjectTrim in
+  // there follows the project's new length and would move the very markers
+  // being restored.
+  const total = timelineModel.totalDuration(keep);
+  trimSpan = total;
+  if (total <= 0) slider.reset();
+  else slider.setRange(total, result.doc.trim.start, result.doc.trim.end);
+  setTrimEnabled(!busy && trimmable());
+  refreshSelection(null);
+  renderTrimFrames();
+  // Fitted to the opened project rather than left at the last one's zoom,
+  // which would be a view of a timeline that is no longer there.
+  tlFitted = true;
+  syncTimelineView();
+  drawTimeline();
+  updatePlayhead();
+
+  projectPath = result.path;
+  projectTitle = result.name;
+  // Opening replaces the document, so there is nothing behind it for Ctrl+Z to
+  // resurrect. The stack is session state and never goes in the file.
+  undoStack = projectHistory.create(projectState());
+
+  // The baseline is the project **as the file has it**, tracks in trouble
+  // included. So Continue having dropped them in memory reads as unsaved work,
+  // which is exactly what it is: the file still references them, and it is
+  // never rewritten by opening it. That is what keeps Continue a safe choice.
+  markProjectSaved({
+    layers: built,
+    project: compositeFrame || { width: 0, height: 0, fps: 0 },
+    trim: result.doc.trim,
+  });
+  // Two calls rather than one with a ternary in it, for the reason spelled out
+  // over setProjectError: the checker sees a literal and nothing else.
+  if (trouble.length) setStatus('Project opened without {n} track(s).', { n: trouble.length });
+  else setStatus('Project opened.');
+}
+
+/**
+ * Ask before throwing unsaved work away. True means carry on.
+ *
+ * Save is offered rather than only Discard and Cancel, because the answer to
+ * "you have unsaved changes" is usually "then save them" and making that a
+ * two-step is the kind of thing that loses work.
+ */
+async function confirmDiscard() {
+  if (!projectDirty()) return true;
+  const choice = await showChoice({
+    title: t('Unsaved changes'),
+    message: t('This project has changes that have not been saved.'),
+    buttons: [
+      { id: 'save', label: t('Save Project') },
+      { id: 'discard', label: t('Discard') },
+      { id: 'cancel', label: t('Cancel'), primary: true },
+    ],
+    cancel: 'cancel',
+  });
+  if (choice === 'save') return saveProject(false);
+  return choice === 'discard';
+}
+
+openProjectBtn.addEventListener('click', openProjectFile);
+
+// Ctrl+S saves, Ctrl+Shift+S saves somewhere else, Ctrl+O opens. Nothing in the
+// app used any of the three.
+document.addEventListener('keydown', (evt) => {
+  if (!evt.ctrlKey && !evt.metaKey) return;
+  const key = String(evt.key).toLowerCase();
+  if (key !== 's' && key !== 'o') return;
+  if (!timelineDriving() || modalOpen()) return;
+  evt.preventDefault();
+  if (key === 'o') openProjectFile();
+  else saveProject(evt.shiftKey);
+});
+
+// The window is held shut until this answers. Closing with unsaved work is the
+// second user of showChoice and the reason it was built as a pair.
+window.lwclipper.onClosing(async () => {
+  if (await confirmDiscard()) window.lwclipper.allowClose();
+});
+
+// ---- undo ----
+//
+// Step 12. src/history.js holds the stack, the no-op skip and the rule about
+// which fields undo owns. Everything here is the two halves it cannot do:
+// taking a snapshot at the right moment, and putting one back on screen.
+//
+// Advanced editing only. Every gesture on the list the user gave is a layer
+// operation or a trim marker on the timeline, and simple mode has neither a
+// layer list nor anything else undo would know how to restore.
+
+/**
+ * The document as undo sees it.
+ *
+ * The layer array itself, not a copy: src/timeline.js never mutates, so every
+ * layer in it is already frozen in practice and a snapshot cannot change under
+ * the stack. The trim markers ride along because moving them is on the list.
+ *
+ * Deliberately not in here: the playhead, the timeline zoom and scroll, and the
+ * selection. The first two the user ruled out by name, and all three are where
+ * the window is looking rather than what the document says. Restoring them
+ * would move the view out from under whoever pressed Ctrl+Z, and comparing them
+ * would turn a click on a row into an undo step of its own.
+ *
+ * The project's render rate is in here, because Step 16's dropdown is a gesture
+ * and a gesture the stack cannot see is a Ctrl+Z that skips it. The rest of the
+ * project frame is not. It arrives asynchronously from a decoder's metadata, so
+ * a snapshot taken before that landed holds no shape at all, and putting that
+ * back would unseed a project for pressing Ctrl+Z. The width and height have no
+ * control to change them in V2.0 and the resolution control in the design needs
+ * its own commit point when it is built; the rate is protected from the same
+ * trap by applyHistory, which treats a snapshot without one as saying nothing
+ * about it rather than as saying there is none.
+ */
+function projectState() {
+  return {
+    layers,
+    start: slider.start,
+    end: slider.end,
+    fps: compositeFrame ? compositeFrame.fps : 0,
+  };
+}
+
+// Named undoStack rather than history, which would shadow window.history in the
+// one global lexical scope every classic script here shares.
+//
+// Seeded here rather than lazily, and that matters: a commit records the state
+// the gesture produced, so without a present already standing behind it the
+// very first gesture of a session would have nothing to go back to.
+let undoStack = projectHistory.create(projectState());
+
+/**
+ * One gesture, one step. Called after the change has been made, because the
+ * stack holds where things are now and where they were, not an instruction.
+ *
+ * A gesture that changed nothing is dropped by the stack itself rather than by
+ * every caller having to check, which is what keeps Ctrl+Z from appearing to do
+ * nothing several times in a row.
+ */
+function commitHistory() {
+  if (!timelineDriving()) return;
+  undoStack = projectHistory.commit(undoStack, projectState());
+}
+
+/**
+ * Put a step on screen.
+ *
+ * The snapshot is not applied as it stands: restore() hands back the same
+ * document with every surviving layer keeping the Enabled tick and the volume
+ * it has right now, because those two are not undo's to move.
+ */
+function applyHistory(next) {
+  if (!next || next === undoStack) return;
+  const state = projectHistory.restore(next.present, layers);
+  if (!state) return;
+  undoStack = next;
+  // A snapshot from before the project had a shape says nothing about the rate
+  // rather than saying the rate is nothing, so it leaves the one in force
+  // alone. Set before setLayers, which asks what size the project renders at on
+  // its way through updateRenderResolution.
+  if (state.fps > 0 && compositeFrame) compositeFrame = { ...compositeFrame, fps: state.fps };
+  setLayers(state.layers);
+  // After setLayers and not before. syncProjectTrim in there follows a project
+  // that just got longer or shorter, and it would move the very markers being
+  // restored.
+  const total = timelineModel.totalDuration(state.layers);
+  trimSpan = total;
+  if (total <= 0) slider.reset();
+  else slider.setRange(total, state.start, state.end);
+  setTrimEnabled(!busy && trimmable());
+  refreshSelection(null);
+  // The markers moved after setLayers asked for its rebuild, so both frames are
+  // pictures of the wrong moments again.
+  renderTrimFrames();
+}
+
+// Ctrl+Z, Ctrl+Y, and Ctrl+Shift+Z, which is the other spelling of redo that
+// every editor also answers to.
+document.addEventListener('keydown', (evt) => {
+  if (!evt.ctrlKey && !evt.metaKey) return;
+  const key = String(evt.key).toLowerCase();
+  const redoing = key === 'y' || (key === 'z' && evt.shiftKey);
+  const undoing = key === 'z' && !evt.shiftKey;
+  if (!undoing && !redoing) return;
+  if (!timelineDriving() || busy) return;
+  // A popup is its own gesture with its own Cancel. Undoing the document out
+  // from under an open crop would leave it editing a rectangle on a layer that
+  // may no longer be there.
+  if (modalOpen()) return;
+  // The URL box and the time and offset fields keep their own native undo.
+  // Taking Ctrl+Z off a text box is how someone loses a paste.
+  const focused = document.activeElement;
+  if (focused && KEEPS_UNDO.includes(focused.tagName)) return;
+  if (focused && focused.isContentEditable) return;
+  evt.preventDefault();
+  applyHistory(redoing ? projectHistory.redo(undoStack) : projectHistory.undo(undoStack));
+});
 
 // ---- crop ----
 
@@ -2078,6 +5245,15 @@ const CROP_PRESETS = [
 // Read from the markup for the same reason as HINT_IDLE and IDLE_STATUS.
 const CROP_HINT_IDLE = cropHint.textContent;
 
+// Step 11. Which layer the popup is pointed at, for as long as it is open.
+// Held rather than re-read from the selection on every call, so that a row
+// selected behind an open popup cannot move the crop onto it halfway through.
+let cropLayerId = null;
+// The zoom and pan each layer's crop was accepted at, keyed by layer id. Out of
+// the model on purpose: it is where the popup was looking from, not part of the
+// document, and the project file has no business carrying it.
+const cropViews = new Map();
+
 let cropRect = null;          // what a save will cut, in source pixels; null is the whole frame
 let cropDraft = null;         // the rectangle the popup is editing
 let cropScale = 1;            // display pixels per source pixel inside the popup
@@ -2098,10 +5274,87 @@ let cropActivePreset = null;
 const evenDown = (v) => Math.floor(v / 2) * 2;
 const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
 
+/**
+ * The frame a layer's crop is measured in: the probe's coded dimensions when
+ * the file was probed, the decoder's intrinsic size when it was not.
+ *
+ * The probe wins for the same reason it does in simple mode, and it has to be
+ * the same number here, in the filmstrip and in the encoder, or one crop would
+ * mean three different rectangles.
+ */
+function layerSource(layer) {
+  if (!layer) return null;
+  if (layer.sourceWidth > 0 && layer.sourceHeight > 0) {
+    return { width: layer.sourceWidth, height: layer.sourceHeight };
+  }
+  const entry = decoders.get(layer.id);
+  if (entry && entry.width > 0 && entry.height > 0) {
+    return { width: entry.width, height: entry.height };
+  }
+  return null;
+}
+
+/**
+ * The layer the popup works on: whatever it was opened for while it is open,
+ * and the selected video layer otherwise. Null in simple mode, where the
+ * subject is the single media file and there is nothing to choose.
+ */
+function cropTargetLayer() {
+  if (!timelineDriving()) return null;
+  if (cropLayerId) return timelineModel.layerById(layers, cropLayerId);
+  const l = selectedLayerId ? timelineModel.layerById(layers, selectedLayerId) : null;
+  return l && l.type === 'video' ? l : null;
+}
+
+/**
+ * The accepted crop, and where it is kept.
+ *
+ * Two storage places behind one pair of accessors: simple mode's single
+ * rectangle, and the subject layer's own. Everything between here and the
+ * popup's grips is written against "a rectangle in a source frame" and does not
+ * need to know which of the two it is editing.
+ */
+function currentCrop() {
+  if (timelineDriving()) {
+    const l = cropTargetLayer();
+    return l ? l.crop : null;
+  }
+  return cropRect;
+}
+
+function setCurrentCrop(rect, view) {
+  if (timelineDriving()) {
+    if (!cropLayerId) return;
+    if (view) cropViews.set(cropLayerId, view);
+    else cropViews.delete(cropLayerId);
+    // Through setLayers, because a crop changes the picture: the preview and
+    // both trim frames are composited through placeLayer and are now pictures
+    // of the wrong rectangle.
+    setLayers(timelineModel.setLayer(layers, cropLayerId, { crop: rect }));
+    return;
+  }
+  cropRect = rect;
+  cropView = view || null;
+}
+
+function currentCropView() {
+  if (!timelineDriving()) return cropView;
+  const l = cropTargetLayer();
+  return l ? (cropViews.get(l.id) || null) : null;
+}
+
 // ffprobe's numbers are the coded dimensions ffmpeg's crop filter works in, so
 // they win. The element's own are the fallback for anything that reached the
 // app without a usable probe behind it.
 function sourceSize() {
+  // Advanced editing crops one layer, so the frame to crop out of is that
+  // layer's. Same shape, same units, and everything downstream is unchanged.
+  if (timelineDriving()) {
+    const source = layerSource(cropTargetLayer());
+    if (!source) return null;
+    if (source.width < CROP_MIN || source.height < CROP_MIN) return null;
+    return { w: evenDown(source.width), h: evenDown(source.height) };
+  }
   const w = Math.floor((media && media.width) || previewVideo.videoWidth || 0);
   const h = Math.floor((media && media.height) || previewVideo.videoHeight || 0);
   if (w < CROP_MIN || h < CROP_MIN) return null;
@@ -2109,6 +5362,7 @@ function sourceSize() {
 }
 
 function canCrop() {
+  if (timelineDriving()) return !!sourceSize();
   return !!(media && !media.isAudio && sourceSize());
 }
 
@@ -2154,10 +5408,14 @@ const CROP_OVERLAYS = [
 // from the picture every time rather than cached, since the frames shrink and
 // grow with the window.
 function updateCropOverlays() {
-  const size = sourceSize();
+  // Nothing to outline in advanced editing. All three frames there are drawn
+  // through placeLayer, so the crop is already composited into the picture and
+  // a box saying what will be kept would be drawn around a picture that is
+  // nothing but the kept part.
+  const size = (!timelineDriving() && cropRect) ? sourceSize() : null;
   for (const [stageOf, boxOf] of CROP_OVERLAYS) {
     const box = boxOf();
-    const pic = (cropRect && size) ? pictureBox(stageOf(), size) : null;
+    const pic = size ? pictureBox(stageOf(), size) : null;
     if (!pic) {
       box.hidden = true;
       continue;
@@ -2179,6 +5437,18 @@ function updateCropOverlays() {
  * Nothing to say when the output has no picture in it.
  */
 function updateRenderResolution() {
+  if (timelineDriving()) {
+    // The project frame, which is what every layer is fitted into and what the
+    // encoder writes. A per-layer crop deliberately does not change it: it
+    // changes what that layer shows, not what size the output is.
+    const showing = layers.length > 0 && !outputIsAudio();
+    renderResolution.hidden = !showing;
+    if (!showing) return;
+    const frame = projectFrame();
+    renderResolution.textContent = t('Render Resolution: {w} x {h}',
+      { w: frame.width, h: frame.height });
+    return;
+  }
   const size = sourceSize();
   const showing = !!media && !outputIsAudio() && !!size;
   renderResolution.hidden = !showing;
@@ -2231,7 +5501,14 @@ function updateCropBtn() {
   // No picture in the output, nothing to crop out of it.
   cropBtn.hidden = outputIsAudio();
   cropBtn.disabled = busy || !canCrop();
-  cropBtn.classList.toggle('btn--active', cropRect !== null);
+  cropBtn.classList.toggle('btn--active', currentCrop() !== null);
+  // In advanced editing one button stands for however many video layers there
+  // are, so it says which one it will open on rather than leaving that to be
+  // guessed from which row happens to look selected.
+  const target = cropTargetLayer();
+  cropBtn.title = target
+    ? t('Crop {name}', { name: layerLabel(target.type, layerOrdinal(target)) })
+    : '';
 }
 
 function sizeCropStage(size) {
@@ -2539,6 +5816,48 @@ for (const [key, arrowOf, dx, dy] of CROP_ARROWS) {
   });
 }
 
+/**
+ * Which element the popup copies its picture out of.
+ *
+ * Advanced editing has no single preview to take it from: the picture on screen
+ * is a composite of every covering layer, and cropping one of them against all
+ * of them would be cropping the wrong thing. So it reads that layer's own
+ * decoder, which is already open on the file and already parked on a frame.
+ */
+function cropFrameSource() {
+  const layer = cropTargetLayer();
+  if (layer) {
+    const entry = decoders.get(layer.id);
+    return entry && entry.el.readyState >= 2 ? entry.el : null;
+  }
+  // HAVE_CURRENT_DATA is the point at which there is a frame to copy at all.
+  // Below it the start frame is the next best thing: it preloads and is already
+  // parked on the cut, where the preview may not have decoded anything yet.
+  if (previewVideo.readyState >= 2) return previewVideo;
+  return startFrameVideo.readyState >= 2 ? startFrameVideo : null;
+}
+
+/**
+ * Give the layer being cropped a frame worth cropping against.
+ *
+ * Its decoder is parked on the playhead whenever the layer covers it, which is
+ * the picture the user is looking at and the right one. When the playhead is
+ * somewhere else the decoder is wherever it last landed, so it is sent to the
+ * layer's own first frame instead. Nothing on screen moves: a layer the
+ * playhead has left is not in the composite either way.
+ */
+function seedCropFrame(layer) {
+  const entry = decoders.get(layer.id);
+  if (!entry) return;
+  if (layer.enabled && timelineModel.covers(layer, compositeAt)) return;
+  const onSeeked = () => {
+    entry.el.removeEventListener('seeked', onSeeked);
+    if (!cropModal.hidden) paintCropFrame();
+  };
+  entry.el.addEventListener('seeked', onSeeked);
+  entry.el.currentTime = layer.sourceIn;
+}
+
 // Whatever the preview is showing, painted once into the canvas. A canvas
 // rather than a second <video>: it holds no file open, and it cannot drift off
 // the position the preview is parked at while the popup is being used.
@@ -2555,11 +5874,7 @@ function paintCropFrame() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = '#121214';
   ctx.fillRect(0, 0, cssW, cssH);
-  // HAVE_CURRENT_DATA is the point at which there is a frame to copy at all.
-  // Below it the start frame is the next best thing: it preloads and is already
-  // parked on the cut, where the preview may not have decoded anything yet.
-  const src = previewVideo.readyState >= 2 ? previewVideo
-    : (startFrameVideo.readyState >= 2 ? startFrameVideo : null);
+  const src = cropFrameSource();
   // Nothing is ever read back out of this canvas, only shown, so the file://
   // source tainting it costs nothing.
   if (!src) return;
@@ -2601,6 +5916,13 @@ function markActivePreset() {
 }
 
 function updateCropNote() {
+  // Advanced editing composites, which is an encode however it is asked for:
+  // there is no stream copy here for a crop to be ruling out, so there is
+  // nothing to warn about.
+  if (timelineDriving()) {
+    cropEncodeNote.hidden = true;
+    return;
+  }
   const size = sourceSize();
   cropEncodeNote.hidden = accurateToggle.checked || !size || isFullFrame(cropDraft, size);
 }
@@ -2986,15 +6308,29 @@ for (const preset of CROP_PRESETS) {
   cropPresets.appendChild(btn);
 }
 
-function openCrop() {
+function openCrop(layerId) {
+  if (busy) return;
+  if (timelineDriving()) {
+    // Opened on a named row, or on whichever one is selected. Fixed here for
+    // the life of the popup, which is what cropTargetLayer then reads.
+    const target = (layerId && timelineModel.layerById(layers, layerId)) || cropTargetLayer();
+    if (!target || target.type !== 'video') return;
+    cropLayerId = target.id;
+  } else {
+    cropLayerId = null;
+  }
   const size = sourceSize();
-  if (busy || !size) return;
+  if (!size) {
+    cropLayerId = null;
+    return;
+  }
+  const accepted = currentCrop();
   // A rectangle left over from a frame of a different size would be nonsense,
   // so anything that does not fit the current one starts over.
-  const kept = cropRect
-    && cropRect.x + cropRect.width <= size.w
-    && cropRect.y + cropRect.height <= size.h;
-  cropDraft = kept ? { ...cropRect } : fullRect(size);
+  const kept = accepted
+    && accepted.x + accepted.width <= size.w
+    && accepted.y + accepted.height <= size.h;
+  cropDraft = kept ? { ...accepted } : fullRect(size);
   cropActivePreset = null;
   markActivePreset();
   // Back to the zoom and pan the crop was accepted at, so it opens on the view
@@ -3002,7 +6338,7 @@ function openCrop() {
   // carried in source pixels and drawn through that view, so it comes back the
   // size it was rather than the size it would be at 100%. With no crop to
   // return to there is nothing to restore, and it opens on the whole picture.
-  const view = kept ? cropView : null;
+  const view = kept ? currentCropView() : null;
   viewZoom = view ? clamp(view.zoom, CROP_ZOOM_MIN, CROP_ZOOM_MAX) : 1;
   viewPanX = view ? view.panX : size.w / 2;
   viewPanY = view ? view.panY : size.h / 2;
@@ -3012,6 +6348,10 @@ function openCrop() {
   // Whatever a previous session left part way towards a step is not this one's.
   zoomWheelResidue = 0;
   cropModal.hidden = false;
+  // Before the first paint, so a layer the playhead has left is not cropped
+  // against whatever frame its decoder was last asked for.
+  const target = cropTargetLayer();
+  if (target) seedCropFrame(target);
   sizeCropStage(size);
   paintCropFrame();
   placeCropDraft();
@@ -3023,20 +6363,25 @@ function openCrop() {
 function closeCrop() {
   cropModal.hidden = true;
   cropDraft = null;
+  // Back to following the selection. Cleared after the modal is hidden and
+  // before anything redraws, so nothing reads it as still open on a layer.
+  cropLayerId = null;
   setCropHint(false);
   updateCropArrows();
 }
 
-cropBtn.addEventListener('click', openCrop);
+// Wrapped rather than passed: the click hands its event to the first argument,
+// which is where openCrop now takes a layer id.
+cropBtn.addEventListener('click', () => openCrop());
 cropCancelBtn.addEventListener('click', closeCrop);
 
 // Takes the crop off outright, whatever is in the popup: the whole picture is
 // saved again and the boxes come off the three frames. The same thing Original
 // then Accept does, without having to know that is what Original means.
 cropRemoveBtn.addEventListener('click', () => {
-  cropRect = null;
   // Nothing left to come back to, so the next opening starts over.
-  cropView = null;
+  setCurrentCrop(null, null);
+  commitHistory();
   closeCrop();
   updateCropOverlays();
   updateCropBtn();
@@ -3046,10 +6391,13 @@ cropAcceptBtn.addEventListener('click', () => {
   const size = sourceSize();
   // The whole frame is not a crop: storing it would cost a re-encode and show a
   // box around the entire picture, for nothing.
-  cropRect = (size && cropDraft && !isFullFrame(cropDraft, size)) ? { ...cropDraft } : null;
+  const rect = (size && cropDraft && !isFullFrame(cropDraft, size)) ? { ...cropDraft } : null;
   // Where the popup was looking from when the crop was settled on. Only worth
   // keeping alongside a crop: without one it would open zoomed into nothing.
-  cropView = cropRect ? { zoom: viewZoom, panX: viewPanX, panY: viewPanY } : null;
+  // One step for the whole popup: opening it on one side and accepting it on
+  // the other, with nothing in between. The user set that boundary.
+  setCurrentCrop(rect, rect ? { zoom: viewZoom, panX: viewPanX, panY: viewPanY } : null);
+  commitHistory();
   closeCrop();
   updateCropOverlays();
   updateCropBtn();
@@ -3159,8 +6507,61 @@ async function saveClipTo(destination) {
   });
 }
 
+/**
+ * What to call the exported file before anyone has said.
+ *
+ * The project's own name once it has one, because that is what the user already
+ * decided to call this arrangement. Before that, the top layer's name, which is
+ * the clip the export is mostly of. The main process sanitises whichever it
+ * gets and puts the extension on.
+ */
+function exportName() {
+  if (projectTitle) return projectTitle;
+  const first = layers.find((l) => l.name);
+  if (!first) return 'Project';
+  // A layer is usually named without one already, since describeMedia strips
+  // it. This is for the path fallback, so "clip.mp4" does not come back as
+  // "clip.mp4.mp4" once the dialog adds the extension.
+  return first.name.replace(/\.[A-Za-z0-9]{2,4}$/, '') || first.name;
+}
+
+/**
+ * Step 15. The timeline rendered to one file.
+ *
+ * The composite twin of saveClipTo, and deliberately the same shape: one
+ * runJob, the same failure report, the same notice. What it hands over is the
+ * project rather than a media file and a pair of markers, because in advanced
+ * editing the markers are part of the project.
+ *
+ * The frame is projectFrame() rather than compositeFrame, so an audio-only
+ * project still arrives with a size. Nothing reads it there, and handing the
+ * encoder a 0x0 to ignore is a worse thing to rely on.
+ */
+async function exportProject() {
+  if (!savable()) return;
+  const destination = await window.lwclipper.saveAsDialog(
+    exportName(), outputIsAudio(), outputFormat, true);
+  if (!destination) return;
+  await runJob(async () => {
+    const result = await window.lwclipper.compose(
+      layers, projectFrame(), { start: slider.start, end: slider.end },
+      destination, compressionPercent());
+    if (!result.ok) {
+      reportFailure(result);
+      return;
+    }
+    setStatus('Saved to {path}', { path: result.data });
+    showSaveNotice(result.data);
+  });
+}
+
 saveBtn.addEventListener('click', async () => {
-  if (busy || !media) return;
+  if (busy) return;
+  if (timelineDriving()) {
+    await exportProject();
+    return;
+  }
+  if (!media) return;
   const destination = await window.lwclipper.saveAsDialog(
     media.title, outputIsAudio(), outputFormat);
   if (!destination) return;
@@ -3168,7 +6569,15 @@ saveBtn.addEventListener('click', async () => {
 });
 
 quickSaveBtn.addEventListener('click', async () => {
-  if (busy || !media) return;
+  if (busy) return;
+  // The same button, and in advanced editing the instant one is the project
+  // rather than a render. Straight to saveProject, which is the same thing the
+  // header button and Ctrl+S do.
+  if (timelineDriving()) {
+    await saveProject(false);
+    return;
+  }
+  if (!media) return;
   await saveClipTo(await window.lwclipper.quickSaveTarget(
     media.title, outputIsAudio(), outputFormat));
 });
@@ -3203,12 +6612,26 @@ function resetApp() {
   selectedFormatBtn = null;
   formatRow.querySelectorAll('button').forEach((b) => b.remove());
   formatPlaceholder.hidden = false;
-  qualitySection.hidden = false;
+  qualityListWanted = true;
+  qualitiesPending = false;
+  updateMainFrame();
 
-  slider.reset();
-  startTimeField.value = fmtTime(0);
-  endTimeField.value = fmtTime(0);
-  setTrimEnabled(false);
+  // The trim belongs to whichever subject the slider is currently about. In
+  // simple editing that is the media file being cleared, so it goes with it. In
+  // advanced editing it is the project's own in and out points, and Clear is
+  // about the frame at the top of the window, not about the timeline: wiping
+  // them here silently threw away part of the project.
+  if (!timelineDriving()) {
+    slider.reset();
+    startTimeField.value = fmtTime(0);
+    endTimeField.value = fmtTime(0);
+  }
+  // Not setTrimEnabled(false). media has just been nulled, so in simple editing
+  // trimmable() is already false and this says exactly what it used to. In
+  // advanced editing there is still a project, and switching the save row off
+  // for it left Save Project and Export dead with no way back: the only thing
+  // still offering to save was the warning on the way out.
+  setTrimEnabled(!busy && trimmable());
 
   titleLabel.textContent = '';
   errorHint.hidden = true;
@@ -3292,6 +6715,8 @@ settingsModal.addEventListener('click', (e) => {
 
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
+  // The question first: it is the one that is blocking something.
+  if (!choiceModal.hidden) settleChoice(choiceCancelId);
   if (!settingsModal.hidden) closeSettings();
   // Escape discards, the same as Cancel: nothing is written to cropRect here.
   if (!cropModal.hidden) closeCrop();
@@ -3307,6 +6732,10 @@ loadCachedBtn.addEventListener('click', async () => {
   if (busy) return;
   const result = await window.lwclipper.loadLocalMedia();
   if (result.cancelled) return;
+  if (result.project) {
+    await openProjectPath(result.path);
+    return;
+  }
   if (!result.ok) {
     reportFailure(result);
     updateStatusScale();
@@ -3328,6 +6757,23 @@ bestCompressionToggle.addEventListener('change', async () => {
   })).settings;
   applyBestCompression();
   updateCompressionState();
+});
+
+/**
+ * Throw the advanced editing switch, from the tick box or from anything else.
+ *
+ * Pulled out of the listener because opening a project is the other thing that
+ * needs it: the box has to follow, not only the setting, or the settings panel
+ * shows the opposite of what the window is doing.
+ */
+async function setAdvancedEditing(on) {
+  appSettings = (await window.lwclipper.setSettings({ advancedEditing: on })).settings;
+  advancedEditingToggle.checked = !!appSettings.advancedEditing;
+  applyAdvancedEditing();
+}
+
+advancedEditingToggle.addEventListener('change', () => {
+  setAdvancedEditing(advancedEditingToggle.checked);
 });
 
 changeCacheBtn.addEventListener('click', async () => {
@@ -3353,16 +6799,107 @@ deleteAppFilesBtn.addEventListener('click', () => {
   window.lwclipper.deleteAppFiles();
 });
 
+/**
+ * Ask before clearing, when there is anything to ask about.
+ *
+ * Answers with the claim ids to give up, or null for cancelled. An empty list
+ * is a real answer rather than a refusal: it means take whatever nothing
+ * claims, which is every file in the folder when no project has claimed one.
+ *
+ * Two warnings and either can be absent. A cache with no claims, and nothing
+ * cached open, is the plain clear this button has always been, with no modal at
+ * all. One modal and not one per mode: claims are claims whichever mode is on,
+ * and a cache full of files held by projects is exactly as undeletable from
+ * simple editing as from advanced. Only the wording of the first line differs.
+ *
+ * What is open warns only when what is open is really in the cache, which is
+ * asked of the main process so that it is the same test the deletion makes. A
+ * warning that clearing deletes a file it cannot touch is worse than no warning
+ * at all, because the next one is believed less.
+ */
+async function confirmClear() {
+  const { claims, sizes } = await window.lwclipper.listClaims();
+  const open = await window.lwclipper.cachedNames(
+    timelineDriving() ? layers.map((l) => l.src) : [media && media.path]);
+  if (!claims.length && !open.length) return [];
+
+  const names = Object.keys(sizes);
+  const mb = (bytes) => (bytes / 1048576).toFixed(1);
+  // Through claim.js rather than by adding the rows up: a file two ticked
+  // projects share is counted in neither row, so the rows sum to less than the
+  // clear would free. This is the number the deletion will actually produce,
+  // because it is the deletion's own rule being asked.
+  const freedBy = (ids) => projectClaim.deletableFiles(claims, ids, names)
+    .reduce((total, f) => total + (sizes[f] || 0), 0);
+
+  // Two calls rather than one with a ternary in it, for the reason spelled out
+  // over setProjectError: the checker sees a literal after t( and nothing else.
+  const messages = [];
+  if (open.length && timelineDriving()) {
+    messages.push(t('Warning! You are currently working on {files}. Clearing the cache now removes them.', { files: open.join(', ') }));
+  } else if (open.length) {
+    messages.push(t('Warning! You are currently working on {name}. Clearing now without saving first deletes your clip.', { name: open[0] }));
+  }
+  if (claims.length) {
+    messages.push(t('Warning! You have cached project files that might be unfinished. Select the cached project files you want to be removed.'));
+  }
+
+  let ticked = [];
+  const choice = await showChoice({
+    title: t('Clear cache'),
+    message: messages,
+    checks: projectClaim.rowsFor(claims, sizes).map((row) => ({
+      id: row.id,
+      label: row.name,
+      // The path as the tooltip, because two projects can be called the same
+      // thing and the row is being asked to identify one of them.
+      title: row.path,
+      note: t('{mb} MB', { mb: mb(row.bytes) }),
+      // Listed and flagged rather than swept: a project moved to another drive
+      // would otherwise silently lose its protection.
+      badge: row.missing ? t('Missing') : '',
+    })),
+    onCheck: (ids) => { ticked = ids; },
+    footer: (ids) => t('Clearing now frees {mb} MB.', { mb: mb(freedBy(ids)) }),
+    buttons: [
+      { id: 'clear', label: t('Clear now'), tone: 'danger' },
+      // Primary, which is both the green the design asks for and where the
+      // focus lands, so Enter on a question about deleting files means Cancel.
+      { id: 'cancel', label: t('Cancel'), primary: true },
+    ],
+    cancel: 'cancel',
+  });
+  return choice === 'clear' ? ticked : null;
+}
+
 clearCacheBtn.addEventListener('click', async () => {
   if (busy) return;
+  // Step 18. Before anything is dropped or deleted: Cancel has to leave the
+  // preview holding exactly what it held, which it cannot do once the source
+  // has been let go of.
+  const ticked = await confirmClear();
+  if (!ticked) return;
   // Windows keeps a lock on whatever the preview holds open, and a locked file
   // silently survives the clear, so drop the source before deleting.
   dropPreviewSources();
+  releaseComposite();
   startFrame.clear();
   endFrame.clear();
-  const freedMb = await window.lwclipper.clearCache();
+  const freedMb = await window.lwclipper.clearCache(ticked);
+  syncComposite();
   media = null;
-  setTrimEnabled(false);
+  // The same fault Clear had, in the second of the two places that ended on a
+  // hard false. media has just been nulled, so simple editing is unaffected:
+  // trimmable() is false there and this says what it always said. Advanced
+  // editing still has a project, and switching the save row off for it left
+  // Export, Save Project on the row, the frame rate and the trim slider all
+  // dead with nothing to bring them back.
+  //
+  // Clearing the cache does not touch the timeline. It can delete files a
+  // project references, which is a real and separate problem, but the answer to
+  // that is the missing-files modal on the next open, not disabling the buttons
+  // that would let the work be saved first.
+  setTrimEnabled(!busy && trimmable());
   updateClearBtn();
   titleLabel.textContent = '';
   updateStatusScale();

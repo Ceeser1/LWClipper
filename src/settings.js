@@ -18,6 +18,13 @@ const DEFAULTS = {
   // Turn compression on at the quality-to-size sweet spot whenever a format is
   // chosen, rather than leaving it off.
   bestCompression: false,
+  // Swaps the Trim frame for the layer timeline.
+  //
+  // On while the timeline is being built, so a fresh profile opens straight
+  // into the thing under construction. It goes back to false before release:
+  // the simple window is what the app is for, and the timeline is the thing you
+  // go and ask for.
+  advancedEditing: true,
 };
 
 function settingsFile() {
