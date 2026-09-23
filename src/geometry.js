@@ -31,6 +31,13 @@ const layerGeometry = (() => {
   const PREVIEW_MAX_W = 854;
   const PREVIEW_MAX_H = 480;
 
+  // What a project frame is allowed to be. The floor is the same 2 that fitRect
+  // already refuses to work below. The ceiling is 8K, which is past anything
+  // this app will be handed and still small enough that one digit too many in a
+  // typed box cannot ask for a canvas the size of a hard disk.
+  const FRAME_MIN = 2;
+  const FRAME_MAX = 7680;
+
   function finite(v, fallback) {
     return Number.isFinite(Number(v)) ? Number(v) : fallback;
   }
@@ -86,6 +93,192 @@ const layerGeometry = (() => {
       width: outW,
       height: outH,
     };
+  }
+
+  /**
+   * A typed resolution turned into one an encoder will take, or null.
+   *
+   * Even, because H.264 refuses odd dimensions, and evenDown rather than
+   * rounding to the nearest even for the same reason sourceRect uses it: the
+   * number that comes out here is the number that gets used, and nothing
+   * downstream should have to adjust it again.
+   *
+   * Null for anything that is not a pair of numbers, which is what an emptied
+   * box hands over. A caller that gets null puts the project's own size back
+   * rather than guessing at what was meant.
+   */
+  function frameSize(width, height) {
+    // Not finite() above, which would take an emptied box: Number('') is 0, and
+    // 0 reads as a resolution rather than as nothing typed.
+    const num = (v) => {
+      if (v === null || v === undefined || String(v).trim() === '') return NaN;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : NaN;
+    };
+    const w = num(width);
+    const h = num(height);
+    if (!Number.isFinite(w) || !Number.isFinite(h)) return null;
+    const fit = (v) => evenDown(Math.min(FRAME_MAX, Math.max(FRAME_MIN, Math.round(v))));
+    return { width: fit(w), height: fit(h) };
+  }
+
+  /**
+   * A render rect carried from one project frame to another.
+   *
+   * The whole composition is treated as a picture of the old frame, and that
+   * picture is centred and fitted into the new one, which is fitRect's own
+   * arithmetic applied to a frame instead of to a source.
+   *
+   * Leaving the numbers where they are would be the natural implementation and
+   * it is wrong: a project taken from 1280x720 to 1920x1080 is a request for a
+   * bigger file, not for a different composition, and every placed layer would
+   * keep its pixel size and slide towards the top left corner.
+   *
+   * At an unchanged aspect, which is what asking for a bigger file means, this
+   * agrees exactly with recomputing the layer from null: a layer sitting on its
+   * own fit lands on the new fit. At a changed aspect the two part company, and
+   * that is the difference between a layer that was placed and one that was
+   * not. An unplaced layer has no arrangement to keep, so it refits; a placed
+   * one was put somewhere in relation to everything else in the frame, so the
+   * arrangement travels whole and gets letterboxed with it.
+   *
+   * A rect is allowed off the edge of the frame, so nothing is clamped here.
+   */
+  function rescaleRender(rect, from, to) {
+    if (!rect) return null;
+    const fromW = Math.max(0, finite(from && from.width, 0));
+    const fromH = Math.max(0, finite(from && from.height, 0));
+    const box = fitRect(fromW, fromH, to);
+    // No old frame to measure against, or no new one worth speaking of. The
+    // rect is handed back untouched rather than recentred on a guess.
+    if (!box || fromW < 1) return rect;
+    const s = box.width / fromW;
+    return {
+      x: Math.round(box.x + finite(rect.x, 0) * s),
+      y: Math.round(box.y + finite(rect.y, 0) * s),
+      width: Math.max(2, Math.round(finite(rect.width, 0) * s)),
+      height: Math.max(2, Math.round(finite(rect.height, 0) * s)),
+    };
+  }
+
+  /**
+   * A crop rectangle resized to a fixed shape, anchored, and held inside bounds.
+   *
+   * V2.1 step 21e-3, which is Shift and Ctrl held together on a bar or a corner:
+   * the drag keeps the shape the lit preset names, and the side that was not
+   * dragged follows the side that was.
+   *
+   * `hold` says what stays where on each axis. A corner pins the two edges of
+   * the corner opposite it, so the box grows away from a fixed point. A bar pins
+   * the edge opposite itself and the centre of the other axis, so the box grows
+   * about itself rather than sliding sideways as it changes shape.
+   *
+   *     'lo'  the near edge stays        'hi'  the far edge stays
+   *     'mid' the centre stays
+   *
+   * `want` is the width the drag is asking for. The height follows from the
+   * ratio, so one number drives both and there is no way for the two to
+   * disagree. Both come back even, because yuv420p has no odd frame, and the
+   * evening is what makes the shape approximate by up to a pixel rather than
+   * exact: a 16:9 box 482 wide is 270 tall and not 271.125.
+   *
+   * The limit is worked out rather than searched for. Each axis has a largest
+   * size its own anchor allows inside the bounds, and the width is held to the
+   * smaller of its own and what the height's limit permits through the ratio,
+   * so a box that runs into one edge stops keeping its shape at that edge
+   * instead of breaking it.
+   */
+  function ratioResize(start, ratio, hold, want, bounds, minSide) {
+    const r = finite(ratio, 0);
+    if (!start || !(r > 0)) return null;
+    const least = Math.max(2, evenDown(finite(minSide, 2)));
+    const x0 = finite(start.x, 0);
+    const y0 = finite(start.y, 0);
+    const w0 = Math.max(0, finite(start.width, 0));
+    const h0 = Math.max(0, finite(start.height, 0));
+    const minX = finite(bounds && bounds.minX, -Infinity);
+    const maxX = finite(bounds && bounds.maxX, Infinity);
+    const minY = finite(bounds && bounds.minY, -Infinity);
+    const maxY = finite(bounds && bounds.maxY, Infinity);
+
+    // How large each axis may be with its own anchor where it is.
+    const room = (lo, span, min, max, how) => {
+      if (how === 'lo') return max - lo;
+      if (how === 'hi') return lo + span - min;
+      const mid = lo + span / 2;
+      return 2 * Math.min(mid - min, max - mid);
+    };
+    const roomW = room(x0, w0, minX, maxX, hold.x);
+    const roomH = room(y0, h0, minY, maxY, hold.y);
+
+    const width = Math.max(least, evenDown(Math.min(
+      Math.max(least, finite(want, w0)), Math.max(least, roomW), Math.max(least, roomH) * r)));
+    const height = Math.max(least, evenDown(width / r));
+
+    const place = (lo, span, next, how) => {
+      if (how === 'lo') return lo;
+      if (how === 'hi') return lo + span - next;
+      return evenDown(lo + span / 2 - next / 2);
+    };
+    return {
+      x: place(x0, w0, width, hold.x),
+      y: place(y0, h0, height, hold.y),
+      width,
+      height,
+    };
+  }
+
+  /**
+   * How many fr units the two side columns of the preview get.
+   *
+   * V2.1 step 21c-3. The three frames are laid out as `side 1fr side`, one
+   * number for both edges, so the mirroring is the shape of the rule rather than
+   * two values that have to be kept agreeing. `span` is the room the columns
+   * divide, which is the grid's width less its gaps, since gaps are taken out
+   * before the fr units are worked out.
+   *
+   *     side = span * s / (2s + 1)      middle = span / (2s + 1)
+   *
+   * so the fraction wanted for a side of `want` pixels is just side over middle.
+   * At s = 1 that is three equal columns, which is what the stylesheet says
+   * before anything has been dragged.
+   *
+   * Null when there is nothing left for the middle column. A caller with no
+   * fraction to apply leaves the stylesheet's own three-way split alone, which
+   * is the right answer for a grid too narrow to divide.
+   */
+  function sideFraction(want, span, sideMin, middleMin) {
+    const room = Math.max(0, finite(span, 0));
+    const floor = Math.max(0, finite(sideMin, 0));
+    const middle = Math.max(0, finite(middleMin, 0));
+    // The widest a side may be is what leaves the middle its own floor. The max
+    // keeps the two floors from crossing on a grid too narrow for both, and the
+    // side wins that, because the middle is the one that can usefully be small:
+    // it is a picture, and the sides are a picture plus a fixed-width field.
+    const ceiling = Math.max(floor, (room - middle) / 2);
+    const side = Math.min(Math.max(finite(want, floor), floor), ceiling);
+    const left = room - 2 * side;
+    if (left <= 0) return null;
+    return side / left;
+  }
+
+  /**
+   * How tall to hold the timeline stack: the height the splitter was dragged to,
+   * kept inside what the two frames can actually give each other.
+   *
+   * The preview is the only section in the column that grows, so every pixel the
+   * stack takes comes out of it and `stack + preview` does not move. That sum is
+   * `room`, and it is why the whole clamp is one line of arithmetic rather than a
+   * walk down the layout.
+   *
+   * The outer max is the window being too short for both floors at once. The
+   * timeline wins it, because a preview of a hundred pixels is a small preview
+   * and a timeline of a hundred pixels has cut the audio row in half.
+   */
+  function splitHeight(wish, room, stackFloor, previewFloor) {
+    const floor = Math.max(0, finite(stackFloor, 0));
+    const ceiling = Math.max(floor, finite(room, 0) - Math.max(0, finite(previewFloor, 0)));
+    return Math.round(Math.min(Math.max(finite(wish, floor), floor), ceiling));
   }
 
   /**
@@ -194,7 +387,14 @@ const layerGeometry = (() => {
     PREVIEW_MAX_H,
     sourceRect,
     isWholeFrame,
+    FRAME_MIN,
+    FRAME_MAX,
     fitRect,
+    frameSize,
+    rescaleRender,
+    ratioResize,
+    sideFraction,
+    splitHeight,
     placeLayer,
     previewCanvasSize,
     drawImageArgs,

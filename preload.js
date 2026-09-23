@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('lwclipper', {
   chooseCacheFolder: () => ipcRenderer.invoke('dialog:chooseCacheFolder'),
   openAppFiles: () => ipcRenderer.invoke('shell:openAppFiles'),
   fitWindow: (delta) => ipcRenderer.invoke('window:fit', delta),
+  releaseWindowHeight: () => ipcRenderer.invoke('window:release'),
   deleteAppFiles: () => ipcRenderer.invoke('app:deleteAppFiles'),
   clearCache: (ticked) => ipcRenderer.invoke('tools:clearCache', ticked),
   listClaims: () => ipcRenderer.invoke('tools:claims'),
@@ -56,6 +57,14 @@ contextBridge.exposeInMainWorld('lwclipper', {
     ipcRenderer.on('app:closing', () => callback());
   },
   allowClose: () => ipcRenderer.invoke('app:allowClose'),
+  // Asked once at startup, because the events only fire on a change and the
+  // window can be launched maximized by the system.
+  windowMaximized: () => ipcRenderer.invoke('window:isMaximized'),
+  // Maximized or not. The window's own doing, so only main can say.
+  onWindowState: (callback) => {
+    ipcRenderer.removeAllListeners('window:state');
+    ipcRenderer.on('window:state', (_event, payload) => callback(payload));
+  },
   openCacheFolder: (reveal) => ipcRenderer.invoke('shell:openCacheFolder', reveal),
   openFile: (filePath) => ipcRenderer.invoke('shell:openFile', filePath),
   readClipboardText: () => ipcRenderer.invoke('clipboard:readText'),

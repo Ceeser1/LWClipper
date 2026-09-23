@@ -353,18 +353,37 @@ function volumeFactor(percent) {
 // valid encoding at all, which is why the crop UI steps in twos.
 const evenDown = (v) => Math.floor(v / 2) * 2;
 
+// How far out a frame may reach. The same ceiling the project frame uses in
+// geometry.js, and for the same reason: larger than anything this app will be
+// handed, small enough that one bad number over IPC cannot ask ffmpeg for a
+// canvas the size of a hard disk.
+const FRAME_MAX = 7680;
+
 /**
- * Turns the renderer's crop rectangle into ffmpeg's crop filter argument, or
- * null when there is nothing worth cutting. The rectangle carries the frame
- * size it was measured against, because a crop means nothing without one, and
- * everything here arrives over IPC, so it is clamped rather than trusted.
+ * Turns the renderer's crop rectangle into ffmpeg's video filter, or null when
+ * there is nothing worth doing. The rectangle carries the frame size it was
+ * measured against, because a crop means nothing without one, and everything
+ * here arrives over IPC, so it is held to limits rather than trusted.
+ *
+ * V2.1 step 21e. The rectangle is allowed to reach outside the source, which
+ * turns it from "which part of the picture to keep" into "what shape the output
+ * is, and where the picture sits in it". It splits in two: the part of the
+ * source the frame really covers, and the frame around it.
+ *
+ *     crop=take.w:take.h:take.x:take.y,pad=frame.w:frame.h:offset.x:offset.y
+ *
+ * Every number is even without being rounded again: the frame's edges are made
+ * even below, the source's are, and a max or a min of two even numbers is even.
+ *
+ * The new room is black. That is ffmpeg's own default and it is named anyway,
+ * because this is the one place the app decides what is in it, and in simple
+ * editing there is nothing under the one video for it to be instead.
  */
 function cropFilter(crop) {
   if (!crop) return null;
   const nums = [crop.x, crop.y, crop.width, crop.height, crop.sourceWidth, crop.sourceHeight]
     .map(Number);
   if (!nums.every(Number.isFinite)) return null;
-  let [x, y, w, h] = nums;
   const srcW = evenDown(nums[4]);
   const srcH = evenDown(nums[5]);
   if (srcW < 2 || srcH < 2) return null;
@@ -373,16 +392,31 @@ function cropFilter(crop) {
   // format, since a chroma plane has no sample to start from there. Doing the
   // same rounding here means the numbers in the argv are the numbers that get
   // cut, instead of something ffmpeg quietly adjusts afterwards.
-  x = Math.min(Math.max(0, evenDown(x)), srcW - 2);
-  y = Math.min(Math.max(0, evenDown(y)), srcH - 2);
-  w = Math.min(Math.max(2, evenDown(w)), srcW - x);
-  h = Math.min(Math.max(2, evenDown(h)), srcH - y);
+  const x = evenDown(nums[0]);
+  const y = evenDown(nums[1]);
+  const w = Math.min(FRAME_MAX, Math.max(2, evenDown(nums[2])));
+  const h = Math.min(FRAME_MAX, Math.max(2, evenDown(nums[3])));
+
+  // What of the source that frame actually lies over.
+  const takeX = Math.max(0, x);
+  const takeY = Math.max(0, y);
+  const takeW = Math.min(srcW, x + w) - takeX;
+  const takeH = Math.min(srcH, y + h) - takeY;
+  // Dragged clear of the picture altogether. A frame of nothing is not a save,
+  // and pad would be asked to place a zero-sized image inside it.
+  if (takeW < 2 || takeH < 2) return null;
 
   // The whole frame is not a crop. Saying so still costs a full re-encode,
   // because a filter cannot ride a stream copy, so it is worth ruling out.
-  if (x === 0 && y === 0 && w >= srcW && h >= srcH) return null;
+  // Exactly the source's size, not merely as large: a frame larger than the
+  // source is the new room, which is the one thing here that has to be said.
+  if (x === 0 && y === 0 && w === srcW && h === srcH) return null;
 
-  return `crop=${w}:${h}:${x}:${y}`;
+  // Inside the source and no further, which is every crop made before 21e.
+  if (takeW === w && takeH === h) return `crop=${w}:${h}:${takeX}:${takeY}`;
+
+  return `crop=${takeW}:${takeH}:${takeX}:${takeY}`
+    + `,pad=${w}:${h}:${takeX - x}:${takeY - y}:black`;
 }
 
 // Order matters only in that the open dialog and the supported-types popup

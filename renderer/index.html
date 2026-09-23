@@ -65,7 +65,24 @@
       <div class="hint-label">Disable video to save audio only</div>
       <!-- Centred on the section, which puts it over the middle cell's title,
            rather than being placed after the controls to its left. -->
-      <div id="renderResolution" class="render-resolution" hidden></div>
+      <div id="renderResolution" class="render-resolution" hidden>
+        <!-- Two readouts in one place, because they are two different facts.
+             Simple editing shows the source and its crop, which is what the
+             file already is and nothing can type into. Advanced editing shows
+             the project frame, which is a setting. The x between the boxes is
+             drawn by the stylesheet rather than written here: it is a separator
+             between two numbers, not a word, and a text node saying "x" would
+             go looking for a translation of it. -->
+        <span id="renderResolutionText"></span>
+        <span id="renderResolutionEdit" class="render-resolution__edit" hidden>
+          <span>Render Resolution:</span>
+          <input id="frameWidthBox" class="render-resolution__box" type="text"
+            inputmode="numeric" maxlength="4" />
+          <span class="render-resolution__x"></span>
+          <input id="frameHeightBox" class="render-resolution__box" type="text"
+            inputmode="numeric" maxlength="4" />
+        </span>
+      </div>
     </div>
     <div class="preview-grid">
       <div class="preview-cell">
@@ -91,6 +108,12 @@
           <span id="startTimeCaption" class="time-caption">Start</span>
           <input id="startTimeField" class="time-field" type="text" value="00:00:00.000" />
         </div>
+        <!-- Step 21c-3. Sits in the gap the grid already leaves between this
+             cell and the next, so showing it moves nothing. Inside the cell
+             rather than over the grid, which is what lets it follow the column
+             without anything having to place it. -->
+        <div id="sideSplitterLeft" class="preview-splitter preview-splitter--left"
+             role="separator" aria-orientation="vertical"></div>
       </div>
       <div class="preview-cell">
         <div class="section-title preview-cell__title" id="previewCellTitle">Preview</div>
@@ -147,6 +170,8 @@
           <span id="endTimeCaption" class="time-caption">End</span>
           <input id="endTimeField" class="time-field" type="text" value="00:00:00.000" />
         </div>
+        <div id="sideSplitterRight" class="preview-splitter preview-splitter--right"
+             role="separator" aria-orientation="vertical"></div>
       </div>
     </div>
   </section>
@@ -182,6 +207,12 @@
     </div>
     <div id="audioDropHint" class="drop-hint drop-hint--audio" hidden>Drop Audio File</div>
   </section>
+
+  <!-- Step 21c. Sits in the 10px the preview's own bottom margin already left
+       above the frame below it, which that margin gives up in advanced editing,
+       so showing the handle moves nothing on the screen. Simple editing has no
+       handle: its Trim frame is three fixed rows with nothing to trade. -->
+  <div id="editSplitter" class="splitter" role="separator" aria-orientation="horizontal"></div>
 
   <!-- The two editing frames and the one overlay they share. Simple editing
        shows Trim, advanced editing shows the timeline, and the save
@@ -432,10 +463,19 @@
   <div id="cropModal" class="modal" hidden>
     <div class="modal__panel modal__panel--crop" role="dialog" aria-modal="true" aria-labelledby="cropTitle">
       <div id="cropTitle" class="modal__title">Crop</div>
+      <!-- V2.1. Two rectangles, one popup: which part of the source to take,
+           and where that result goes in the output frame. Both belong to the
+           same layer and the same Accept, which is why they are tabs rather
+           than two popups. Hidden in simple editing, where there is no project
+           frame to place anything in. -->
+      <div id="cropTabs" class="crop-tabs" hidden>
+        <button id="cropTabFrame" class="crop-tab btn--active">Video Frame</button>
+        <button id="cropTabPlace" class="crop-tab">Render Position</button>
+      </div>
       <!-- The frame is a snapshot of whatever the preview is showing, painted
            into a canvas rather than a second <video>: it holds no file open and
            cannot drift off the position the preview is parked at. -->
-      <div class="crop-frame">
+      <div id="cropFramePanel" class="crop-frame">
         <!-- Shown on whichever side the zoomed picture runs past the frame, so
              it is clear there is more that way to pan to. -->
         <div id="cropArrowUp" class="crop-arrow crop-arrow--up" data-live="false"><span class="crop-arrow__glyph"></span></div>
@@ -462,9 +502,30 @@
         </div>
       </div>
       </div>
-      <div id="cropHint" class="hint-label crop-hint">Hold Shift to move bars mirrored, Ctrl on a corner to move it diagonally</div>
+      <!-- The second tab's stage is the project frame itself, at the project's
+           own aspect rather than a fixed 16:9: what is drawn in here is what the
+           file gets, composited by the same code the preview uses. -->
+      <div id="placePanel" class="place-panel" hidden>
+        <div id="placeStage" class="place-stage">
+          <canvas id="placeCanvas" class="place-canvas"></canvas>
+          <div id="placeBox" class="place-box"></div>
+        </div>
+      </div>
+      <div id="placeHint" class="hint-label crop-hint" hidden>Drag the picture to place it, and the scale to resize it</div>
+      <div id="cropHint" class="hint-label crop-hint">Hold Shift to move bars mirrored, Ctrl on a corner to move it diagonally, both to keep the shape</div>
       <div id="cropSize" class="crop-size"></div>
-      <div class="crop-zoom">
+      <div id="placeSize" class="crop-size" hidden></div>
+      <!-- The same row the crop zoom uses, so the two tabs put their one slider
+           in the same place. 100% is centre and fit, which is what the layer
+           gets with no position at all: below it the picture shrinks into the
+           frame, above it it overflows. -->
+      <div id="placeScaleRow" class="crop-zoom" hidden>
+        <span class="crop-zoom__caption">Scale:</span>
+        <input id="placeScaleSlider" class="crop-zoom__slider" type="range"
+               min="10" max="400" step="1" value="100" />
+        <span id="placeScaleValue" class="crop-zoom__value">100%</span>
+      </div>
+      <div id="cropZoomRow" class="crop-zoom">
         <span class="crop-zoom__caption">Zoom:</span>
         <input id="cropZoomSlider" class="crop-zoom__slider" type="range"
                min="100" max="400" step="1" value="100" />

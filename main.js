@@ -112,6 +112,21 @@ function createWindow() {
     if (height !== lastAutoHeight) autoHeight = false;
   });
 
+  // Step 21c-2. The split is shared differently when the window is maximized,
+  // and only the main process knows that it is. Both events fire after the
+  // window has already changed size, so the renderer may well have laid out for
+  // the new size before this arrives: what it does with it has to be written
+  // for either order.
+  const sayState = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send('window:state',
+      { maximized: mainWindow.isMaximized() || mainWindow.isFullScreen() });
+  };
+  mainWindow.on('maximize', sayState);
+  mainWindow.on('unmaximize', sayState);
+  mainWindow.on('enter-full-screen', sayState);
+  mainWindow.on('leave-full-screen', sayState);
+
   // Step 13. Closing with unsaved work asks first. Only the renderer knows
   // whether there is any, so the close is held, the question is sent across,
   // and closeAllowed is what comes back: set once and the next close goes
@@ -819,6 +834,18 @@ ipcMain.handle('dialog:openMedia', async () => {
   });
   if (result.canceled || !result.filePaths.length) return { ok: false, cancelled: true };
   return describeMedia(result.filePaths[0]);
+});
+
+ipcMain.handle('window:isMaximized', () =>
+  !!(mainWindow && !mainWindow.isDestroyed()
+    && (mainWindow.isMaximized() || mainWindow.isFullScreen())));
+
+// Step 21c. The splitter takes the height into the user's hands without
+// resizing the window, so the resize listener above cannot see it happen and
+// the renderer has to say so. Same switch, same one-way trip: the fit is off
+// for the rest of the run.
+ipcMain.handle('window:release', () => {
+  autoHeight = false;
 });
 
 /**

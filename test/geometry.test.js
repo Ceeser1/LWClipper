@@ -185,3 +185,299 @@ test('fitting a thumbnail is the same maths as fitting the output frame', () => 
   assert.equal(small.x, 0);
   assert.equal(small.y, 10);
 });
+
+// ---- V2.1, 21b: the project frame becomes editable ----
+
+test('a typed resolution is evened down and clamped into something encodable', () => {
+  assert.deepEqual(G.frameSize(1921, 1081), { width: 1920, height: 1080 });
+  // A box hands over a string, not a number.
+  assert.deepEqual(G.frameSize('1280', '720'), { width: 1280, height: 720 });
+  assert.deepEqual(G.frameSize(99999, 1), { width: G.FRAME_MAX, height: G.FRAME_MIN });
+  assert.deepEqual(G.frameSize(-40, 0), { width: G.FRAME_MIN, height: G.FRAME_MIN });
+});
+
+test('a resolution that was not typed at all is refused rather than read as zero', () => {
+  // The trap this exists for: Number('') is 0, so an emptied box would come
+  // through as a 2x2 project instead of as nothing to act on.
+  assert.equal(G.frameSize('', 720), null);
+  assert.equal(G.frameSize('   ', 720), null);
+  assert.equal(G.frameSize('1080p', 720), null);
+  assert.equal(G.frameSize(1280, undefined), null);
+  assert.equal(G.frameSize(NaN, 720), null);
+});
+
+test('asking for a bigger file is not asking for a different composition', () => {
+  // A quarter-size picture in picture at 1280x720, carried to 1080p. Every
+  // number multiplied by 1.5, which is what keeping the shot means.
+  const moved = G.rescaleRender({ x: 200, y: 120, width: 480, height: 270 }, SMALL, HD);
+  assert.deepEqual(moved, { x: 300, y: 180, width: 720, height: 405 });
+});
+
+test('a layer sitting on its own fit lands on the new fit when only the size changes', () => {
+  // The rule the transform has to agree with, or a placed layer and an
+  // unplaced one would drift apart for no reason the user can see.
+  const fit = G.fitRect(WIDE.width, WIDE.height, SMALL);
+  assert.deepEqual(G.rescaleRender(fit, SMALL, HD), G.fitRect(WIDE.width, WIDE.height, HD));
+});
+
+test('and within a pixel or two when the even-down lands differently', () => {
+  // TALL into SMALL is 404 wide after evenDown, and 404 * 1.5 is 606 where
+  // fitting the source straight into HD gives 608. Two roundings against one:
+  // the agreement above is exact only when the first one divides evenly.
+  const fit = G.fitRect(TALL.width, TALL.height, SMALL);
+  const moved = G.rescaleRender(fit, SMALL, HD);
+  const direct = G.fitRect(TALL.width, TALL.height, HD);
+  for (const key of ['x', 'y', 'width', 'height']) {
+    assert.ok(Math.abs(moved[key] - direct[key]) <= 2,
+      key + ': ' + moved[key] + ' against ' + direct[key]);
+  }
+});
+
+test('changing the aspect letterboxes the arrangement rather than stretching it', () => {
+  // 16:9 to 9:16. A layer that filled the old frame fills the letterbox of the
+  // old frame in the new one, which is the old frame fitted into the new.
+  const filled = G.rescaleRender({ x: 0, y: 0, width: 1280, height: 720 }, SMALL, TALL);
+  assert.deepEqual(filled, G.fitRect(SMALL.width, SMALL.height, TALL));
+  // And a layer centred in the old frame is still centred in the new one,
+  // still at the shape it was given rather than stretched to the new ratio.
+  const pip = G.rescaleRender({ x: 480, y: 270, width: 320, height: 180 }, SMALL, TALL);
+  assert.equal(pip.x + pip.width / 2, TALL.width / 2);
+  assert.equal(pip.y + pip.height / 2, TALL.height / 2);
+  assert.ok(Math.abs(pip.width / pip.height - 320 / 180) < 0.01, 'the shape survived');
+});
+
+test('a layer hanging off the edge is carried across still hanging off it', () => {
+  // Sliding a layer out of shot has to survive a resize, or the resize would
+  // quietly drag it back in.
+  const moved = G.rescaleRender({ x: -200, y: 0, width: 1280, height: 720 }, SMALL, HD);
+  assert.equal(moved.x, -300);
+  assert.equal(moved.width, 1920);
+});
+
+test('nothing to carry, and nothing to carry it from', () => {
+  assert.equal(G.rescaleRender(null, SMALL, HD), null);
+  // No old frame to measure against: handed back untouched rather than
+  // recentred on a guess about what it used to mean.
+  const rect = { x: 10, y: 10, width: 100, height: 100 };
+  assert.deepEqual(G.rescaleRender(rect, { width: 0, height: 0 }, HD), rect);
+  assert.deepEqual(G.rescaleRender(rect, SMALL, { width: 0, height: 0 }), rect);
+});
+
+// ---- splitHeight, V2.1 step 21c-1 ----
+//
+// The two floors are measured in the running app: 192px of stack is one video
+// track and one audio track once the empty row each kind carries is counted,
+// and the preview floor is whatever previewFit() says the flush height is at
+// the width the window happens to be. Here they are just numbers, which is the
+// point of the arithmetic living out of the window.
+
+test('a split the room can afford is the split that was asked for', () => {
+  assert.equal(G.splitHeight(300, 600, 192, 279), 300);
+  assert.equal(G.splitHeight(192, 600, 192, 279), 192);
+  // Exactly the largest that leaves the preview its floor.
+  assert.equal(G.splitHeight(321, 600, 192, 279), 321);
+});
+
+test('the preview keeps its floor however far the handle is dragged', () => {
+  // 600 of room, 279 of it spoken for: 321 is the most the stack can hold, and
+  // asking for 500 does not make the preview any smaller.
+  assert.equal(G.splitHeight(500, 600, 192, 279), 321);
+  assert.equal(G.splitHeight(5000, 600, 192, 279), 321);
+});
+
+test('and the timeline keeps its own, dragged the other way', () => {
+  assert.equal(G.splitHeight(100, 600, 192, 279), 192);
+  assert.equal(G.splitHeight(0, 600, 192, 279), 192);
+  assert.equal(G.splitHeight(-40, 600, 192, 279), 192);
+});
+
+test('a window too short for both floors gives the room to the timeline', () => {
+  // 400 of room against floors of 192 and 279. Something has to give, and a
+  // preview of 208 is a small preview where a timeline of 121 has cut the
+  // audio row in half.
+  assert.equal(G.splitHeight(300, 400, 192, 279), 192);
+  assert.equal(G.splitHeight(100, 400, 192, 279), 192);
+});
+
+test('the result is whole pixels, and rubbish reads as no wish at all', () => {
+  assert.equal(G.splitHeight(300.6, 600, 192, 279), 301);
+  // A wish that is not a number is the floor rather than zero, which would read
+  // as a deliberate drag to the top of the travel.
+  assert.equal(G.splitHeight(NaN, 600, 192, 279), 192);
+  assert.equal(G.splitHeight(undefined, 600, 192, 279), 192);
+  assert.equal(G.splitHeight(300, NaN, 192, 279), 192);
+});
+
+test('the clamp does not move a second time, which is what lets it re-run', () => {
+  // Applied on every window resize, so a wish that has already been clamped
+  // has to come back unchanged or the split would walk on its own.
+  const once = G.splitHeight(500, 600, 192, 279);
+  assert.equal(G.splitHeight(once, 600, 192, 279), once);
+  const low = G.splitHeight(20, 600, 192, 279);
+  assert.equal(G.splitHeight(low, 600, 192, 279), low);
+});
+
+// ---- ratioResize, V2.1 step 21e-3 ----
+//
+// Shift and Ctrl held together on a bar or a corner. The shape is whatever
+// preset is lit, or the box's own shape when none is, and what the drag asks
+// for is a width: the height follows, so the two cannot disagree.
+
+const CROP_BOUNDS = { minX: 0, maxX: 1280, minY: 0, maxY: 720 };
+const CROP_START = { x: 200, y: 100, width: 400, height: 300 };
+
+test('a corner holds the corner opposite it still', () => {
+  // Bottom right dragged: the top left is where it was, and 16:9 of 800 is 450.
+  assert.deepEqual(
+    G.ratioResize(CROP_START, 16 / 9, { x: 'lo', y: 'lo' }, 800, CROP_BOUNDS, 16),
+    { x: 200, y: 100, width: 800, height: 450 });
+});
+
+test('and the top left dragged keeps the bottom right where it was', () => {
+  const out = G.ratioResize(CROP_START, 16 / 9, { x: 'hi', y: 'hi' }, 800, CROP_BOUNDS, 16);
+  assert.equal(out.x + out.width, CROP_START.x + CROP_START.width);
+  assert.equal(out.y + out.height, CROP_START.y + CROP_START.height);
+  // 800 was more than the room to the top left corner of the frame allows, so
+  // it stopped at what does fit rather than walking outside.
+  assert.equal(out.x, 0);
+  assert.deepEqual(out, { x: 0, y: 64, width: 600, height: 336 });
+});
+
+test('a bar grows about the middle of the axis it is not on', () => {
+  // Otherwise changing the shape would slide the box up or down the frame,
+  // which is not what dragging its right edge asked for.
+  const out = G.ratioResize(CROP_START, 16 / 9, { x: 'lo', y: 'mid' }, 800, CROP_BOUNDS, 16);
+  assert.equal(out.x, CROP_START.x);
+  assert.equal(out.width, 800);
+  assert.equal(out.height, 450);
+  const centre = (r) => r.y + r.height / 2;
+  assert.ok(Math.abs(centre(out) - centre(CROP_START)) <= 1, 'still on the same line');
+});
+
+test('the axis that runs out first is what stops the other one', () => {
+  // The centre is pinned at 250 with the frame's top at 0, so the height can
+  // reach 500 and no more, and 500 of 16:9 is 888 across. The width's own room
+  // was 1080, which never gets a say.
+  const out = G.ratioResize(CROP_START, 16 / 9, { x: 'lo', y: 'mid' }, 5000, CROP_BOUNDS, 16);
+  assert.deepEqual(out, { x: 200, y: 0, width: 888, height: 498 });
+  assert.ok(out.y >= 0 && out.y + out.height <= 720, 'inside the frame');
+});
+
+test('a tall shape is held by the height and a wide one by the width', () => {
+  const tall = G.ratioResize(CROP_START, 9 / 16, { x: 'lo', y: 'lo' }, 5000, CROP_BOUNDS, 16);
+  assert.ok(tall.y + tall.height <= 720, 'the bottom of the frame stopped it');
+  assert.equal(tall.width, 348);
+  assert.equal(tall.height, 618);
+  const square = G.ratioResize(CROP_START, 1, { x: 'lo', y: 'mid' }, 600, CROP_BOUNDS, 16);
+  assert.equal(square.width, square.height);
+});
+
+test('both sides come back even, because there is no odd frame to encode', () => {
+  for (const want of [301, 302, 303, 477, 999]) {
+    const out = G.ratioResize(CROP_START, 16 / 9, { x: 'lo', y: 'lo' }, want, CROP_BOUNDS, 16);
+    assert.equal(out.width % 2, 0, 'width ' + out.width);
+    assert.equal(out.height % 2, 0, 'height ' + out.height);
+    assert.equal(out.x % 2, 0, 'x ' + out.x);
+    assert.equal(out.y % 2, 0, 'y ' + out.y);
+  }
+});
+
+test('the smallest box is the floor, whatever the drag asks for', () => {
+  const out = G.ratioResize(CROP_START, 16 / 9, { x: 'lo', y: 'lo' }, 0, CROP_BOUNDS, 16);
+  assert.ok(out.width >= 16 && out.height >= 16);
+  assert.deepEqual(G.ratioResize(CROP_START, 16 / 9, { x: 'lo', y: 'lo' }, -500, CROP_BOUNDS, 16),
+    out);
+});
+
+test('no shape to hold is no answer rather than a wrong one', () => {
+  assert.equal(G.ratioResize(CROP_START, 0, { x: 'lo', y: 'lo' }, 400, CROP_BOUNDS, 16), null);
+  assert.equal(G.ratioResize(CROP_START, NaN, { x: 'lo', y: 'lo' }, 400, CROP_BOUNDS, 16), null);
+  assert.equal(G.ratioResize(null, 16 / 9, { x: 'lo', y: 'lo' }, 400, CROP_BOUNDS, 16), null);
+});
+
+test('a frame that may reach outside the picture takes negative bounds', () => {
+  // 21e lets the crop leave the source, so minX and minY are not zero any more.
+  const out = G.ratioResize({ x: 0, y: 0, width: 1280, height: 720 }, 9 / 16,
+    { x: 'mid', y: 'mid' }, 1280, { minX: -1920, maxX: 3200, minY: -1080, maxY: 1800 }, 16);
+  assert.equal(out.width, 1280);
+  assert.equal(out.height, 2274);
+  // Centred on the picture it started from, which is what a 9:16 frame around a
+  // 16:9 clip has to be. Within a pixel, not exactly: y has to be even and half
+  // of 2274 is odd, so the two cannot both be had.
+  assert.equal(out.x, 0);
+  assert.ok(Math.abs(out.y + out.height / 2 - 360) <= 1,
+    'centred on ' + (out.y + out.height / 2));
+  // Math.abs because -778 % 2 is -0, and a negative y is ordinary now.
+  assert.equal(Math.abs(out.y % 2), 0);
+});
+
+// ---- sideFraction, V2.1 step 21c-3 ----
+//
+// The three preview columns are laid out as `side 1fr side`, so one number does
+// both edges. span is the grid's width less its two gaps, because gaps come out
+// before the fr units are worked out. The floors are measured in the running
+// app rather than written down: the side column holds a fixed-width time field
+// and comes to 130 in either language, and the middle holds three buttons and
+// comes to 186 in English and 270 in German.
+
+const SIDE_SPAN = 920;
+const SIDE_MIN = 130;
+const MIDDLE_MIN = 270;
+// What a fraction actually lays out as, which is what the assertions are about.
+const columns = (s, span = SIDE_SPAN) => ({
+  side: Math.round((span * s) / (2 * s + 1)),
+  middle: Math.round(span / (2 * s + 1)),
+});
+
+test('one fr each is three equal columns, which is where the grid starts', () => {
+  const at = columns(1);
+  assert.equal(at.side, 307);
+  assert.equal(at.middle, 307);
+  // And asking for exactly what it already is comes back as what it already is.
+  assert.equal(columns(G.sideFraction(307, SIDE_SPAN, SIDE_MIN, MIDDLE_MIN)).side, 307);
+});
+
+test('a side dragged narrower hands the whole of it to the middle', () => {
+  const at = columns(G.sideFraction(200, SIDE_SPAN, SIDE_MIN, MIDDLE_MIN));
+  assert.equal(at.side, 200);
+  // 920 less two sides of 200. Both edges moved, because there is one number.
+  assert.equal(at.middle, 520);
+});
+
+test('the sides stop where their own contents do', () => {
+  for (const want of [130, 60, 0, -200]) {
+    const at = columns(G.sideFraction(want, SIDE_SPAN, SIDE_MIN, MIDDLE_MIN));
+    assert.equal(at.side, 130, 'asked for ' + want);
+  }
+});
+
+test('and they stop again where the middle would lose its own', () => {
+  const at = columns(G.sideFraction(400, SIDE_SPAN, SIDE_MIN, MIDDLE_MIN));
+  assert.equal(at.middle, MIDDLE_MIN);
+  assert.equal(at.side, 325);
+  // 325 is the widest a side can be: two of them plus the middle's floor is
+  // exactly the span.
+  assert.equal(2 * at.side + at.middle, SIDE_SPAN);
+});
+
+test('the clamp does not move a second time, which is what lets it re-run', () => {
+  const once = G.sideFraction(400, SIDE_SPAN, SIDE_MIN, MIDDLE_MIN);
+  const side = columns(once).side;
+  assert.equal(columns(G.sideFraction(side, SIDE_SPAN, SIDE_MIN, MIDDLE_MIN)).side, side);
+});
+
+test('a grid with nothing left to divide gives no fraction rather than a bad one', () => {
+  // The caller leaves the stylesheet's own three-way split alone, which is the
+  // right answer for a window too narrow to be split at all.
+  assert.equal(G.sideFraction(300, 200, SIDE_MIN, MIDDLE_MIN), null);
+  assert.equal(G.sideFraction(300, 0, SIDE_MIN, MIDDLE_MIN), null);
+});
+
+test('floors that cross are settled in the sides favour', () => {
+  // 500 of span against floors of 130 and 270: two sides and a middle do not
+  // fit. The sides keep theirs, because the middle is a picture and can be
+  // small, while a side is a picture plus a field that has a width of its own.
+  const at = columns(G.sideFraction(90, 500, SIDE_MIN, MIDDLE_MIN), 500);
+  assert.equal(at.side, 130);
+  assert.equal(at.middle, 240);
+});

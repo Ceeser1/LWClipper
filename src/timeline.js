@@ -85,6 +85,16 @@ const timelineModel = (() => {
       groupId: props.groupId || null,
       // Step 2's geometry owns what goes in here. null means the whole frame.
       crop: props.crop || null,
+      // V2.1's Render Position tab owns this one: where the cropped picture is
+      // placed and scaled inside the project frame, in project pixels. null
+      // means centre and fit, which is what placeLayer works out for itself.
+      //
+      // Declared beside crop because the two travel together everywhere. Both
+      // are rectangles the geometry reads, both are null by default, and until
+      // this line existed a layer could carry a position that createLayer threw
+      // away: every undo and every project reopened would have quietly put the
+      // layer back in the middle of the frame.
+      render: props.render || null,
       // The frame that crop is measured in. A rectangle without the frame it
       // was cut from means nothing, which is why simple mode already sends its
       // own alongside it. These are the probe's coded dimensions rather than

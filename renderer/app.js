@@ -288,6 +288,12 @@ const startFrameBusy = el('startFrameBusy');
 const endFrameBusy = el('endFrameBusy');
 const startFrameVideo = el('startFrameVideo');
 const endFrameVideo = el('endFrameVideo');
+const previewGrid = document.querySelector('.preview-grid');
+// Step 21c-3. Two handles, one value: what either of them drags is how wide
+// both side columns are, so the layout stays mirrored without anything having
+// to keep the two edges agreeing.
+const sideSplitterLeft = el('sideSplitterLeft');
+const sideSplitterRight = el('sideSplitterRight');
 const previewStage = el('previewStage');
 const startFrameStage = el('startFrameStage');
 const endFrameStage = el('endFrameStage');
@@ -323,6 +329,20 @@ const cropArrowDown = el('cropArrowDown');
 const cropArrowLeft = el('cropArrowLeft');
 const cropArrowRight = el('cropArrowRight');
 const cropPanHint = el('cropPanHint');
+const cropTabs = el('cropTabs');
+const cropTabFrame = el('cropTabFrame');
+const cropTabPlace = el('cropTabPlace');
+const cropFramePanel = el('cropFramePanel');
+const cropZoomRow = el('cropZoomRow');
+const placePanel = el('placePanel');
+const placeStage = el('placeStage');
+const placeCanvas = el('placeCanvas');
+const placeBox = el('placeBox');
+const placeSize = el('placeSize');
+const placeHint = el('placeHint');
+const placeScaleRow = el('placeScaleRow');
+const placeScaleSlider = el('placeScaleSlider');
+const placeScaleValue = el('placeScaleValue');
 const startTimeField = el('startTimeField');
 const endTimeField = el('endTimeField');
 const hintLabel = el('hintLabel');
@@ -333,6 +353,10 @@ const fpsLabel = el('fpsLabel');
 const fpsSelect = el('fpsSelect');
 const videoEnabledToggle = el('videoEnabledToggle');
 const renderResolution = el('renderResolution');
+const renderResolutionText = el('renderResolutionText');
+const renderResolutionEdit = el('renderResolutionEdit');
+const frameWidthBox = el('frameWidthBox');
+const frameHeightBox = el('frameHeightBox');
 const videoHead = el('videoHead');
 const formatToggle = el('formatToggle');
 const compressionToggle = el('compressionToggle');
@@ -429,6 +453,9 @@ function applyAdvancedEditing() {
   quickSaveBtn.textContent = advanced ? t('Save Project') : t('Quick-Save');
   saveBtn.textContent = advanced ? t('Export...') : t('Save As...');
   buildFormatToggle();
+  // Step 21c. The timeline frame is out of the flow in simple editing, so the
+  // split has to be put back on the stack rather than assumed to have survived.
+  applySplit();
   drawTimeline();
   updatePlayhead();
   // The two frames are not the same height, so the section above them has a
@@ -515,6 +542,9 @@ const audioDropHint = el('audioDropHint');
 const audioPlayhead = el('audioPlayhead');
 const trimPlayhead = el('trimPlayhead');
 const trimSliderEl = el('trimSlider');
+// Step 21c. Between the preview and whichever editing frame is up, and it
+// belongs to neither: what it drags is how the two divide the column.
+const editSplitter = el('editSplitter');
 const timelineStage = el('timelineStage');
 const timelineRuler = el('timelineRuler');
 // Where time is measured from. The lane starts after the layer headers, so x
@@ -901,6 +931,40 @@ fpsSelect.addEventListener('change', () => {
   commitHistory();
 });
 
+/**
+ * The project renders at a different size from now on.
+ *
+ * A commit point for the same reason the rate above is one: it goes into the
+ * .lwc and it changes what every later export is, however close to the format
+ * buttons it happens to sit on screen.
+ *
+ * Every placed layer travels with it, in one gesture rather than two, so Ctrl+Z
+ * takes the frame and the placements back together. Where they land, and why
+ * that rather than leaving their numbers alone, is in geometry.rescaleRender.
+ *
+ * Refused while the project has no shape of its own. projectFrame() substitutes
+ * a fallback so there is something to draw before a decoder has answered, and
+ * accepting a size against that would freeze the fallback as the project's own
+ * and stop the first source from ever seeding it.
+ */
+function setProjectFrame(width, height) {
+  if (!timelineDriving() || busy || !compositeFrame) return false;
+  const size = layerGeometry.frameSize(width, height);
+  if (!size) return false;
+  const from = compositeFrame;
+  if (size.width === from.width && size.height === from.height) return false;
+  compositeFrame = { ...from, width: size.width, height: size.height };
+  sizeCompositeCanvas();
+  // Through setLayers even when no layer moved, because the composite canvas
+  // and the two trim frames are all pictures of a frame that has just changed
+  // shape and none of them redraws itself.
+  setLayers(layers.map((l) => (l.render
+    ? { ...l, render: layerGeometry.rescaleRender(l.render, from, size) }
+    : l)));
+  commitHistory();
+  return true;
+}
+
 async function loadOutputChoices() {
   const types = await window.lwclipper.supportedTypes();
   outputChoices = { video: types.videoOut || [], audio: types.audioOut || [] };
@@ -951,6 +1015,10 @@ function setTrimEnabled(on) {
   // The other occupant of that slot, gated the same way: an empty project has
   // no rate worth choosing and a running render has already been handed one.
   fpsSelect.disabled = !on;
+  // The other half of the project's geometry, gated on the same answer. It is
+  // reached through here rather than read directly because this is the one
+  // place that hears about a render starting and finishing.
+  updateRenderResolution();
   saveBtn.disabled = !(on && !busy && savable());
   quickSaveBtn.disabled = !(on && !busy && savable());
   updateCompressionState();
@@ -1320,6 +1388,12 @@ audioSection.addEventListener('drop', (evt) => {
 // current width, so a resize means a redraw and a reposition. The crop boxes
 // are placed from the frames' own width, which moves with the window too.
 window.addEventListener('resize', () => {
+  // Step 21c-3, before 21c-1: the columns decide how wide each frame is and so
+  // how tall it wants to be, which is what the split below it then divides.
+  applySideSplit();
+  // Step 21c. Then this, because it can move the boundary between the preview
+  // and the timeline, and everything below measures one of the two.
+  applySplit();
   drawWaveform();
   // Before updatePlayhead, which places the timeline bar from a view that this
   // is what re-fits to the new width.
@@ -2198,10 +2272,30 @@ function stopSpectrum() {
 // audio layout stranded behind it.
 // Neither stream can be the one that goes: an output with nothing in it is not
 // a clip. Whichever is still on is therefore locked on until the other returns.
+/**
+ * Whether the Video head is on screen at all.
+ *
+ * Two different subjects on either side of the switch. In simple editing it is
+ * about the one media file, and it stays up for a video whose picture has been
+ * switched off, being the only way back to the picture. In advanced editing
+ * there is no media file and the head belongs to the project: it is up for as
+ * long as there is a picture to say the size of.
+ *
+ * Found while building V2.1's resolution boxes. This used to be one answer
+ * worked out from `media`, which in advanced editing is always null, so the
+ * head was hidden there always and took the render resolution readout inside it
+ * down with it. Nobody had noticed, because until the boxes there was nothing
+ * in there anyone could reach for.
+ */
+function videoHeadShowing() {
+  if (timelineDriving()) return layers.length > 0 && !outputIsAudio();
+  return media !== null && !media.isAudio;
+}
+
 function updateVideoUi() {
   const hasMedia = media !== null;
   const audioOnly = hasMedia && media.isAudio;
-  videoHead.hidden = !hasMedia || audioOnly;
+  videoHead.hidden = !videoHeadShowing();
   videoEnabledToggle.disabled = !hasMedia || busy || audioOnly
     || !audioEnabledToggle.checked;
   // A source with no picture cannot be in any state but enabled.
@@ -3220,6 +3314,16 @@ function buildLayerRow(layer) {
     // anything having to be opened to find out.
     crop.classList.toggle('clip-mark--on', !!layer.crop);
     marks.appendChild(crop);
+    // V2.1. The same reasoning one glyph along: where this layer's picture goes
+    // in the output frame is a fact about this layer's media, and a project with
+    // a layer tucked into a corner should say which layer that is without the
+    // popup having to be opened on each one in turn.
+    const place = makeClipMark('clip-mark--place', '◳', t('Place layer in the frame'), () => {
+      selectLayer(layer.id);
+      openCrop(layer.id, 'place');
+    });
+    place.classList.toggle('clip-mark--on', !!layer.render);
+    marks.appendChild(place);
   }
   if (marks.childElementCount) clip.appendChild(marks);
 
@@ -3857,8 +3961,47 @@ function syncDecoders() {
  *
  * `only` restricts it to a single layer, which is what a scrub draws.
  */
-function paintLayers(ctx, canvas, at, only) {
+/**
+ * One layer's picture, drawn where that layer goes.
+ *
+ * Pulled out of paintLayers in V2.1 so the Render Position tab can draw a layer
+ * the playhead has left, which the composite by definition does not hold. One
+ * piece of arithmetic for both, which is the same reason paintLayers itself is
+ * shared with the two trim frames.
+ */
+function drawLayerInto(ctx, canvas, layer, crop = layer.crop, render = layer.render) {
+  const entry = decoders.get(layer.id);
+  if (!entry || !entry.width) return;
+  const source = layerSource(layer);
+  if (!source) return;
   const frame = projectFrame();
+  const placement = layerGeometry.placeLayer({
+    source,
+    // The two drafts the popup is editing, when it is the one drawing. Defaulted
+    // to what the layer says, which is what every other caller wants.
+    crop,
+    // V2.1. composer.js has read this since Step 3 and the preview never did,
+    // so a positioned layer would have been shown in the middle of the frame
+    // and written somewhere else. The two renderers are not allowed to
+    // disagree, which is the rule the whole of Step 4 existed to establish.
+    render,
+    project: frame,
+  });
+  const d = layerGeometry.drawImageArgs(placement, frame, canvas);
+  if (!d) return;
+  // drawImage measures its source rectangle in the element's own intrinsic
+  // size, which need not be the coded size the crop was set against. So the
+  // rectangle is carried across as a fraction, exactly as paintCropFrame
+  // does, and for the same reason the coded numbers are the ones stored:
+  // they are what ffmpeg will crop with. Both are equal for square pixels,
+  // where kx and ky come out at 1 and nothing is scaled at all.
+  const kx = entry.width / source.width;
+  const ky = entry.height / source.height;
+  ctx.drawImage(entry.el, d.sx * kx, d.sy * ky, d.sw * kx, d.sh * ky,
+    d.dx, d.dy, d.dw, d.dh);
+}
+
+function paintLayers(ctx, canvas, at, only, skip) {
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   // Back to front, which is the order layersAt hands them back in, so index 0
@@ -3870,27 +4013,10 @@ function paintLayers(ctx, canvas, at, only) {
     // another moment drawn into the composite has nothing on it to say it is
     // not the real one.
     if (only && l.id !== only.id) continue;
-    const entry = decoders.get(l.id);
-    if (!entry || !entry.width) continue;
-    const source = layerSource(l);
-    if (!source) continue;
-    const placement = layerGeometry.placeLayer({
-      source,
-      crop: l.crop,
-      project: frame,
-    });
-    const d = layerGeometry.drawImageArgs(placement, frame, canvas);
-    if (!d) continue;
-    // drawImage measures its source rectangle in the element's own intrinsic
-    // size, which need not be the coded size the crop was set against. So the
-    // rectangle is carried across as a fraction, exactly as paintCropFrame
-    // does, and for the same reason the coded numbers are the ones stored:
-    // they are what ffmpeg will crop with. Both are equal for square pixels,
-    // where kx and ky come out at 1 and nothing is scaled at all.
-    const kx = entry.width / source.width;
-    const ky = entry.height / source.height;
-    ctx.drawImage(entry.el, d.sx * kx, d.sy * ky, d.sw * kx, d.sh * ky,
-      d.dx, d.dy, d.dw, d.dh);
+    // The layer the position tab is drawing itself, from its draft. Left in, it
+    // would be drawn twice and its stored position would show underneath.
+    if (skip && l.id === skip) continue;
+    drawLayerInto(ctx, canvas, l);
   }
 }
 
@@ -5104,15 +5230,15 @@ window.lwclipper.onClosing(async () => {
  * would move the view out from under whoever pressed Ctrl+Z, and comparing them
  * would turn a click on a row into an undo step of its own.
  *
- * The project's render rate is in here, because Step 16's dropdown is a gesture
- * and a gesture the stack cannot see is a Ctrl+Z that skips it. The rest of the
- * project frame is not. It arrives asynchronously from a decoder's metadata, so
- * a snapshot taken before that landed holds no shape at all, and putting that
- * back would unseed a project for pressing Ctrl+Z. The width and height have no
- * control to change them in V2.0 and the resolution control in the design needs
- * its own commit point when it is built; the rate is protected from the same
- * trap by applyHistory, which treats a snapshot without one as saying nothing
- * about it rather than as saying there is none.
+ * The whole project frame is in here: the rate from Step 16's dropdown and the
+ * size from V2.1's resolution boxes. Both are gestures, and a gesture the stack
+ * cannot see is a Ctrl+Z that skips it.
+ *
+ * All of it arrives asynchronously from a decoder's metadata, so a snapshot
+ * taken before that landed holds no shape at all, and putting that back would
+ * unseed a project for pressing Ctrl+Z. What protects it is applyHistory, which
+ * treats a snapshot without a frame in it as saying nothing about the frame
+ * rather than as saying there is none.
  */
 function projectState() {
   return {
@@ -5120,6 +5246,8 @@ function projectState() {
     start: slider.start,
     end: slider.end,
     fps: compositeFrame ? compositeFrame.fps : 0,
+    width: compositeFrame ? compositeFrame.width : 0,
+    height: compositeFrame ? compositeFrame.height : 0,
   };
 }
 
@@ -5156,11 +5284,19 @@ function applyHistory(next) {
   const state = projectHistory.restore(next.present, layers);
   if (!state) return;
   undoStack = next;
-  // A snapshot from before the project had a shape says nothing about the rate
-  // rather than saying the rate is nothing, so it leaves the one in force
+  // A snapshot from before the project had a shape says nothing about the frame
+  // rather than saying the frame is nothing, so it leaves the one in force
   // alone. Set before setLayers, which asks what size the project renders at on
   // its way through updateRenderResolution.
-  if (state.fps > 0 && compositeFrame) compositeFrame = { ...compositeFrame, fps: state.fps };
+  if (compositeFrame) {
+    if (state.fps > 0) compositeFrame = { ...compositeFrame, fps: state.fps };
+    if (state.width > 1 && state.height > 1) {
+      compositeFrame = { ...compositeFrame, width: state.width, height: state.height };
+      // The preview canvas is the project's own shape, so undoing a resize has
+      // to resize it back before anything is drawn into it.
+      sizeCompositeCanvas();
+    }
+  }
   setLayers(state.layers);
   // After setLayers and not before. syncProjectTrim in there follows a project
   // that just got longer or shorter, and it would move the very markers being
@@ -5231,6 +5367,14 @@ const CROP_ZOOM_MAX = 4;
 const CROP_ARROW_SHORT = 19;
 const CROP_ARROW_GAP = 6;
 
+// V2.1, 21e. How far past the picture the frame may be dragged, as a multiple
+// of the source on each axis. Four rather than a rounder number because of what
+// the shapes ask for: turning a 16:9 clip into a 9:16 frame wants the height to
+// reach 16/9 of the width, which on a 1280x720 source is 2276 against 720, a
+// little over three. Four covers that with room over, and still leaves the
+// picture a quarter of the stage to be looked at in.
+const CROP_OUTER = 4;
+
 const CROP_PRESETS = [
   { label: 'Original', ratio: null },
   { label: '21:9', ratio: 21 / 9 },
@@ -5270,6 +5414,24 @@ let cropPicture = { left: 0, top: 0, w: 0, h: 0 };
 let cropAnchor = null;        // where the box sits on the picture, in fractions of it
 let cropView = null;          // the zoom and pan a crop was accepted at
 let cropActivePreset = null;
+// V2.1, 21e-3. The ratio that preset names, kept beside the button because the
+// button is a button and this is the number. Null for Original, which names no
+// ratio of its own, and null once a drag has cleared the preset.
+let cropActiveRatio = null;
+
+/**
+ * A preset is no longer what set this box, whatever set it instead: a drag, a
+ * pan, the zoom, or the popup opening on a crop that was accepted earlier.
+ *
+ * One function rather than the two lines it replaces in five places. 21e-3 gave
+ * the lit button a second thing to carry, its ratio, and five copies of "clear
+ * the button" would have been five chances for one of them to forget.
+ */
+function clearActivePreset() {
+  cropActivePreset = null;
+  cropActiveRatio = null;
+  markActivePreset();
+}
 
 const evenDown = (v) => Math.floor(v / 2) * 2;
 const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
@@ -5370,8 +5532,92 @@ function fullRect(size) {
   return { x: 0, y: 0, width: size.w, height: size.h };
 }
 
+/**
+ * The shape a Shift and Ctrl drag holds on to.
+ *
+ * The lit preset if one is lit, and the box's own shape if none is. Original
+ * lights a button without naming a ratio, and the two answers agree there
+ * anyway: Original is the picture, so the box's shape is the picture's.
+ *
+ * Read at the press rather than during the drag. The first move clears the
+ * preset, because a drag is no longer whatever a preset set, so by the second
+ * move there would be nothing left to read.
+ */
+function cropLockRatio() {
+  if (cropActiveRatio > 0) return cropActiveRatio;
+  if (!cropDraft || cropDraft.height < 1) return null;
+  return cropDraft.width / cropDraft.height;
+}
+
+/**
+ * Whether the frame may be dragged out past the picture.
+ *
+ * Simple editing only, settled with the user on 2026-09-20. In advanced editing
+ * the Render Position tab is what puts a picture somewhere in a frame, and a
+ * layer whose own source had been padded would be a second answer to that same
+ * question, which the two would then have to be kept agreeing about. In simple
+ * editing there is no second answer: the crop is the only thing that decides
+ * what shape the output is.
+ */
+function cropExtendable() {
+  return !timelineDriving();
+}
+
+/**
+ * Everything the stage has to show: the picture, and the frame the crop
+ * describes. The same rectangle until a drag takes the frame outside the
+ * picture, which is what makes all of this invisible to a crop that stays in.
+ */
+function cropOuter(size) {
+  if (!cropDraft || !cropExtendable()) return { x: 0, y: 0, w: size.w, h: size.h };
+  const x = Math.min(0, cropDraft.x);
+  const y = Math.min(0, cropDraft.y);
+  return {
+    x,
+    y,
+    w: Math.max(size.w, cropDraft.x + cropDraft.width) - x,
+    h: Math.max(size.h, cropDraft.y + cropDraft.height) - y,
+  };
+}
+
+/**
+ * How far out a drag may go, which is a fixed allowance and not the box above.
+ * The box above grows with the frame, so holding the frame to it would be
+ * holding it to itself and there would be no limit at all.
+ */
+function cropLimit(size) {
+  if (!cropExtendable()) return { x: 0, y: 0, w: size.w, h: size.h };
+  const grow = (CROP_OUTER - 1) / 2;
+  return {
+    x: -evenDown(size.w * grow),
+    y: -evenDown(size.h * grow),
+    w: evenDown(size.w * CROP_OUTER),
+    h: evenDown(size.h * CROP_OUTER),
+  };
+}
+
+/**
+ * The part of the picture a view window covers, in source pixels. The whole of
+ * the window until the frame reaches outside the picture and the two stop being
+ * the same rectangle.
+ */
+function pictureOnStage(size, view) {
+  const x = Math.max(0, view.x);
+  const y = Math.max(0, view.y);
+  return {
+    x,
+    y,
+    w: Math.max(0, Math.min(size.w, view.x + view.w) - x),
+    h: Math.max(0, Math.min(size.h, view.y + view.h) - y),
+  };
+}
+
+// V2.1, 21e. Exactly the source's size, not merely as large as it. The rect may
+// reach outside the picture now, and a frame larger than the source is the one
+// thing 21e exists to say, so reading it as "nothing to crop" would throw it
+// away on the way to the file. Same correction as backend.js cropFilter.
 function isFullFrame(rect, size) {
-  return rect.x === 0 && rect.y === 0 && rect.width >= size.w && rect.height >= size.h;
+  return rect.x === 0 && rect.y === 0 && rect.width === size.w && rect.height === size.h;
 }
 
 // The largest rectangle of that shape the frame can hold, sat in the middle of
@@ -5441,22 +5687,68 @@ function updateRenderResolution() {
     // The project frame, which is what every layer is fitted into and what the
     // encoder writes. A per-layer crop deliberately does not change it: it
     // changes what that layer shows, not what size the output is.
-    const showing = layers.length > 0 && !outputIsAudio();
+    const showing = videoHeadShowing();
+    // The row around it, which nothing else in this mode owns: updateVideoUi
+    // answers for the media file and there is none here.
+    videoHead.hidden = !showing;
     renderResolution.hidden = !showing;
+    renderResolutionEdit.hidden = !showing;
+    renderResolutionText.textContent = '';
     if (!showing) return;
     const frame = projectFrame();
-    renderResolution.textContent = t('Render Resolution: {w} x {h}',
-      { w: frame.width, h: frame.height });
+    // Typeable only while the project has a shape of its own. projectFrame()
+    // substitutes a fallback until a decoder has answered, and a box over a
+    // number the project has not agreed to yet is a box that lies about what
+    // pressing Enter in it would do.
+    const editable = !!compositeFrame && !busy;
+    for (const [box, value] of [[frameWidthBox, frame.width], [frameHeightBox, frame.height]]) {
+      box.disabled = !editable;
+      // Never over what is being typed. A file dropped while a box has the
+      // focus comes back through here, and rewriting the value under the cursor
+      // would throw the edit away mid-word.
+      if (document.activeElement !== box) box.value = String(value);
+    }
     return;
   }
+  renderResolutionEdit.hidden = true;
   const size = sourceSize();
   const showing = !!media && !outputIsAudio() && !!size;
   renderResolution.hidden = !showing;
   if (!showing) return;
   const w = cropRect ? cropRect.width : size.w;
   const h = cropRect ? cropRect.height : size.h;
-  renderResolution.textContent = t('Render Resolution: {w} x {h}', { w, h })
+  renderResolutionText.textContent = t('Render Resolution: {w} x {h}', { w, h })
     + (cropRect ? ' ' + t('(cropped)') : '');
+}
+
+/**
+ * The two boxes are one gesture, and that is arithmetic rather than tidiness.
+ *
+ * 1280x720 to 1920x1080 in one move carries a layer at 200,120 480x270 to
+ * 300,180 720x405. The same change made as two, through 1920x720 on the way,
+ * lands it at 520,300 480x270: pillarboxed and then letterboxed, which is a
+ * different shot from the one that was asked for. So tabbing from one box to
+ * the other does not commit anything, and whichever of the two is left last
+ * commits both together.
+ */
+function commitFrameBoxes() {
+  if (setProjectFrame(frameWidthBox.value, frameHeightBox.value)) return;
+  // Refused, or the same size it already was. Either way the boxes are now
+  // saying something the project is not, so they go back to what it says.
+  updateRenderResolution();
+}
+
+for (const box of [frameWidthBox, frameHeightBox]) {
+  box.addEventListener('focusout', (evt) => {
+    if (evt.relatedTarget === frameWidthBox || evt.relatedTarget === frameHeightBox) return;
+    commitFrameBoxes();
+  });
+  // Enter commits by leaving the box rather than by committing directly, so
+  // there is one path in and not two. It also puts the caret somewhere the
+  // even-down can be written back under it.
+  box.addEventListener('keydown', (evt) => {
+    if (evt.key === 'Enter') box.blur();
+  });
 }
 
 /**
@@ -5496,6 +5788,355 @@ function fitWindow() {
     window.lwclipper.fitWindow(fit.short - fit.spare);
   }, 140);
 }
+
+/**
+ * Step 21c. One video track and one audio track, which is the floor the
+ * timeline keeps. Measured on 2026-09-20 rather than read off the stylesheet:
+ * an empty advanced project already shows one empty video row and one empty
+ * audio row, and a loaded project carries those two as well as its own, so the
+ * smallest real project is four rows of 48. The 96 that two rows would give is
+ * the letter of it, and it would put a one-video one-audio project into a
+ * scrollbar the moment the handle reached the floor.
+ */
+const SPLIT_STACK_FLOOR = 192;
+
+/** The height the stack is held at, or null while the split is still the stylesheet's. */
+let splitWish = null;
+/** Whether the fit has been handed over yet. It is handed over once, and for the run. */
+let splitTaken = false;
+/** Where the stack was and where the pointer was when the drag started, or null. */
+let splitFrom = null;
+
+// ---- V2.1, 21c-2. Maximized is a second split, not the same one stretched ----
+//
+// Maximizing shares the extra height between the two in the proportion they
+// already had, rather than putting the handle down the middle of the new space.
+// That was put to the user when Step 17 was planned and the middle was rejected:
+// a timeline of two tracks does not want half the screen.
+//
+// Which means the maximized split is kept as a **share of the room** while the
+// restored-down one is kept as a height. That is not an inconsistency, it is
+// what makes this work at all. Both the maximize and the unmaximize events fire
+// after the window has already changed size, so the renderer may have laid out
+// for the new size before it hears which state it is in. A height would have to
+// know which room it was measured against and would be wrong for one of the two
+// orders. A share is right against whichever room is current, so there is no
+// order to get right.
+let windowMaxed = false;
+/** The share of the room the timeline holds when maximized. Null until the first one. */
+let splitMaxShare = null;
+/** The stack height last applied at the ordinary size. */
+let splitNormalStack = 0;
+/**
+ * The last two rooms the window has had at the ordinary size, oldest first, each
+ * with the moment it started. Two, because of what the first maximize has to
+ * work out and cannot otherwise know.
+ */
+let splitRoomLog = [];
+
+/** What the two frames have between them, which is the whole of what to divide. */
+function splitRoom() {
+  return timelineStack.getBoundingClientRect().height
+    + previewSection.getBoundingClientRect().height;
+}
+
+/**
+ * Remember what the split looks like at the ordinary window size, so the first
+ * maximize has a proportion to carry up.
+ *
+ * The stack is passed in rather than measured, and that is not a shortcut: this
+ * runs inside applySplit, before the property it just worked out has been laid
+ * out, so a measurement here answers with the previous split. It read a drag one
+ * step short every time, 317 where the stack was about to be 342.
+ */
+function noteNormalSplit(stack, room) {
+  if (windowMaxed || room <= 0) return;
+  splitNormalStack = stack;
+  const newest = splitRoomLog[splitRoomLog.length - 1];
+  if (newest && Math.abs(newest.room - room) <= 2) {
+    // The same room it already had. Its age is when it started, not when it was
+    // last looked at, which is the whole point of keeping the time.
+    newest.room = room;
+    return;
+  }
+  splitRoomLog.push({ room, at: Date.now() });
+  if (splitRoomLog.length > 2) splitRoomLog.shift();
+}
+
+/**
+ * The room the window had before it was maximized.
+ *
+ * Both window events fire after the window has already changed size, so by the
+ * time the page hears which state it is in, it may have laid out for the new
+ * room and recorded that as an ordinary one. The stack survives either order,
+ * since a window resize is absorbed by the preview and leaves the timeline
+ * where it is, so the only thing in doubt is the room, and it can be told apart
+ * by its age: a resize that is part of a maximize arrives in the same breath as
+ * the event announcing it, and one the user performed themselves is older.
+ */
+const SPLIT_SAME_BREATH = 400;
+
+function roomBeforeMaxed() {
+  const n = splitRoomLog.length;
+  if (!n) return 0;
+  const newest = splitRoomLog[n - 1];
+  if (n > 1 && Date.now() - newest.at < SPLIT_SAME_BREATH) return splitRoomLog[n - 2].room;
+  return newest.room;
+}
+
+/** The height the split is asking for, in whichever way this state keeps it. */
+function splitWant(room) {
+  if (windowMaxed) return splitMaxShare === null ? null : splitMaxShare * room;
+  return splitWish;
+}
+
+/**
+ * Maximized or restored down, as the main process reports it.
+ *
+ * The restored-down wish is never touched by any of this, which is the whole of
+ * "the previous split comes back on restore": there is nothing to put back
+ * because nothing took it away. And the maximized share outlives a restore, so
+ * a second maximize opens on the split the first one was left at.
+ */
+function setWindowMaxed(maxed) {
+  if (maxed === windowMaxed) return;
+  const before = roomBeforeMaxed();
+  windowMaxed = maxed;
+  if (maxed && splitMaxShare === null && before > 0) {
+    // The proportion the two had a moment ago, carried into a bigger room. Both
+    // end up larger and neither ends up rearranged.
+    splitMaxShare = splitNormalStack / before;
+  }
+  applySplit();
+  drawTimeline();
+  updatePlayhead();
+}
+
+window.lwclipper.onWindowState((state) => setWindowMaxed(!!(state && state.maximized)));
+window.lwclipper.windowMaximized().then((maxed) => setWindowMaxed(!!maxed));
+
+/**
+ * The smallest the preview section may be made, measured off the section as it
+ * stands rather than stored, because both answers move with the window's width
+ * and one of them moves with whether the video head is up.
+ *
+ * For a picture it is the height at which the frames are exactly 16:9, which is
+ * the height fitWindow spends the window's own size to reach, and previewFit()
+ * already measures how far off it is in whichever direction there is one. For
+ * an audio project there is no ratio to keep, so the floor is where the
+ * spectrum reaches the minimum the stylesheet already gives it.
+ *
+ * Both sums under-report a section that is already crushed, because the stage
+ * stops at its own minimum while the rest of the section carries on shrinking,
+ * and the distance to 16:9 stops growing with it. Under is the safe direction:
+ * a floor read too low gives the stack room it should not have had, and the
+ * next call, with the section no longer crushed, reads the real one. Over would
+ * be a floor that fought the drag it was measured during.
+ */
+function previewFloor() {
+  const now = previewSection.getBoundingClientRect().height;
+  const fit = previewFit();
+  if (fit) return now - fit.spare + fit.short;
+  const stage = previewStage.getBoundingClientRect().height;
+  const least = parseFloat(getComputedStyle(previewStage).minHeight) || 0;
+  return now - stage + least;
+}
+
+/**
+ * Hold the stack at the height the handle was dragged to, inside what the
+ * column can actually give it.
+ *
+ * Run on every window resize as well as on the drag, so a window made shorter
+ * takes the room back from whichever of the two can spare it. What is clamped
+ * is the applied height and never the wish, which is what hands the split back
+ * whole when the window is made tall again, and what lets simple editing pass
+ * through here with a stack of no height at all without losing anything.
+ */
+function applySplit() {
+  // The preview is the only section in the column that grows, so every pixel
+  // the stack takes comes out of it and the two of them together are a
+  // constant. That sum is the whole of what there is to divide.
+  const room = splitRoom();
+  const want = splitWant(room);
+  if (want === null) {
+    document.documentElement.style.removeProperty('--split-stack');
+    // Nothing is about to change, so the stack on the page is the stack.
+    noteNormalSplit(timelineStack.getBoundingClientRect().height, room);
+    return;
+  }
+  const held = layerGeometry.splitHeight(want, room, SPLIT_STACK_FLOOR, previewFloor());
+  document.documentElement.style.setProperty('--split-stack', held + 'px');
+  noteNormalSplit(held, room);
+}
+
+// ---- V2.1, 21c-3. The two handles between the three frames ----
+
+/** The side column width the user dragged to, or null while it is the stylesheet's. */
+let sideWish = null;
+let sideFrom = null;
+/** The floors for the gesture in hand, so the reflow happens once and not per move. */
+let sideFloors = null;
+
+/**
+ * The narrowest each of the three columns may be made, asked of the browser
+ * rather than written down.
+ *
+ * A frame will shrink to anything, so what stops fitting first is the row of
+ * controls underneath it, and how wide that is depends on the language and on
+ * which mode is up: measured at a 940px grid, the sides come to 130 in both
+ * languages because the time field has a width of its own, while the middle is
+ * 132 with nothing loaded, 186 in advanced editing and 270 of that in German.
+ * A constant would have been right for one of those.
+ *
+ * Taken at the press and not during the drag, because it costs a reflow: the
+ * only way to ask an element what its contents need is to lay it out that way
+ * and look. The same shape of answer as previewFloor, one gesture, one reading.
+ */
+function previewColumnFloors() {
+  const natural = (node) => {
+    if (!node) return 0;
+    const was = node.style.width;
+    node.style.width = 'min-content';
+    const w = Math.ceil(node.getBoundingClientRect().width);
+    node.style.width = was;
+    return w;
+  };
+  const mins = [...previewGrid.querySelectorAll('.preview-cell')].map((cell) => Math.max(
+    natural(cell.querySelector('.preview-cell__controls')),
+    natural(cell.querySelector('.preview-cell__title'))));
+  return {
+    side: Math.max(mins[0] || 0, mins[2] || 0),
+    middle: mins[1] || 0,
+  };
+}
+
+/** What the three columns divide between them: the grid, less its two gaps. */
+function previewSpan() {
+  const gap = parseFloat(getComputedStyle(previewGrid).columnGap) || 0;
+  return previewGrid.getBoundingClientRect().width - 2 * gap;
+}
+
+/**
+ * Hold the side columns at the width they were dragged to.
+ *
+ * Re-run on every window resize as well as on the drag, because the wish is a
+ * width and the grid it sits in is not: a narrower window has to take the room
+ * back from somewhere, and the clamp is what decides where.
+ */
+function applySideSplit() {
+  if (sideWish === null) {
+    document.documentElement.style.removeProperty('--preview-side');
+    return;
+  }
+  const floors = sideFloors || previewColumnFloors();
+  const fr = layerGeometry.sideFraction(sideWish, previewSpan(), floors.side, floors.middle);
+  if (fr === null) {
+    // Nothing left to divide. The stylesheet's own three equal columns are a
+    // better answer than a fraction worked out from a grid this narrow.
+    document.documentElement.style.removeProperty('--preview-side');
+    return;
+  }
+  document.documentElement.style.setProperty('--preview-side', fr + 'fr');
+}
+
+function bindSideSplitter(handle, sign) {
+  handle.addEventListener('pointerdown', (evt) => {
+    if (evt.button !== 0) return;
+    const cell = handle.closest('.preview-cell');
+    sideFrom = { x: evt.clientX, width: cell.getBoundingClientRect().width };
+    sideFloors = previewColumnFloors();
+    handle.setPointerCapture(evt.pointerId);
+    document.body.classList.add('splitting-side');
+    evt.preventDefault();
+  });
+
+  handle.addEventListener('pointermove', (evt) => {
+    if (!sideFrom) return;
+    // The left handle widens its column by moving right and the right handle by
+    // moving left, which is the sign. Both write the one value, so either of
+    // them moves both edges and the picture in the middle stays centred.
+    sideWish = sideFrom.width + sign * (evt.clientX - sideFrom.x);
+    applySideSplit();
+    // The frames are 16:9 of their own width, so a narrower column is a shorter
+    // one, and the window would want to resize itself to suit. That is the
+    // fight Step 17 said to settle before building any of this, and it is
+    // settled the same way the handle above the timeline settles it.
+    if (!splitTaken) {
+      splitTaken = true;
+      window.lwclipper.releaseWindowHeight();
+    }
+    // The preview's height moved, so the split below it has a different room to
+    // divide, and the crop outline is placed from the picture's own width.
+    applySplit();
+    updateCropOverlays();
+  });
+
+  const done = (evt) => {
+    if (!sideFrom) return;
+    sideFrom = null;
+    sideFloors = null;
+    document.body.classList.remove('splitting-side');
+    if (handle.hasPointerCapture(evt.pointerId)) handle.releasePointerCapture(evt.pointerId);
+  };
+  handle.addEventListener('pointerup', done);
+  handle.addEventListener('pointercancel', done);
+}
+
+bindSideSplitter(sideSplitterLeft, 1);
+bindSideSplitter(sideSplitterRight, -1);
+
+editSplitter.addEventListener('pointerdown', (evt) => {
+  if (evt.button !== 0) return;
+  splitFrom = { y: evt.clientY, stack: timelineStack.getBoundingClientRect().height };
+  // So the drag survives the pointer leaving a 10px strip, which it does
+  // immediately and for the whole of the gesture.
+  editSplitter.setPointerCapture(evt.pointerId);
+  document.body.classList.add('splitting');
+  evt.preventDefault();
+});
+
+editSplitter.addEventListener('pointermove', (evt) => {
+  if (!splitFrom) return;
+  // Measured from where the stack was when the pointer went down rather than
+  // from where it is now, so a pointer that runs past a floor and comes back
+  // lands where it started instead of a drag's worth of travel away from it.
+  const wish = splitFrom.stack + (evt.clientY - splitFrom.y);
+  if (windowMaxed) {
+    // Written into the maximized share, so a drag made up there does not follow
+    // the window back down, and is still there on the next maximize.
+    const room = splitRoom();
+    if (room > 0) splitMaxShare = wish / room;
+  } else {
+    splitWish = wish;
+  }
+  applySplit();
+  // The fit is given up for a drag that moved something, not for a press the
+  // floors ate whole. At the default window size there is about fifteen pixels
+  // of slack with two layers loaded, and nothing at all is a poor price for
+  // the window giving up its own sizing for the rest of the session.
+  const moved = Math.round(timelineStack.getBoundingClientRect().height)
+    !== Math.round(splitFrom.stack);
+  if (moved && !splitTaken) {
+    splitTaken = true;
+    window.lwclipper.releaseWindowHeight();
+  }
+  // The stack is what gained or lost the height, and whether it now scrolls is
+  // what the ruler and the lane are inset by.
+  drawTimeline();
+  updatePlayhead();
+});
+
+function endSplit(evt) {
+  if (!splitFrom) return;
+  splitFrom = null;
+  document.body.classList.remove('splitting');
+  if (editSplitter.hasPointerCapture(evt.pointerId)) {
+    editSplitter.releasePointerCapture(evt.pointerId);
+  }
+}
+
+editSplitter.addEventListener('pointerup', endSplit);
+editSplitter.addEventListener('pointercancel', endSplit);
 
 function updateCropBtn() {
   // No picture in the output, nothing to crop out of it.
@@ -5540,7 +6181,7 @@ function sizeCropStage(size) {
   // frame, which is where the bars come from. Where it sits and how much of the
   // frame it takes up is worked out per zoom in applyView, since zooming in
   // grows the picture and eats into those bars.
-  cropBaseScale = Math.min(w / size.w, h / size.h);
+  fitCropScale(size);
   // Half the frame plus the gap, measured from the middle, which is where the
   // stage is centred. Written here because the stage's size is only known here.
   // The same gap on all four sides, so each arrow stands off its own edge by
@@ -5560,6 +6201,39 @@ function sizeCropStage(size) {
   applyView(size);
 }
 
+/**
+ * The scale the stage shows 100% at. Fitted to everything that has to be on the
+ * stage rather than to the picture, which since 21e are two different
+ * rectangles whenever the frame has been dragged outside the picture.
+ *
+ * Split out of sizeCropStage because a drag changes what has to be shown while
+ * the stage itself has not moved.
+ */
+function fitCropScale(size) {
+  const outer = cropOuter(size);
+  cropBaseScale = Math.min(
+    cropStage.clientWidth / Math.max(2, outer.w),
+    cropStage.clientHeight / Math.max(2, outer.h));
+}
+
+/**
+ * The frame has just grown or shrunk past the picture, so what the stage shows
+ * has changed and everything drawn at a scale has to be drawn again. Kept out
+ * of applyView, which the zoom and the pan also call and which must not re-fit
+ * the stage under them.
+ */
+function refitCropView(size) {
+  // Done every time rather than only when the scale comes out different. The
+  // scale is not the only thing that goes stale: the pan is clamped inside what
+  // the stage holds, and a frame can change that box while leaving the scale
+  // alone, which on a portrait picture is simply widening it. A drawImage of
+  // one video frame is what a pan costs already.
+  fitCropScale(size);
+  applyView(size);
+  paintCropFrame();
+  updateCropArrows();
+}
+
 // How much of the picture the frame shows. The frame holds the whole of it at
 // 100%, so at any zoom it holds exactly that much divided by the zoom.
 //
@@ -5569,9 +6243,10 @@ function sizeCropStage(size) {
 // to lose two pixels off Original and to leave half a pixel of slack in the pan
 // for an arrow to light up on.
 function viewSpan(size) {
+  const outer = cropOuter(size);
   return {
-    w: Math.min(size.w, cropStage.clientWidth / cropScale),
-    h: Math.min(size.h, cropStage.clientHeight / cropScale),
+    w: Math.min(outer.w, cropStage.clientWidth / cropScale),
+    h: Math.min(outer.h, cropStage.clientHeight / cropScale),
   };
 }
 
@@ -5592,10 +6267,16 @@ function placePicture(size) {
   const w = span.w * cropScale;
   const h = span.h * cropScale;
   cropPicture = { left: (frameW - w) / 2, top: (frameH - h) / 2, w, h };
-  cropCanvas.style.left = cropPicture.left + 'px';
-  cropCanvas.style.top = cropPicture.top + 'px';
-  cropCanvas.style.width = w + 'px';
-  cropCanvas.style.height = h + 'px';
+  // 21e. The canvas covers the part of the picture that is on the stage, which
+  // is the whole of the visible region until the frame is dragged outside the
+  // picture. What is left over around it is the stage's own background, which
+  // is what the bars have always been.
+  const view = viewWindow(size);
+  const seen = pictureOnStage(size, view);
+  cropCanvas.style.left = (cropPicture.left + (seen.x - view.x) * cropScale) + 'px';
+  cropCanvas.style.top = (cropPicture.top + (seen.y - view.y) * cropScale) + 'px';
+  cropCanvas.style.width = (seen.w * cropScale) + 'px';
+  cropCanvas.style.height = (seen.h * cropScale) + 'px';
 }
 
 // Recomputes the scale the zoom implies and keeps the pan inside the picture,
@@ -5604,10 +6285,20 @@ function placePicture(size) {
 // nothing to drag, which is why panning only exists above 100%.
 function applyView(size) {
   cropScale = cropBaseScale * viewZoom;
-  placePicture(size);
   const span = viewSpan(size);
-  viewPanX = clamp(viewPanX, span.w / 2, size.w - span.w / 2);
-  viewPanY = clamp(viewPanY, span.h / 2, size.h - span.h / 2);
+  // Held inside everything the stage shows rather than inside the picture. With
+  // the frame dragged out past it, the room above and to the left of the
+  // picture is somewhere the view is allowed to be. Identical while the two
+  // rectangles are the same, which is every crop that stays inside.
+  const outer = cropOuter(size);
+  viewPanX = clamp(viewPanX, outer.x + span.w / 2, outer.x + outer.w - span.w / 2);
+  viewPanY = clamp(viewPanY, outer.y + span.h / 2, outer.y + outer.h - span.h / 2);
+  // After the clamp, not before it. The picture used to be placed from the span
+  // alone, which the pan does not enter into, so the order did not matter and
+  // the pan was settled afterwards. Since 21e it is placed from the view as
+  // well, and placing it first drew it from a pan belonging to the frame the
+  // stage held a moment ago: 11px of the picture missing after a preset.
+  placePicture(size);
 }
 
 // The part of the source currently under the frame, in source pixels.
@@ -5720,12 +6411,17 @@ const ARROW_HOLD_EVERY = 25;  // how often it moves once it is repeating
 
 function cropOverflow(size) {
   const v = viewWindow(size);
+  // 21e. Against everything the stage has to hold rather than against the
+  // picture: with the frame dragged out, the room around the picture is part of
+  // what there is to pan to, and an arrow that ignored it would go grey while
+  // there was still frame to reach.
+  const outer = cropOuter(size);
   const slack = 0.5;   // a rounded pixel is not content worth pointing at
   return {
-    up: v.y > slack,
-    left: v.x > slack,
-    down: v.y + v.h < size.h - slack,
-    right: v.x + v.w < size.w - slack,
+    up: v.y > outer.y + slack,
+    left: v.x > outer.x + slack,
+    down: v.y + v.h < outer.y + outer.h - slack,
+    right: v.x + v.w < outer.x + outer.w - slack,
   };
 }
 
@@ -5751,8 +6447,7 @@ function nudgeCropView(dx, dy) {
   viewPanY += dy;
   applyView(size);
   cropDraft = sourceRectFromScreen(anchorScreenRect(), size);
-  cropActivePreset = null;
-  markActivePreset();
+  clearActivePreset();
   paintCropFrame();
   placeCropDraft();
   updateCropArrows();
@@ -5864,8 +6559,14 @@ function seedCropFrame(layer) {
 function paintCropFrame() {
   // The canvas covers the picture, not the whole frame, so the bars either side
   // of it are simply the frame showing through and nothing has to draw them.
-  const cssW = cropPicture.w;
-  const cssH = cropPicture.h;
+  // Since 21e that is the part of the picture on the stage rather than the
+  // whole of the visible region: the two part company once the frame is out.
+  const size = sourceSize();
+  if (!size) return;
+  const view = viewWindow(size);
+  const shown = pictureOnStage(size, view);
+  const cssW = shown.w * cropScale;
+  const cssH = shown.h * cropScale;
   if (!cssW || !cssH) return;
   const dpr = window.devicePixelRatio || 1;
   cropCanvas.width = Math.round(cssW * dpr);
@@ -5879,9 +6580,6 @@ function paintCropFrame() {
   // source tainting it costs nothing.
   if (!src) return;
 
-  const size = sourceSize();
-  if (!size) return;
-  const view = viewWindow(size);
   // Only the visible window is drawn, rather than the whole picture with the
   // rest hanging over the edges. The element's own intrinsic size is what
   // drawImage measures its source rectangle in, and it need not match the coded
@@ -5889,15 +6587,257 @@ function paintCropFrame() {
   const iw = src.videoWidth || size.w;
   const ih = src.videoHeight || size.h;
   ctx.drawImage(src,
-    (view.x / size.w) * iw, (view.y / size.h) * ih,
-    (view.w / size.w) * iw, (view.h / size.h) * ih,
+    (shown.x / size.w) * iw, (shown.y / size.h) * ih,
+    (shown.w / size.w) * iw, (shown.h / size.h) * ih,
     0, 0, cssW, cssH);
 }
+
+// ---- V2.1, 21a. The second tab ----
+//
+// The popup edits two rectangles now: which part of the source to take, which
+// is what it has always done, and where that result is placed and scaled inside
+// the output frame. Both belong to one layer and are settled by one Accept, so
+// they are two tabs of one popup rather than two popups.
+//
+// Simple editing never sees them. There is no project frame there, the output
+// is the source, and a position inside it would mean nothing.
+
+let cropTab = 'frame';
+
+// V2.1, 21a-2. The rectangle the position tab is editing, in project pixels.
+// Always concrete while the popup is open, even for a layer that has never been
+// placed: it starts as the centre and fit the geometry would have worked out
+// anyway, so there is something to drag. What Accept writes is null again when
+// it is still that rectangle, which is the same rule the crop tab applies to
+// the whole frame. A position that is the default is not a position, and
+// writing it down would freeze it against a crop or a project frame that
+// changes later.
+let placeDraft = null;
+let placeDrag = null;
+// Whether the user has moved or scaled it. An untouched draft follows the crop
+// on the other tab; a touched one is theirs and is left alone.
+let placeTouched = false;
+
+const PLACE_SCALE_MIN = 10;
+const PLACE_SCALE_MAX = 400;
+
+const sameRect = (a, b) => !!a && !!b && a.x === b.x && a.y === b.y
+  && a.width === b.width && a.height === b.height;
+
+/**
+ * Where this layer lands with no position set.
+ *
+ * Against the crop being edited rather than the crop on the layer: the two tabs
+ * are one popup settled by one Accept, so switching here after changing the
+ * crop has to place what that crop is going to produce.
+ */
+function placeFitRect(layer) {
+  const source = layerSource(layer);
+  if (!source) return null;
+  const placement = layerGeometry.placeLayer({
+    source,
+    crop: cropDraft,
+    project: projectFrame(),
+  });
+  return placement ? { ...placement.dest } : null;
+}
+
+function showCropTab(which) {
+  cropTab = which === 'place' ? 'place' : 'frame';
+  const place = cropTab === 'place';
+  cropTabFrame.classList.toggle('btn--active', !place);
+  cropTabPlace.classList.toggle('btn--active', place);
+  cropFramePanel.hidden = place;
+  placePanel.hidden = !place;
+  // The crop tab's own controls go with it. The zoom is a view into the source
+  // and the presets are crop ratios: neither has anything to say about where
+  // the result lands.
+  cropHint.hidden = place;
+  cropSize.hidden = place;
+  cropZoomRow.hidden = place;
+  cropPresets.hidden = place;
+  placeHint.hidden = !place;
+  placeSize.hidden = !place;
+  placeScaleRow.hidden = !place;
+  if (!place) return;
+  const target = cropTargetLayer();
+  // An untouched placement follows the crop. Cropping on the other tab changes
+  // what centre and fit means, and a draft that ignored that would be placing a
+  // rectangle the file is never going to produce.
+  if (target && !placeTouched && !target.render) placeDraft = placeFitRect(target);
+  showPlaceScale();
+  drawPlaceStage();
+}
+
+/** The draft's size as a percentage of the fit, which is what 100% means. */
+function showPlaceScale() {
+  const fit = placeFitRect(cropTargetLayer());
+  const percent = (fit && placeDraft && fit.width)
+    ? clamp(Math.round((placeDraft.width / fit.width) * 100), PLACE_SCALE_MIN, PLACE_SCALE_MAX)
+    : 100;
+  placeScaleSlider.value = String(percent);
+  placeScaleValue.textContent = percent + '%';
+}
+
+function setPlaceScale(percent) {
+  const fit = placeFitRect(cropTargetLayer());
+  if (!fit || !placeDraft) return;
+  const p = clamp(Math.round(percent), PLACE_SCALE_MIN, PLACE_SCALE_MAX);
+  // Around its own centre, so scaling changes how big the picture is and not
+  // where it is. Growing from the top left corner would walk it across the
+  // frame and make the slider unusable for anything but a full-frame layer.
+  const cx = placeDraft.x + placeDraft.width / 2;
+  const cy = placeDraft.y + placeDraft.height / 2;
+  const width = Math.max(2, Math.round(fit.width * p / 100));
+  const height = Math.max(2, Math.round(fit.height * p / 100));
+  placeDraft = {
+    x: Math.round(cx - width / 2),
+    y: Math.round(cy - height / 2),
+    width,
+    height,
+  };
+  placeTouched = true;
+  placeScaleSlider.value = String(p);
+  placeScaleValue.textContent = p + '%';
+  drawPlaceStage();
+}
+
+placeScaleSlider.addEventListener('input', () => setPlaceScale(Number(placeScaleSlider.value)));
+
+/** Where a point on the stage is in project pixels. */
+function placePointAt(evt) {
+  const rect = placeStage.getBoundingClientRect();
+  const frame = projectFrame();
+  return {
+    x: (evt.clientX - rect.left) * frame.width / rect.width,
+    y: (evt.clientY - rect.top) * frame.height / rect.height,
+  };
+}
+
+const onPicture = (p) => !!placeDraft && p.x >= placeDraft.x && p.y >= placeDraft.y
+  && p.x <= placeDraft.x + placeDraft.width && p.y <= placeDraft.y + placeDraft.height;
+
+// Anywhere on the picture, because the box is moved whole and there is nothing
+// on it to grab. Outside it nothing happens, so a click on the grey beside a
+// small picture does not teleport it to the pointer.
+placeStage.addEventListener('pointerdown', (evt) => {
+  if (cropTab !== 'place' || !placeDraft) return;
+  const p = placePointAt(evt);
+  if (!onPicture(p)) return;
+  placeDrag = { dx: p.x - placeDraft.x, dy: p.y - placeDraft.y };
+  placeStage.setPointerCapture(evt.pointerId);
+  evt.preventDefault();
+});
+
+placeStage.addEventListener('pointermove', (evt) => {
+  if (cropTab !== 'place') return;
+  const p = placePointAt(evt);
+  if (!placeDrag) {
+    placeStage.style.cursor = onPicture(p) ? 'move' : 'default';
+    return;
+  }
+  placeDraft = {
+    ...placeDraft,
+    x: Math.round(p.x - placeDrag.dx),
+    y: Math.round(p.y - placeDrag.dy),
+  };
+  placeTouched = true;
+  drawPlaceStage();
+});
+
+function endPlaceDrag(evt) {
+  if (!placeDrag) return;
+  placeDrag = null;
+  if (placeStage.hasPointerCapture(evt.pointerId)) {
+    placeStage.releasePointerCapture(evt.pointerId);
+  }
+}
+placeStage.addEventListener('pointerup', endPlaceDrag);
+placeStage.addEventListener('pointercancel', endPlaceDrag);
+
+/**
+ * The output frame, sized the way the crop frame is sized.
+ *
+ * At the project's own aspect rather than at 16:9. The crop frame is always
+ * 16:9 so that the arrows around it and the hint above it never move; this one
+ * has no arrows and is a picture of the file, so a portrait project has to look
+ * portrait.
+ */
+function sizePlaceStage() {
+  const frame = projectFrame();
+  const panel = placePanel.parentElement;
+  let w = Math.round(panel.clientWidth * CROP_FRAME_SHARE);
+  let h = Math.round(w * frame.height / frame.width);
+  const maxH = Math.round(window.innerHeight * CROP_HEIGHT_SHARE);
+  if (h > maxH) {
+    h = maxH;
+    w = Math.round(h * frame.width / frame.height);
+  }
+  placeStage.style.width = w + 'px';
+  placeStage.style.height = h + 'px';
+  return { w, h };
+}
+
+function drawPlaceStage() {
+  const { w, h } = sizePlaceStage();
+  const dpr = window.devicePixelRatio || 1;
+  placeCanvas.width = Math.round(w * dpr);
+  placeCanvas.height = Math.round(h * dpr);
+  const ctx = placeCanvas.getContext('2d');
+  // No transform: drawImageArgs maps the project frame onto whatever size the
+  // canvas is, which is what the preview canvas does with its own too.
+  const target = cropTargetLayer();
+  // Everything except the layer being placed, which is drawn afterwards from
+  // the two drafts. It is drawn whether or not the playhead covers it: a layer
+  // the playhead has left is not in the composite, and placing a picture that
+  // is not on screen is placing it blind. Its decoder was parked on that
+  // layer's own first frame when the popup opened.
+  paintLayers(ctx, placeCanvas, compositeAt, null, target ? target.id : null);
+  if (target) drawLayerInto(ctx, placeCanvas, target, cropDraft, placeDraft);
+  drawPlaceBox(w, h);
+}
+
+/** Where the layer being placed lands, and the numbers under the stage. */
+function drawPlaceBox(w, h) {
+  const target = cropTargetLayer();
+  const frame = projectFrame();
+  const d = placeDraft;
+  placeBox.hidden = !d;
+  if (!d) {
+    placeSize.textContent = '';
+    return;
+  }
+  const kx = w / frame.width;
+  const ky = h / frame.height;
+  placeBox.style.left = Math.round(d.x * kx) + 'px';
+  placeBox.style.top = Math.round(d.y * ky) + 'px';
+  placeBox.style.width = Math.round(d.width * kx) + 'px';
+  placeBox.style.height = Math.round(d.height * ky) + 'px';
+  // Said rather than left to be worked out: a draft that is still the fit is
+  // what Accept will store as no position at all.
+  //
+  // Two calls rather than one with a ternary in it, for the reason spelled out
+  // over setProjectError: the checker sees a literal after t( and nothing else.
+  if (sameRect(d, placeFitRect(target))) {
+    placeSize.textContent = t('Centred and fitted, {w} x {h}',
+      { w: d.width, h: d.height });
+  } else {
+    placeSize.textContent = t('{w} x {h} at {x}, {y}',
+      { w: d.width, h: d.height, x: d.x, y: d.y });
+  }
+}
+
+cropTabFrame.addEventListener('click', () => showCropTab('frame'));
+cropTabPlace.addEventListener('click', () => showCropTab('place'));
 
 // The popup is sized against the window, so resizing it while the popup is open
 // has to redo the lot: the frame, the snapshot in it, and the box on top.
 function resizeCropStage() {
   if (cropModal.hidden || !cropDraft) return;
+  if (cropTab === 'place') {
+    drawPlaceStage();
+    return;
+  }
   const size = sourceSize();
   if (!size) return;
   sizeCropStage(size);
@@ -5944,8 +6884,10 @@ function placeCropDraft() {
   updateCropNote();
 }
 
-function setCropHint(mirrored, diagonal = false) {
-  if (mirrored && diagonal) {
+function setCropHint(mirrored, diagonal = false, locked = false) {
+  if (locked) {
+    cropHint.textContent = t('Locked: the frame keeps the shape selected below');
+  } else if (mirrored && diagonal) {
     cropHint.textContent = t('Mirrored and diagonal: all four borders, 1 px each');
   } else if (mirrored) {
     cropHint.textContent = t('Mirrored: both bars moving together, 1 px each');
@@ -6002,12 +6944,26 @@ function resizeEdge(lo0, hi0, limit, movesLo, mirrored, rawDelta, travelPx = Inf
 // stops a rounding error at 100%, where the window is the whole picture, from
 // quietly shaving two pixels off the far edge.
 function viewBounds(size) {
+  // 21e. The picture's own edges until extending is allowed, and a fixed
+  // allowance around it once it is. Never cropOuter, which grows with the frame
+  // and would therefore be no limit on it at all.
+  const lim = cropLimit(size);
+  // And at 100% the allowance is the whole of it, with no window to intersect.
+  // The window there is everything the stage holds, which is the frame itself
+  // once the frame is the larger of the two, so intersecting would hold the
+  // frame to its own size: the bar could not be dragged out by a single pixel,
+  // which is exactly what the first run of the probe measured.
+  //
+  // The reason for the intersection below is a zoom reason. It stays for one.
+  if (cropExtendable() && viewZoom <= 1) {
+    return { minX: lim.x, maxX: lim.x + lim.w, minY: lim.y, maxY: lim.y + lim.h };
+  }
   const v = viewWindow(size);
   return {
-    minX: Math.max(0, 2 * Math.ceil((v.x - 0.5) / 2)),
-    maxX: Math.min(size.w, 2 * Math.floor((v.x + v.w + 0.5) / 2)),
-    minY: Math.max(0, 2 * Math.ceil((v.y - 0.5) / 2)),
-    maxY: Math.min(size.h, 2 * Math.floor((v.y + v.h + 0.5) / 2)),
+    minX: Math.max(lim.x, 2 * Math.ceil((v.x - 0.5) / 2)),
+    maxX: Math.min(lim.x + lim.w, 2 * Math.floor((v.x + v.w + 0.5) / 2)),
+    minY: Math.max(lim.y, 2 * Math.ceil((v.y - 0.5) / 2)),
+    maxY: Math.min(lim.y + lim.h, 2 * Math.floor((v.y + v.h + 0.5) / 2)),
   };
 }
 
@@ -6033,11 +6989,15 @@ function beginDrag(el, evt, onMove, onDone) {
 // Shared by the bars and the corners: a drag is no longer whatever preset last
 // set the box, and the hint follows whether Shift is down. A drag is a real
 // edit of the box, so this is one of the places the anchor is rewritten.
-function applyDraft(shifted, diagonal = false) {
+function applyDraft(shifted, diagonal = false, locked = false) {
   const size = sourceSize();
-  setCropHint(shifted, diagonal);
-  cropActivePreset = null;
-  markActivePreset();
+  setCropHint(shifted, diagonal, locked);
+  clearActivePreset();
+  // 21e. The frame may have just crossed the edge of the picture, which changes
+  // what the stage has to hold and so what everything on it is drawn at. Before
+  // the box is placed and before the anchor is taken, both of which are read
+  // against the scale this settles.
+  if (size) refitCropView(size);
   placeCropDraft();
   if (size) captureCropAnchor(size);
 }
@@ -6059,14 +7019,48 @@ function bindGrip(grip) {
     const lo0 = vertical ? cropDraft.y : cropDraft.x;
     const hi0 = lo0 + (vertical ? cropDraft.height : cropDraft.width);
     const anchor = vertical ? evt.clientY : evt.clientX;
+    // 21e. The scale the gesture started at, not the live one. Dragging the
+    // frame out past the picture re-fits the stage under it, and reading the
+    // scale back each time would make the travel worth more source pixels the
+    // further it went: a drag that fed on itself rather than following the
+    // pointer. The box's place on the stage moves less and less instead, which
+    // is the picture shrinking inside a growing frame.
+    const scale0 = cropScale;
     setCropHint(evt.shiftKey);
     // Stops the pointerdown from also starting a move of the whole box.
     evt.stopPropagation();
 
+    // 21e-3. The shape to hold if the two modifiers are down, taken now for
+    // the reason cropLockRatio gives.
+    const locked = { ...cropDraft };
+    const ratio0 = cropLockRatio();
+
     beginDrag(grip, evt, (ev) => {
       const travel = (vertical ? ev.clientY : ev.clientX) - anchor;
+      if (ev.shiftKey && ev.ctrlKey && ratio0) {
+        // The edge opposite this bar stays put, and the other axis grows about
+        // its own middle so that changing the shape does not slide the box up
+        // or down the frame. A bar on the vertical drives the height, so what
+        // is asked for is converted through the ratio: one number drives both,
+        // which is what stops the two sides from disagreeing.
+        const grown = (vertical ? locked.height : locked.width)
+          + (movesLo ? -1 : 1) * (travel / scale0);
+        const rect = layerGeometry.ratioResize(locked, ratio0,
+          vertical
+            ? { x: 'mid', y: movesLo ? 'hi' : 'lo' }
+            : { x: movesLo ? 'hi' : 'lo', y: 'mid' },
+          vertical ? grown * ratio0 : grown, bounds, CROP_MIN);
+        if (rect) {
+          cropDraft.x = rect.x;
+          cropDraft.y = rect.y;
+          cropDraft.width = rect.width;
+          cropDraft.height = rect.height;
+          applyDraft(false, false, true);
+          return;
+        }
+      }
       const { lo, hi } = resizeEdge(lo0, hi0, limit, movesLo, ev.shiftKey,
-        travel / cropScale, travel, floor);
+        travel / scale0, travel, floor);
       if (vertical) {
         cropDraft.y = lo;
         cropDraft.height = hi - lo;
@@ -6096,12 +7090,38 @@ function bindCorner(dot) {
     const bounds = viewBounds(size);
     const anchorX = evt.clientX;
     const anchorY = evt.clientY;
+    // The scale the gesture started at, for the reason given on the bars.
+    const scale0 = cropScale;
     setCropHint(evt.shiftKey, evt.ctrlKey);
     evt.stopPropagation();
+
+    const ratio0 = cropLockRatio();
 
     beginDrag(dot, evt, (ev) => {
       let travelX = ev.clientX - anchorX;
       let travelY = ev.clientY - anchorY;
+      if (ev.shiftKey && ev.ctrlKey && ratio0) {
+        // The corner opposite this one stays put and the box grows away from
+        // it. Whichever way the pointer has travelled further is the axis that
+        // drives, so the drag answers to both directions rather than going
+        // dead in one of them, and the other side follows through the ratio.
+        const outX = (movesLeft ? -travelX : travelX) / scale0;
+        const outY = (movesTop ? -travelY : travelY) / scale0;
+        const want = Math.abs(travelY) > Math.abs(travelX)
+          ? (start.height + outY) * ratio0
+          : start.width + outX;
+        const rect = layerGeometry.ratioResize(start, ratio0,
+          { x: movesLeft ? 'hi' : 'lo', y: movesTop ? 'hi' : 'lo' },
+          want, bounds, CROP_MIN);
+        if (rect) {
+          cropDraft.x = rect.x;
+          cropDraft.y = rect.y;
+          cropDraft.width = rect.width;
+          cropDraft.height = rect.height;
+          applyDraft(false, false, true);
+          return;
+        }
+      }
       if (ev.ctrlKey) {
         // Averaged along the diagonal rather than taken per axis, so whatever
         // the pointer does the two borders move by the same amount. Which way
@@ -6114,9 +7134,9 @@ function bindCorner(dot) {
         travelY = movesTop ? along : -along;
       }
       const across = resizeEdge(start.x, start.x + start.width, bounds.maxX, movesLeft,
-        ev.shiftKey, travelX / cropScale, travelX, bounds.minX);
+        ev.shiftKey, travelX / scale0, travelX, bounds.minX);
       const down = resizeEdge(start.y, start.y + start.height, bounds.maxY, movesTop,
-        ev.shiftKey, travelY / cropScale, travelY, bounds.minY);
+        ev.shiftKey, travelY / scale0, travelY, bounds.minY);
       cropDraft.x = across.lo;
       cropDraft.width = across.hi - across.lo;
       cropDraft.y = down.lo;
@@ -6165,6 +7185,13 @@ cropBox.addEventListener('pointerdown', (evt) => {
     // so a long drag cannot shrink the box a pixel at a time.
     setCropAnchorFrom(rect);
     placeCropDraft();
+    // 21e. Not refitted here. A move cannot grow what the stage has to show,
+    // since it is held inside that already, but it can leave less of it in use,
+    // and re-fitting for that mid-gesture would slide the box out from under
+    // the pointer for nothing. Settled on release instead.
+  }, () => {
+    refitCropView(size);
+    placeCropDraft();
   });
 });
 
@@ -6200,8 +7227,7 @@ function setCropZoom(percent) {
   // and the slider cannot drift apart about what the zoom currently is.
   cropZoomSlider.value = String(Math.round(viewZoom * 100));
   cropZoomValue.textContent = Math.round(viewZoom * 100) + '%';
-  cropActivePreset = null;
-  markActivePreset();
+  clearActivePreset();
   paintCropFrame();
   placeCropDraft();
   updateCropArrows();
@@ -6268,8 +7294,7 @@ cropStage.addEventListener('pointerdown', (evt) => {
     viewPanY = panY0 - (ev.clientY - anchorY) / cropScale;
     applyView(size);
     cropDraft = sourceRectFromScreen(screen, size);
-    cropActivePreset = null;
-    markActivePreset();
+    clearActivePreset();
     paintCropFrame();
     placeCropDraft();
     updateCropArrows();
@@ -6285,16 +7310,30 @@ for (const preset of CROP_PRESETS) {
     // Fitted to what is on the frame, not to the whole picture: at a zoom the
     // largest 16:9 in the source would be far bigger than the frame can show,
     // and its edges would sit somewhere off in the part that is out of view.
+    //
+    // 21e. And to the part of the frame the picture is on, not to the room
+    // around it. That is the whole of "clicking any AR button restores the
+    // original frame size": a preset is never measured against an extension, so
+    // every one of them, Original included, is the way back inside the picture.
+    //
+    // Which means the stage is about to be holding the picture and nothing more,
+    // whatever it was holding a moment ago. Settled first, because every number
+    // below is measured at the scale and the pan this sets, and a preset worked
+    // out against a stage still zoomed out for an extension lands beside itself:
+    // measured at 22px, on an Original that should have been the whole picture.
+    cropDraft = fullRect(size);
+    refitCropView(size);
     const view = viewWindow(size);
-    const window_ = { w: evenDown(view.w), h: evenDown(view.h) };
+    const seen = pictureOnStage(size, view);
+    const window_ = { w: evenDown(seen.w), h: evenDown(seen.h) };
     const rect = preset.ratio === null ? fullRect(window_) : ratioRect(window_, preset.ratio);
     // Offset onto the picture, since what comes back is measured from the
     // corner of the visible window and sourceRectFromScreen wants a place on
     // the frame. Without this a preset on a clip that is not 16:9 lands a
     // bar's width off, which a 16:9 clip never shows because its bars are zero.
     const onFrame = {
-      left: cropPicture.left + rect.x * cropScale,
-      top: cropPicture.top + rect.y * cropScale,
+      left: cropPicture.left + (seen.x - view.x + rect.x) * cropScale,
+      top: cropPicture.top + (seen.y - view.y + rect.y) * cropScale,
       width: rect.width * cropScale,
       height: rect.height * cropScale,
     };
@@ -6302,13 +7341,14 @@ for (const preset of CROP_PRESETS) {
     // From what the preset asked for, not from what came back rounded.
     setCropAnchorFrom(onFrame);
     cropActivePreset = btn;
+    cropActiveRatio = preset.ratio;
     markActivePreset();
     placeCropDraft();
   });
   cropPresets.appendChild(btn);
 }
 
-function openCrop(layerId) {
+function openCrop(layerId, tab) {
   if (busy) return;
   if (timelineDriving()) {
     // Opened on a named row, or on whichever one is selected. Fixed here for
@@ -6331,8 +7371,7 @@ function openCrop(layerId) {
     && accepted.x + accepted.width <= size.w
     && accepted.y + accepted.height <= size.h;
   cropDraft = kept ? { ...accepted } : fullRect(size);
-  cropActivePreset = null;
-  markActivePreset();
+  clearActivePreset();
   // Back to the zoom and pan the crop was accepted at, so it opens on the view
   // it closed on rather than snapping out to the whole picture. The box is
   // carried in source pixels and drawn through that view, so it comes back the
@@ -6358,11 +7397,25 @@ function openCrop(layerId) {
   captureCropAnchor(size);
   updateCropArrows();
   setCropHint(false);
+  // Every opening starts on the crop, which is what the button that opened it
+  // says it does. The tabs themselves are advanced editing only.
+  cropTabs.hidden = !timelineDriving();
+  // Opened on whichever tab the caller asked for, which is how the two clip
+  // marks each land on their own. The button in the preview head asks for
+  // nothing and gets the crop, which is what it says it does.
+  // Wherever this layer is now, placed or not, so the position tab has a
+  // rectangle to drag the moment it is opened.
+  placeTouched = false;
+  placeDraft = target ? (target.render ? { ...target.render } : placeFitRect(target)) : null;
+  showCropTab(timelineDriving() && tab === 'place' ? 'place' : 'frame');
 }
 
 function closeCrop() {
   cropModal.hidden = true;
   cropDraft = null;
+  placeDraft = null;
+  placeDrag = null;
+  placeTouched = false;
   // Back to following the selection. Cleared after the modal is hidden and
   // before anything redraws, so nothing reads it as still open on a layer.
   cropLayerId = null;
@@ -6379,6 +7432,20 @@ cropCancelBtn.addEventListener('click', closeCrop);
 // saved again and the boxes come off the three frames. The same thing Original
 // then Accept does, without having to know that is what Original means.
 cropRemoveBtn.addEventListener('click', () => {
+  // V2.1. Whichever tab is up. On the crop it takes the crop off; on the
+  // position it puts the layer back to centre and fit. One button rather than
+  // two, because the tabs are two views of one layer and Remove means "take
+  // back what this tab does".
+  if (cropTab === 'place') {
+    if (cropLayerId) {
+      setLayers(timelineModel.setLayer(layers, cropLayerId, { render: null }));
+      commitHistory();
+    }
+    closeCrop();
+    updateCropOverlays();
+    updateCropBtn();
+    return;
+  }
   // Nothing left to come back to, so the next opening starts over.
   setCurrentCrop(null, null);
   commitHistory();
@@ -6396,7 +7463,20 @@ cropAcceptBtn.addEventListener('click', () => {
   // keeping alongside a crop: without one it would open zoomed into nothing.
   // One step for the whole popup: opening it on one side and accepting it on
   // the other, with nothing in between. The user set that boundary.
+  // V2.1. One Accept settles both tabs, which is the boundary the user drew
+  // when the popup gained the second one. A placement that is still the centre
+  // and fit is stored as null, for the same reason the whole frame is not a
+  // crop: it is what the geometry works out on its own, and writing it down
+  // would freeze it against a crop or a project frame that changes later.
+  const render = (placeDraft && !sameRect(placeDraft, placeFitRect(cropTargetLayer())))
+    ? { ...placeDraft }
+    : null;
   setCurrentCrop(rect, rect ? { zoom: viewZoom, panX: viewPanX, panY: viewPanY } : null);
+  // After the crop, and through the id rather than the layer object: setLayers
+  // has just replaced the array that object came out of.
+  if (cropLayerId) {
+    setLayers(timelineModel.setLayer(layers, cropLayerId, { render }));
+  }
   commitHistory();
   closeCrop();
   updateCropOverlays();
@@ -6405,8 +7485,19 @@ cropAcceptBtn.addEventListener('click', () => {
 
 // Backdrop only, matching the other popup: a click on the panel itself, or the
 // tail of a drag that ended outside the frame, must not throw the crop away.
+//
+// The second half of that was written here as an intention and never as code,
+// and it went unnoticed because a bar could not be dragged past the picture, so
+// the pointer rarely left the panel. 21e makes it the ordinary way to use the
+// popup. A click is dispatched to the nearest ancestor of where the press and
+// the release landed, which for a drag that ends out on the backdrop is the
+// backdrop, so the press has to be remembered rather than the release trusted.
+let cropPressedBackdrop = false;
+cropModal.addEventListener('pointerdown', (evt) => {
+  cropPressedBackdrop = evt.target === cropModal;
+});
 cropModal.addEventListener('click', (evt) => {
-  if (evt.target === cropModal) closeCrop();
+  if (evt.target === cropModal && cropPressedBackdrop) closeCrop();
 });
 
 // The note only applies while the copy path is selected, and that switch lives
@@ -6487,8 +7578,9 @@ async function saveClipTo(destination) {
     volume: volumePercent(),
   };
   // The frame it was measured against travels with it: a crop means nothing
-  // without one, and the main process clamps against that rather than trusting
-  // the rectangle to be inside the picture.
+  // without one, and since 21e the rectangle is not inside the picture in the
+  // first place. It is what the main process splits the rectangle against, into
+  // the part of the picture the frame covers and the room around it.
   const size = sourceSize();
   const crop = (cropRect && size)
     ? { ...cropRect, sourceWidth: size.w, sourceHeight: size.h }

@@ -272,7 +272,11 @@ progress {
 
 .preview-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  /* Step 21c-3. One number for both edges, so the mirroring is the shape of the
+     rule rather than two values that have to be kept agreeing. Unset it is
+     1fr 1fr 1fr, which is exactly the three equal columns this was before the
+     handles existed. */
+  grid-template-columns: var(--preview-side, 1fr) 1fr var(--preview-side, 1fr);
   gap: 10px;
   align-items: stretch;
   flex: 1;
@@ -285,6 +289,52 @@ progress {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  /* So a handle can hang in the gap beside it without anything having to work
+     out where the gap is. */
+  position: relative;
+}
+
+/* Step 21c-3. The handle between two frames, standing in the 10px the grid
+   already leaves between them, so showing it moves nothing on the screen. */
+.preview-splitter {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+  cursor: ew-resize;
+}
+
+.preview-splitter--left {
+  right: -10px;
+}
+
+.preview-splitter--right {
+  left: -10px;
+}
+
+/* A grip rather than a line down the frame: the gap is already a boundary, and
+   what is worth saying is that this one can be taken hold of. Upright, where
+   the one above the timeline lies flat, because that is the way each moves. */
+.preview-splitter::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 4px;
+  width: 2px;
+  height: 44px;
+  margin-top: -22px;
+  border-radius: 1px;
+  background: #3a3a42;
+}
+
+.preview-splitter:hover::before,
+body.splitting-side .preview-splitter::before {
+  background: #6f6f82;
+}
+
+body.splitting-side {
+  cursor: ew-resize;
+  user-select: none;
 }
 
 .preview-cell__title {
@@ -329,6 +379,15 @@ progress {
    whole of it to the spectrum, which is the one thing here that can use it. */
 .preview-section[data-audio="true"] .preview-grid {
   grid-template-rows: auto 1fr auto;
+  /* Step 21c-3. The spectrum spans all three columns here, so the only thing
+     the columns still do is carry the three control groups underneath it. A
+     split made for the frames would squeeze those for nothing, so it does not
+     come with them, and the handles are out of the way below. */
+  grid-template-columns: 1fr 1fr 1fr;
+}
+
+.preview-section[data-audio="true"] .preview-splitter {
+  display: none;
 }
 
 .preview-section[data-audio="true"] #startFrameStage,
@@ -539,6 +598,11 @@ progress {
   flex: 0 1 auto;
   min-height: 60px;
   background: #121214;
+  /* Step 21e. The crop outline is placed from the picture, and since 21e the
+     crop may reach outside it, so the box can want to be drawn past this stage.
+     Clipped here rather than by each overlay, which would need the stage's size
+     to do it and has no business knowing it. */
+  overflow: hidden;
 }
 
 .preview-video {
@@ -640,8 +704,66 @@ progress {
   font-size: 12px;
   font-weight: bold;
   white-space: nowrap;
-  /* The row behind it has a checkbox in it; nothing here should take a click. */
+  /* The row behind it has a checkbox in it; nothing here should take a click.
+     The boxes put it back for themselves below, which is the whole of what has
+     to be clickable here. */
   pointer-events: none;
+}
+
+/* The head is the resolution readout's home in advanced editing, and nothing
+   else in it means anything there. The Enabled tick is the global video switch
+   the V2 design removed: with every video layer off or gone there is no picture
+   to write, and outputIsAudio() works that out from the layers rather than from
+   a checkbox. The hint under it is about a media file this mode is not a view
+   of. Hidden rather than moved, because simple editing still needs both. */
+body.advanced #videoEnabledLabel,
+body.advanced .preview-head .hint-label {
+  display: none;
+}
+
+/* The boxes are ten pixels taller than the text this row was sized for, and the
+   readout is out of the flow so the row does not grow for them by itself. It
+   measured as five pixels of overhang into a six pixel margin, which fits and
+   would stop fitting the first time anything about the font changed. Room here
+   instead, with the title centred against the boxes rather than sitting on a
+   baseline they hang either side of. */
+body.advanced .preview-head {
+  min-height: 26px;
+  align-items: center;
+}
+
+.render-resolution__edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  /* display beats the browser's rule for [hidden], and this stylesheet has been
+     caught by that four times already. */
+  pointer-events: auto;
+}
+
+.render-resolution__edit[hidden] {
+  display: none;
+}
+
+/* A separator between two numbers rather than a word, so it is drawn here and
+   never goes looking for a translation. */
+.render-resolution__x::before {
+  content: 'x';
+  font-weight: normal;
+  color: #8a8a96;
+}
+
+.render-resolution__box {
+  width: 52px;
+  padding: 2px 4px;
+  font-size: 12px;
+  font-weight: bold;
+  text-align: center;
+}
+
+.render-resolution__box:disabled {
+  color: #6e6e78;
+  border-color: #33333a;
 }
 
 /* The title carries its own bottom margin for the normal stacked case; inside
@@ -848,6 +970,53 @@ progress {
   margin-bottom: 0;
 }
 
+/* Step 21c. The handle between the preview and the timeline. It takes the
+   10px the preview's own margin was leaving there, so the column is exactly as
+   tall with it as without. Advanced editing only: the Trim frame it would sit
+   above in simple editing is three fixed rows and has no height to give. */
+.splitter {
+  display: none;
+  flex: none;
+  height: 10px;
+  position: relative;
+  cursor: ns-resize;
+}
+
+body.advanced .splitter {
+  display: block;
+}
+
+body.advanced .preview-section {
+  margin-bottom: 0;
+}
+
+/* A grip rather than a line across the window. The gap between two frames is
+   already a boundary; what is worth saying is that this one can be taken hold
+   of. */
+.splitter::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 4px;
+  width: 44px;
+  height: 2px;
+  margin-left: -22px;
+  border-radius: 1px;
+  background: #3a3a42;
+}
+
+.splitter:hover::before,
+body.splitting .splitter::before {
+  background: #6f6f82;
+}
+
+/* Through the whole drag, so crossing a frame does not put an I-beam over the
+   pointer and a stray selection does not follow it up the window. */
+body.splitting {
+  cursor: ns-resize;
+  user-select: none;
+}
+
 /* The layout switch. Exactly one frame is in the flow at a time, so with
    advanced editing off the column is laid out the way it was before the
    timeline existed. */
@@ -1049,9 +1218,15 @@ body.advanced .timeline-section {
 
 /* The rows, as tall as they need to be until there are more than about five,
    and scrolling under the pinned ruler after that. A fixed height would either
-   waste the frame on an empty timeline or cut the third layer in half. */
+   waste the frame on an empty timeline or cut the third layer in half.
+
+   Step 21c. The splitter sets one property and both of these follow it: unset,
+   the rule is the content-driven one it has always been; set, the two agree on
+   the same number and the stack is exactly that tall. The two states are one
+   line apart, and neither of them is an inline style fighting this rule. */
 .timeline-stack {
-  max-height: 240px;
+  max-height: var(--split-stack, 240px);
+  min-height: var(--split-stack, 0px);
   overflow-y: auto;
   overflow-x: hidden;
 }
@@ -1467,6 +1642,13 @@ body.layer-trimming * {
   font-size: 12px;
 }
 
+/* A square with one corner filled, which is what placing a layer in a corner of
+   the frame looks like. Sized with the group marker rather than with the crop
+   glyph beside it, which is drawn heavier at the same point size. */
+.clip-mark--place {
+  font-size: 12px;
+}
+
 /* A layer that is actually cropped says so without the popup having to be
    opened to find out. Same green the Crop button in the preview head uses for
    the same state. */
@@ -1868,6 +2050,55 @@ body.layer-trimming * {
 
 /* ---- crop popup ---- */
 
+/* V2.1. The two tabs, sitting under the title and over whichever stage is up.
+   Centred, because the popup is centred and a left aligned pair under a centred
+   title reads as a mistake. */
+.crop-tabs {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.crop-tab {
+  min-width: 140px;
+}
+
+/* The output frame, at the project's aspect. The picture in it is drawn by the
+   same painter as the preview, so the grey is only what the frame shows through
+   where no layer covers it. */
+.place-panel {
+  display: flex;
+  justify-content: center;
+}
+
+.place-stage {
+  position: relative;
+  background: #121214;
+  border: 1px solid #3a3a42;
+  /* A render rectangle is allowed to hang off the edge of the frame, which is
+     what makes sliding a layer out of shot possible. overlay clips it in the
+     file and the preview canvas clips it on screen, so the box over the stage
+     has to be clipped too: without this it is drawn out over the popup buttons,
+     claiming room the output does not have. */
+  overflow: hidden;
+}
+
+.place-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Where the layer being placed lands. An outline only while the tab is read
+   only; the grips arrive with the dragging. */
+.place-box {
+  position: absolute;
+  border: 1px solid #78c88c;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+
 .modal__panel--crop {
   width: 80vw;
   max-width: none;
@@ -2084,6 +2315,21 @@ body.layer-trimming * {
   justify-content: center;
   gap: 8px;
   margin-top: 6px;
+}
+
+/* display: flex beats the hidden attribute, so the tab that is not up needs
+   saying twice. The same explicit case the progress row already carries. */
+.crop-zoom[hidden],
+.crop-presets[hidden],
+.place-panel[hidden] {
+  display: none;
+}
+
+/* The cursor says what the pointer is over, and it is set from the hit test
+   rather than from the class: the picture can be anywhere in the frame, and a
+   move cursor over the empty grey would promise a drag that does nothing. */
+.place-stage {
+  cursor: default;
 }
 
 .crop-zoom__caption {

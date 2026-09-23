@@ -345,3 +345,24 @@ test('a layer carries the rate its source was probed at', () => {
   assert.equal(T.createLayer({ type: 'audio', sourceDuration: 10 }).sourceFps, 0);
   assert.equal(T.createLayer({ type: 'video', sourceFps: -5 }).sourceFps, 0);
 });
+
+test('a layer carries its render rectangle, and null is centre and fit', () => {
+  // V2.1. Until this field existed createLayer dropped it, and every layer
+  // goes through createLayer on project open and on every undo: a position set
+  // in the popup would have been put back in the middle of the frame by
+  // Ctrl+Z. The geometry has read layer.render since Step 2.
+  const rect = { x: 40, y: 20, width: 960, height: 540 };
+  assert.deepEqual(video({ render: rect }).render, rect);
+  assert.equal(video().render, null);
+});
+
+test('a render rectangle survives a round trip through the model', () => {
+  // setLayer is what the popup will write through, and reorderLayer is the
+  // kind of operation that rebuilds the array around a layer. Neither may lose
+  // the placement on the way past.
+  const rect = { x: -200, y: 0, width: 1920, height: 1080 };
+  const one = video({ render: rect });
+  const two = video();
+  const moved = T.reorderLayer(T.setLayer([one, two], one.id, { render: rect }), one.id, 1);
+  assert.deepEqual(T.layerById(moved, one.id).render, rect);
+});

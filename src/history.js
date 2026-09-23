@@ -80,16 +80,20 @@ const projectHistory = (() => {
    * Order matters, because a reorder is a real change even though the same
    * layers are present either way: the array is the draw order.
    *
-   * `fps` is the project's render rate, and it is compared as 0 when it is
-   * absent so a snapshot taken before Step 16 added it does not read as a
-   * change. It is here rather than left out with the rest of the project frame
-   * because the dropdown that sets it is a gesture like any other: without it
-   * the stack would drop the very step the user just took.
+   * `fps`, `width` and `height` are the project frame. All three are compared
+   * as 0 when absent, so a snapshot taken before the field existed does not read
+   * as a change. They are here rather than left out with the rest of the
+   * project's state because the controls that set them are gestures like any
+   * other: without them the stack would drop the very step the user just took.
+   * The rate came in with Step 16's dropdown, the size with V2.1's resolution
+   * boxes.
    */
   function sameState(a, b) {
     if (!a || !b) return a === b;
     if (a.start !== b.start || a.end !== b.end) return false;
     if ((a.fps || 0) !== (b.fps || 0)) return false;
+    if ((a.width || 0) !== (b.width || 0)) return false;
+    if ((a.height || 0) !== (b.height || 0)) return false;
     if (a.layers.length !== b.layers.length) return false;
     return a.layers.every((l, i) => sameLayer(l, b.layers[i]));
   }

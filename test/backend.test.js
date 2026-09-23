@@ -162,10 +162,18 @@ test('cropFilter treats the whole frame as no crop at all', () => {
   assert.equal(backend.cropFilter(null), null);
 });
 
-test('cropFilter clamps a rectangle that runs off the frame', () => {
+// ---- V2.1 step 21e: the frame may reach outside the source ----
+//
+// The two tests below used to assert that a rectangle running off the picture
+// was clamped back onto it. Since 21e that is not a mistake to be corrected but
+// the thing being asked for: the frame grows and the picture sits inside it.
+// The guards against a number nobody meant are still here, further down.
+
+test('a rectangle reaching past a corner keeps the frame it asked for', () => {
   const args = backend.cropFilter(
     { x: 1800, y: 1000, width: 4000, height: 4000, sourceWidth: 1920, sourceHeight: 1080 });
-  assert.equal(args, 'crop=120:80:1800:1000');
+  // The 120x80 corner that is really there, in the top left of a 4000 square.
+  assert.equal(args, 'crop=120:80:1800:1000,pad=4000:4000:0:0:black');
 });
 
 test('cropFilter refuses anything it cannot trust', () => {
@@ -180,10 +188,47 @@ test('cropFilter refuses anything it cannot trust', () => {
   }
 });
 
-test('cropFilter keeps a negative offset inside the frame', () => {
+test('a negative offset is room above and to the left of the picture', () => {
   assert.equal(
     backend.cropFilter({ x: -40, y: -10, width: 320, height: 240, sourceWidth: 640, sourceHeight: 480 }),
-    'crop=320:240:0:0');
+    'crop=280:230:0:0,pad=320:240:40:10:black');
+});
+
+test('a frame larger than the source on both axes sits the picture in the middle', () => {
+  // 640x480 centred in 960x660: 160 either side and 90 above and below.
+  assert.equal(
+    backend.cropFilter({ x: -160, y: -90, width: 960, height: 660, sourceWidth: 640, sourceHeight: 480 }),
+    'crop=640:480:0:0,pad=960:660:160:90:black');
+});
+
+test('a frame the size of the source is still no crop at all', () => {
+  // Exactly, not merely as large: one pixel more is the new room, and the new
+  // room is the whole point of 21e.
+  assert.equal(
+    backend.cropFilter({ x: 0, y: 0, width: 640, height: 480, sourceWidth: 640, sourceHeight: 480 }),
+    null);
+  assert.equal(
+    backend.cropFilter({ x: 0, y: 0, width: 642, height: 480, sourceWidth: 640, sourceHeight: 480 }),
+    'crop=640:480:0:0,pad=642:480:0:0:black');
+});
+
+test('a frame dragged clear of the picture is refused', () => {
+  // pad would be asked to place a zero-sized image, and there is nothing to
+  // save either way.
+  for (const gone of [
+    { x: 2000, y: 0, width: 320, height: 240 },
+    { x: 0, y: -400, width: 320, height: 240 },
+    { x: -320, y: 0, width: 320, height: 240 },
+  ]) {
+    assert.equal(backend.cropFilter({ ...gone, sourceWidth: 1920, sourceHeight: 1080 }), null);
+  }
+});
+
+test('a frame nobody meant is held to a ceiling rather than passed on', () => {
+  // All of it arrives over IPC. The popup cannot ask for this; a bad number can.
+  assert.equal(
+    backend.cropFilter({ x: 0, y: 0, width: 99999, height: 99999, sourceWidth: 1920, sourceHeight: 1080 }),
+    'crop=1920:1080:0:0,pad=7680:7680:0:0:black');
 });
 
 test('containerFor only reads the extension, not the rest of the path', () => {

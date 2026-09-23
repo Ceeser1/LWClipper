@@ -238,3 +238,30 @@ test('the stack stops growing at the limit and drops the oldest step', () => {
   assert.equal(h.past[0].layers[0].start, 10);
   assert.equal(h.past[H.LIMIT - 1].layers[0].start, H.LIMIT + 9);
 });
+
+// ---- V2.1, 21b: the project's size is a gesture too ----
+
+test('a resize is a step of its own', () => {
+  const a = { ...state([video()]), width: 1280, height: 720 };
+  const b = { ...a, width: 1920, height: 1080 };
+  const h = H.commit(H.create(a), b);
+  assert.equal(H.canUndo(h), true);
+  assert.deepEqual(H.undo(h).present, a);
+});
+
+test('a snapshot from before the project had a size says nothing about it', () => {
+  // The trap: a project takes its shape from a decoder some time after the
+  // layer that asked for it was added and committed, so the step behind the
+  // first resize holds no size at all. Reading that as "no size" would make
+  // Ctrl+Z either unseed the project or refuse to move.
+  const old = state([video()]);
+  assert.equal(H.sameState(old, { ...old, width: 0, height: 0 }), true);
+  assert.equal(H.sameState(old, { ...old, width: 1920, height: 1080 }), false);
+});
+
+test('the width and the height are compared separately', () => {
+  const a = { ...state([]), width: 1920, height: 1080 };
+  assert.equal(H.sameState(a, { ...a, height: 816 }), false);
+  assert.equal(H.sameState(a, { ...a, width: 1440 }), false);
+  assert.equal(H.sameState(a, { ...a }), true);
+});
