@@ -27,8 +27,8 @@ contextBridge.exposeInMainWorld('lwclipper', {
   audioPeaks: (filePath, duration, buckets) =>
     ipcRenderer.invoke('audio:peaks', { filePath, duration, buckets }),
   abortAudioPeaks: () => ipcRenderer.invoke('audio:abortPeaks'),
-  filmstrip: (filePath, duration, tiles) =>
-    ipcRenderer.invoke('video:filmstrip', { filePath, duration, tiles }),
+  filmstrip: (filePath, duration, tiles, at) =>
+    ipcRenderer.invoke('video:filmstrip', { filePath, duration, tiles, at }),
   openAudioTrack: () => ipcRenderer.invoke('dialog:openAudio'),
   saveAsDialog: (title, isAudio, format, isProject) =>
     ipcRenderer.invoke('dialog:saveAs', { title, isAudio, format, isProject }),

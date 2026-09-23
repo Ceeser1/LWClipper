@@ -3013,6 +3013,7 @@ function setLayers(next) {
   if (selectedLayerId && !timelineModel.layerById(layers, selectedLayerId)) {
     selectedLayerId = null;
   }
+  dropUnusedStrips();
   renderLayerRows();
   syncComposite();
   // Before the redraw: the markers are placed from the slider, so the slider
@@ -3564,9 +3565,21 @@ function placeClipMarks(clip, width, from, visible, gripW) {
 // requested when the view has zoomed past what the current one can draw, and
 // the coarse one keeps being drawn until the finer one arrives, so zooming
 // never blanks the strip it is refining.
+//
+// Step 21d. A filmstrip is no longer one sheet. Past the density a single sheet
+// can hold, a sheet covers a window of the source instead of all of it, so a
+// layer holds several: the whole-clip one, which covers every second of it and
+// is what keeps the strip drawn, and the windows the view is over. A column
+// draws from the densest sheet that covers its own second of the source.
 
-const stripCache = new Map();   // src -> { want, tiles, info, img, pending }
+const stripCache = new Map();   // src -> { sheets, pending, dead, maxDensity }
 const peakCache = new Map();    // src -> { want, buckets, peaks, pending }
+
+// How many windowed sheets one layer holds. The visible span can straddle one
+// boundary and never more than one, so two is enough to draw with and the third
+// is what makes panning back across a boundary free. This is memory rather than
+// bookkeeping: each one is a decoded JPEG of up to about 2300x1900.
+const STRIP_SHEETS = 3;
 
 function clipArtColours(type) {
   return type === 'audio'
@@ -3574,29 +3587,121 @@ function clipArtColours(type) {
     : { wave: '#8fa8d8', mid: 'rgba(200, 215, 240, 0.3)' };
 }
 
-async function ensureStrip(layer, want) {
+/**
+ * Forget the sheets of sources no layer holds any more.
+ *
+ * Step 21d, and it is about memory rather than tidiness. A sheet is a decoded
+ * JPEG of up to about 2300x1900, and a source now keeps up to four of them
+ * where it used to keep one, so a session that opened several long clips in
+ * turn would hold every sheet it had ever fetched for the rest of its life.
+ *
+ * The peaks are left alone: an audio layer's entry is an array of numbers, and
+ * it was not costing anything before this step either.
+ */
+function dropUnusedStrips() {
+  const used = new Set(layers.map((l) => l.src));
+  for (const src of [...stripCache.keys()]) {
+    if (!used.has(src)) stripCache.delete(src);
+  }
+}
+
+/**
+ * The sheet to draw second `at` of the source from: the densest one covering it.
+ *
+ * Thumbnails per second is what makes two sheets comparable when one covers the
+ * whole clip in 1024 and another covers a sixteenth of it in 1024.
+ */
+function sheetAt(entry, at) {
+  let best = null;
+  for (const sheet of (entry && entry.sheets) || []) {
+    const { start, span, tiles } = sheet.info;
+    // Inclusive at the far end, so the last second of the clip is covered by
+    // the window that ends on it rather than by nothing.
+    if (at < start || at > start + span) continue;
+    if (!best || tiles / span > best.info.tiles / best.info.span) best = sheet;
+  }
+  return best;
+}
+
+/** The whole-clip sheet, the one that covers every second of the source. */
+const wholeSheet = (entry) =>
+  ((entry && entry.sheets) || []).find((s) => s.info.chunks === 1) || null;
+
+/**
+ * The sheets worth keeping once another has arrived.
+ *
+ * A sheet covering the same window replaces the one that was there, which is
+ * what carries a whole-clip sheet from 32 thumbnails up to 1024 as the view
+ * zooms without leaving the coarse ones lying about. The whole-clip sheet
+ * itself is never evicted: it is the fallback the strip stays drawn from.
+ */
+function keepSheets(sheets, added) {
+  const key = (s) => s.info.chunks + ':' + s.info.index;
+  const kept = [added, ...sheets.filter((s) => key(s) !== key(added))];
+  const whole = kept.find((s) => s.info.chunks === 1);
+  const windows = kept.filter((s) => s !== whole).slice(0, STRIP_SHEETS);
+  return whole ? [...windows, whole] : windows;
+}
+
+/**
+ * Make sure something dense enough to draw second `at` of this layer exists.
+ *
+ * One request in flight per source, as before: a reply calls drawTimeline, which
+ * asks again for whatever is still missing, so two windows on screen are fetched
+ * one after the other rather than at once.
+ */
+async function ensureStrip(layer, want, at) {
   const entry = stripCache.get(layer.src);
-  if (entry && entry.pending) return;
-  // tilesFor doubles, so asking again for a want the current entry already
-  // satisfies would fetch the same sheet forever.
-  if (entry && entry.want >= want) return;
-  stripCache.set(layer.src, { ...(entry || {}), want, pending: true });
+  if (entry && (entry.pending || entry.dead)) return;
+  const sheets = (entry && entry.sheets) || [];
+
+  // The whole-clip sheet comes first whatever the zoom is, because it is the
+  // one that covers every second of the source. A project opened already zoomed
+  // in would otherwise have nothing to draw the moment it panned past the edge
+  // of the one window it had fetched. Asking with no want is asking for the
+  // coarsest, which is a sheet that cannot be windowed.
+  let ask = want;
+  let askAt = at;
+  if (!wholeSheet(entry)) {
+    ask = 0;
+    askAt = 0;
+  } else {
+    // What the view is asking for, in thumbnails per second of source, held to
+    // what this source can be extracted at. Past that the reply is the same
+    // sheet every time, and asking for it on every frame is what this would
+    // otherwise become.
+    const density = Math.min(
+      layer.sourceDuration > 0 ? want / layer.sourceDuration : 0,
+      entry.maxDensity || Infinity);
+    const have = sheetAt(entry, at);
+    if (have && have.info.tiles / have.info.span >= density) return;
+  }
+
+  stripCache.set(layer.src, { ...(entry || {}), sheets, pending: true });
   try {
-    const result = await window.lwclipper.filmstrip(layer.src, layer.sourceDuration, want);
+    const result = await window.lwclipper
+      .filmstrip(layer.src, layer.sourceDuration, ask, askAt);
+    const now = stripCache.get(layer.src) || {};
     if (!result.ok || !result.data) {
       // No video stream, or ffmpeg could not read one. The clip keeps its plain
       // bar rather than the frame going quiet about it.
-      stripCache.set(layer.src, { want: Infinity, pending: false });
+      stripCache.set(layer.src, { ...now, dead: true, pending: false });
       return;
     }
     const url = await window.lwclipper.fileUrl(result.data.file);
     const img = new Image();
     img.src = url;
     await img.decode().catch(() => {});
-    stripCache.set(layer.src, { want, info: result.data, img, pending: false });
+    stripCache.set(layer.src, {
+      ...now,
+      sheets: keepSheets(now.sheets || [], { info: result.data, img }),
+      maxDensity: result.data.maxDensity,
+      pending: false,
+    });
     drawTimeline();
   } catch {
-    stripCache.set(layer.src, { want: Infinity, pending: false });
+    stripCache.set(layer.src,
+      { ...(stripCache.get(layer.src) || {}), dead: true, pending: false });
   }
 }
 
@@ -3667,31 +3772,43 @@ function cropWindow(layer) {
 
 function drawClipFilmstrip(layer, ctx, leftX, width, height) {
   const entry = stripCache.get(layer.src);
-  const info = entry && entry.info;
   // Step 11. The sheet holds whole source frames, so a crop is the same
   // fractions of a tile that it is of the frame, and the strip shows what the
   // render will rather than what the file happens to contain.
   const win = cropWindow(layer);
-  const tileW = info ? info.tileWidth * win.w : 0;
-  const tileH = info ? info.tileHeight * win.h : 0;
+  // Any sheet answers for the tile size: every sheet of one source has the same
+  // one, since it comes from the source frame and the extraction height and not
+  // from how much of the clip the sheet covers.
+  const sized = entry && entry.sheets && entry.sheets[0];
+  const tileW = sized ? sized.info.tileWidth * win.w : 0;
+  const tileH = sized ? sized.info.tileHeight * win.h : 0;
   // How wide one thumbnail is on screen once scaled to the row's height. The
   // cropped part of it, so a 9:16 crop shows as a narrow thumbnail.
-  const drawW = info ? Math.max(4, tileW * (height / tileH)) : 48;
-  // Thumbnails across the whole source, which is what the sheet holds. It
-  // follows the zoom and not the clip's length: thirty minutes at fit-to-width
-  // asks for the same handful a thirty second clip does.
+  const drawW = sized ? Math.max(4, tileW * (height / tileH)) : 48;
+  // Thumbnails across the whole source. It follows the zoom and not the clip's
+  // length: thirty minutes at fit-to-width asks for the same handful a thirty
+  // second clip does. Past what one sheet holds it is the density that carries
+  // on rising, and the sheets cover windows instead of the whole source.
   const want = Math.ceil((layer.sourceDuration * tlView.scale) / drawW);
-  ensureStrip(layer, want);
-  if (!info || !entry.img) return;
+  const atFor = (px) =>
+    timelineModel.sourceTimeFor(layer, timelineView.xToTime(tlView, leftX + px));
+  // Step 21d. Both ends of what is on screen, because the visible span can
+  // straddle one window boundary. Only one of the two can start a fetch, and
+  // the other is asked again on the redraw that fetch ends with.
+  ensureStrip(layer, want, atFor(0));
+  ensureStrip(layer, want, atFor(Math.max(0, width - 1)));
+  if (!entry || !entry.sheets || !entry.sheets.length) return;
 
   for (let px = 0; px < width; px += drawW) {
-    const t = timelineView.xToTime(tlView, leftX + px);
-    const at = timelineModel.sourceTimeFor(layer, t);
+    const at = atFor(px);
+    const sheet = sheetAt(entry, at) || wholeSheet(entry);
+    if (!sheet) continue;
+    const info = sheet.info;
     const index = Math.min(info.tiles - 1,
-      Math.max(0, Math.floor(at / info.interval)));
+      Math.max(0, Math.floor((at - info.start) / info.interval)));
     const sx = (index % info.cols) * info.tileWidth + info.tileWidth * win.x;
     const sy = Math.floor(index / info.cols) * info.tileHeight + info.tileHeight * win.y;
-    ctx.drawImage(entry.img, sx, sy, tileW, tileH,
+    ctx.drawImage(sheet.img, sx, sy, tileW, tileH,
       px, 0, Math.min(drawW, width - px), height);
   }
 }
@@ -5790,15 +5907,20 @@ function fitWindow() {
 }
 
 /**
- * Step 21c. One video track and one audio track, which is the floor the
- * timeline keeps. Measured on 2026-09-20 rather than read off the stylesheet:
- * an empty advanced project already shows one empty video row and one empty
- * audio row, and a loaded project carries those two as well as its own, so the
- * smallest real project is four rows of 48. The 96 that two rows would give is
- * the letter of it, and it would put a one-video one-audio project into a
- * scrollbar the moment the handle reached the floor.
+ * How little of the timeline's tracks the handle may leave: none of them.
+ *
+ * This was 192 until 2026-09-23, four rows of 48, on the reasoning that a
+ * one-video one-audio project should not be pushed into a scrollbar by its own
+ * floor. The user asked for the other thing: the preview should go on growing
+ * "until timeline has only the header/title left". A floor that keeps four rows
+ * back is a floor that decides for them how much timeline they want to see.
+ *
+ * Nothing is left showing tracks at zero, which is the point, and the section
+ * keeps its header row and its ruler because neither is in the stack. Dragging
+ * back up brings the rows out from under the ruler they already sit below, so
+ * there is nothing to reappear and nothing to jump.
  */
-const SPLIT_STACK_FLOOR = 192;
+const SPLIT_STACK_FLOOR = 0;
 
 /** The height the stack is held at, or null while the split is still the stylesheet's. */
 let splitWish = null;
@@ -6100,7 +6222,12 @@ editSplitter.addEventListener('pointermove', (evt) => {
   // Measured from where the stack was when the pointer went down rather than
   // from where it is now, so a pointer that runs past a floor and comes back
   // lands where it started instead of a drag's worth of travel away from it.
-  const wish = splitFrom.stack + (evt.clientY - splitFrom.y);
+  //
+  // Minus, because the stack is below the handle. Dragging down moves the
+  // boundary down, which is the preview above it growing and the timeline
+  // below it giving the room up. This was a plus until 2026-09-23 and the
+  // whole thing ran backwards.
+  const wish = splitFrom.stack - (evt.clientY - splitFrom.y);
   if (windowMaxed) {
     // Written into the maximized share, so a drag made up there does not follow
     // the window back down, and is still there on the next maximize.

@@ -27,13 +27,20 @@ const TILE_HEIGHT = 48;
 // from there as the view zooms in.
 const BASE_TILES = 32;
 
-// The ceiling, and it is a real limit rather than a formality: past this the
-// sheet is a 2300x1900 JPEG and the extraction pass is reading most of the
-// file. A clip zoomed in past the density this affords repeats thumbnails
-// rather than extracting more, which is the honest failure and is visible
-// rather than slow. Extracting only the visible span at high density is the
-// proper answer and is not built.
+// The most thumbnails one sheet holds. Past this the JPEG is about 2300x1900,
+// which is as large as a sheet should get for something a canvas decodes on the
+// way to drawing one row of it.
+//
+// Step 21d. It is no longer the ceiling on density, only on one sheet: past it
+// the sheet stops covering the whole source and covers a window of it instead.
 const MAX_TILES = 1024;
+
+// Thumbnails per second of source that no view could use, which is what bounds
+// the window count. Past 30 a window holds more tiles than the source has
+// frames, and the strip cannot show more than one per thumbnail-width of screen
+// anyway: the finest zoom is 400px per second against an 85px thumbnail, which
+// is under five. This leaves a window no shorter than about 34 seconds.
+const MAX_DENSITY = 30;
 
 // Sheet columns. Keeps the JPEG within sizes every canvas implementation is
 // happy to decode, while keeping the grid arithmetic trivial.
@@ -49,10 +56,15 @@ function stripDir() {
   return dir;
 }
 
-function cacheKeyFor(filePath, tiles) {
+// The window is in the key as well as the tile count, or the second window of a
+// clip would be served the first one's sheet.
+function cacheKeyFor(filePath, plan) {
   const st = fs.statSync(filePath);
   return crypto.createHash('sha1')
-    .update([filePath.toLowerCase(), st.size, Math.round(st.mtimeMs), tiles, TILE_HEIGHT].join('|'))
+    .update([
+      filePath.toLowerCase(), st.size, Math.round(st.mtimeMs),
+      plan.tiles, plan.chunks, plan.index, TILE_HEIGHT,
+    ].join('|'))
     .digest('hex');
 }
 
@@ -141,6 +153,68 @@ function tilesFor(want) {
   return Math.min(n, MAX_TILES);
 }
 
+/**
+ * The most windows a source of this length is ever cut into.
+ *
+ * A power of two, so that every boundary at one level is also a boundary at the
+ * next: that is what makes a coarser sheet a strict ancestor of a finer one,
+ * and what lets the coarse one keep being drawn while the fine one is fetched.
+ */
+function maxChunks(duration) {
+  if (!(duration > 0)) return 1;
+  const ceiling = Math.floor((duration * MAX_DENSITY) / MAX_TILES);
+  let n = 1;
+  while (n * 2 <= ceiling) n *= 2;
+  return n;
+}
+
+/**
+ * How many windows to cut the source into for a view that wants `want`
+ * thumbnails across the whole of it.
+ *
+ * One while the whole source still fits in a sheet, which is every clip of
+ * about three minutes or less even at the finest zoom, so nothing short ever
+ * leaves the path it was on before this existed.
+ */
+function chunksFor(want, duration) {
+  const most = maxChunks(duration);
+  let n = 1;
+  while (n * MAX_TILES < want && n < most) n *= 2;
+  return n;
+}
+
+/**
+ * The finest density this source can be extracted at, in thumbnails per second.
+ *
+ * Handed back to the caller because a view zoomed past it would otherwise ask
+ * for something finer on every frame, get the same sheet back, and ask again.
+ */
+function maxDensityFor(duration) {
+  if (!(duration > 0)) return 0;
+  return (maxChunks(duration) * MAX_TILES) / duration;
+}
+
+/**
+ * Which sheet answers a view that wants `want` thumbnails across the source and
+ * is looking at second `at` of it.
+ *
+ * duration / chunks divides evenly, so every window is the same length: there is
+ * no short last one and no half-filled grid.
+ */
+function planFor(want, duration, at = 0) {
+  const chunks = chunksFor(want, duration);
+  const span = duration / chunks;
+  const seconds = Number.isFinite(at) ? Math.max(0, at) : 0;
+  const index = Math.min(chunks - 1, Math.floor(seconds / span));
+  return {
+    chunks,
+    index,
+    span,
+    start: index * span,
+    tiles: tilesFor(Math.ceil(Math.max(0, want || 0) / chunks)),
+  };
+}
+
 /** The grid a given number of thumbnails is laid out in. */
 function gridFor(tiles) {
   const cols = Math.min(COLS, Math.max(1, tiles));
@@ -163,29 +237,37 @@ function sheetSize(file) {
   }
 }
 
-function extract(filePath, duration, tiles, dest) {
+function extract(filePath, plan, dest) {
   return new Promise((resolve, reject) => {
     const ffmpeg = toolPaths.findFfmpeg();
     if (!ffmpeg) return reject(new Error('ffmpeg.exe was not found alongside the app.'));
-    const { cols, rows } = gridFor(tiles);
+    const { cols, rows } = gridFor(plan.tiles);
 
     // fps rather than a seek per thumbnail: one pass decoding forward beats N
     // passes each seeking to a keyframe and decoding from there. The rate is
-    // tiles per second of source, so thumbnail i is the frame at i*duration
-    // /tiles and covers the span from there to the next one.
+    // tiles per second of the window, so thumbnail i is the frame at
+    // start + i*span/tiles and covers from there to the next one.
     //
     // -an because there is no reason to decode the audio, and tile's own
     // padding is left at zero so the grid arithmetic is a plain divide.
-    const rate = tiles / Math.max(duration, 0.001);
-    const child = spawn(ffmpeg, [
-      '-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
-      '-i', filePath,
+    const rate = plan.tiles / Math.max(plan.span, 0.001);
+    const args = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y'];
+    // Step 21d. Seeking before -i is what makes a window cost a window rather
+    // than a file: ffmpeg jumps to the keyframe before the start and decodes
+    // from there, so the deeper the zoom the less there is to read. Left off
+    // the whole-clip sheet entirely, so that one stays the call it has always
+    // been rather than the same call with two arguments that do nothing.
+    if (plan.chunks > 1) args.push('-ss', plan.start.toFixed(3));
+    args.push('-i', filePath);
+    if (plan.chunks > 1) args.push('-t', plan.span.toFixed(3));
+    args.push(
       '-an',
       '-vf', 'fps=' + rate.toFixed(6) + ',scale=-2:' + TILE_HEIGHT
         + ',tile=' + cols + 'x' + rows + ':padding=0:margin=0',
       '-frames:v', '1', '-qscale:v', '4',
       dest,
-    ], { windowsHide: true });
+    );
+    const child = spawn(ffmpeg, args, { windowsHide: true });
     currentChild = child;
 
     const stderr = [];
@@ -204,21 +286,26 @@ function extract(filePath, duration, tiles, dest) {
 /**
  * A filmstrip for a media file, from cache when possible.
  *
- * `want` is how many thumbnails the drawing would like across the whole source;
- * the number actually extracted comes back, along with the geometry needed to
- * pick a tile out of the sheet. Returns null for a file with no video stream,
- * which is not an error: an audio layer draws a waveform instead.
+ * `want` is how many thumbnails the drawing would like across the whole source
+ * and `at` is the second of the source it is looking at. Below the point where
+ * the whole source stops fitting in one sheet, `at` does nothing and the sheet
+ * covers everything; past it the sheet covers the window holding `at`, and what
+ * comes back says which window that was. Either way the reply carries the
+ * geometry needed to pick a tile out of the sheet. Returns null for a file with
+ * no video stream, which is not an error: an audio layer draws a waveform.
  */
-async function stripFor(filePath, duration, want = 0) {
+async function stripFor(filePath, duration, want = 0, at = 0) {
   if (!(duration > 0)) return null;
-  const tiles = tilesFor(want);
-  const key = cacheKeyFor(filePath, tiles);
+  const plan = planFor(want, duration, at);
+  const tiles = plan.tiles;
+  const key = cacheKeyFor(filePath, plan);
   const sheet = path.join(stripDir(), key + '.jpg');
   const meta = path.join(stripDir(), key + '.json');
 
   try {
     const cached = JSON.parse(fs.readFileSync(meta, 'utf8'));
-    if (cached && cached.tiles === tiles && fs.existsSync(sheet)) {
+    if (cached && cached.tiles === tiles && cached.chunks === plan.chunks
+      && cached.index === plan.index && fs.existsSync(sheet)) {
       return { ...cached, file: sheet, cached: true };
     }
   } catch {
@@ -230,7 +317,7 @@ async function stripFor(filePath, duration, want = 0) {
   if (currentChild && currentFile === filePath) abort();
   await enqueue(() => {
     currentFile = filePath;
-    return extract(filePath, duration, tiles, sheet);
+    return extract(filePath, plan, sheet);
   });
   const size = sheetSize(sheet);
   if (!size) {
@@ -253,8 +340,16 @@ async function stripFor(filePath, duration, want = 0) {
     tileWidth: Math.round(size.width / cols),
     tileHeight: Math.round(size.height / rows),
     // Seconds of source each thumbnail stands for.
-    interval: duration / tiles,
+    interval: plan.span / tiles,
     duration,
+    // Step 21d. Where this sheet sits in the source, so a caller holding
+    // several of them can tell which one covers the second it is drawing and
+    // which of those is the finest. tiles / span is that density.
+    chunks: plan.chunks,
+    index: plan.index,
+    start: plan.start,
+    span: plan.span,
+    maxDensity: maxDensityFor(duration),
   };
   try {
     fs.writeFileSync(meta, JSON.stringify(info));
@@ -270,9 +365,14 @@ module.exports = {
   enqueue,
   clearStrips,
   tilesFor,
+  chunksFor,
+  maxChunks,
+  maxDensityFor,
+  planFor,
   gridFor,
   TILE_HEIGHT,
   BASE_TILES,
   MAX_TILES,
+  MAX_DENSITY,
   COLS,
 };

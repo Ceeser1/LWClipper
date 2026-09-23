@@ -433,9 +433,9 @@ ipcMain.handle('audio:abortPeaks', () => waveform.abort());
 
 // Thumbnails for one timeline clip. Returns the sheet as a path; the renderer
 // turns it into a file URL and draws sub-rectangles out of it.
-ipcMain.handle('video:filmstrip', async (_event, { filePath, duration, tiles }) => {
+ipcMain.handle('video:filmstrip', async (_event, { filePath, duration, tiles, at }) => {
   try {
-    return { ok: true, data: await filmstrip.stripFor(filePath, duration, tiles) };
+    return { ok: true, data: await filmstrip.stripFor(filePath, duration, tiles, at) };
   } catch (e) {
     return { ok: false, error: String(e.message || e) };
   }
