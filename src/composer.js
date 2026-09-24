@@ -100,7 +100,16 @@ function buildComposeArgs({
   for (const l of live) {
     indexOf.set(l.id, inputs.length);
     inputs.push(l);
-    args.push('-ss', fixed(l.sourceIn), '-t', fixed(l.duration), '-i', l.src);
+    // V2.3. A still is one frame, so there is nothing to seek into and nothing
+    // that runs out: -loop 1 makes the demuxer hand the same frame over for as
+    // long as it is asked, and -t is what stops it. -ss would be meaningless
+    // here and -framerate is set so the loop arrives at the project's rate
+    // rather than at the demuxer's own default of 25.
+    if (l.kind === 'image') {
+      args.push('-loop', '1', '-framerate', String(fps), '-t', fixed(l.duration), '-i', l.src);
+    } else {
+      args.push('-ss', fixed(l.sourceIn), '-t', fixed(l.duration), '-i', l.src);
+    }
   }
 
   const graph = [];
@@ -131,12 +140,48 @@ function buildComposeArgs({
 
       // fps first: dropping frames before cropping and scaling means the work
       // is not done on frames that are about to be thrown away.
+      //
+      // Step 22a. The fades come last, and they fade the **alpha** rather than
+      // the picture. A plain fade=t=in fades to black, which on a layer sitting
+      // over another one paints black across it and punches a hole in the
+      // composite for the length of the fade. Fading the alpha lets overlay
+      // blend it instead, so a fade reveals whatever is underneath, which is
+      // what the user asked for and is also what turns two overlapping layers
+      // into a crossfade for nothing. On the bottom layer it comes to the same
+      // thing anyway, because the base this is all composited onto is black.
+      //
+      // After the setpts, and that matters: only once the timestamps have been
+      // shifted are they the layer's timeline positions, which is what st is
+      // measured in here. The audio side below is the other way round.
+      const fades = timeline.fadesOf(l);
+      const alpha = timeline.alphaOf(l);
+      // V2.4. An alpha channel is now wanted for two reasons rather than one,
+      // so the name says what it is for rather than which of them asked.
+      const needsAlpha = fades.in > 0 || fades.out > 0 || alpha < 1;
       graph.push('[' + indexOf.get(l.id) + ':v]'
         + chain([
           'fps=' + fps,
           parts && parts.crop,
           parts && parts.scale,
           'setpts=PTS-STARTPTS+' + fixed(l.start) + '/TB',
+          // Only when something wants one: an alpha channel every layer
+          // carried would be a conversion on every frame of every project to
+          // no end.
+          needsAlpha ? 'format=yuva420p' : null,
+          fades.in > 0
+            ? 'fade=t=in:st=' + fixed(l.start) + ':d=' + fixed(fades.in) + ':alpha=1'
+            : null,
+          fades.out > 0
+            ? 'fade=t=out:st=' + fixed(l.start + l.duration - fades.out)
+              + ':d=' + fixed(fades.out) + ':alpha=1'
+            : null,
+          // V2.4. The layer's maximum alpha, last, because it is the ceiling
+          // the two ramps rise to rather than a third ramp of its own.
+          // colorchannelmixer multiplies the alpha it is handed rather than
+          // replacing it, so a layer at 60% that fades in arrives at 60% and
+          // not at 100%. That is the same multiply layerAlphaAt does in the
+          // preview, which is what keeps the file and the window one picture.
+          alpha < 1 ? 'colorchannelmixer=aa=' + fixed(alpha) : null,
         ])
         + '[' + label + ']');
 
@@ -163,10 +208,20 @@ function buildComposeArgs({
     audioLayers.forEach((l, n) => {
       const label = 'a' + n;
       labels.push('[' + label + ']');
+      const fades = timeline.fadesOf(l);
       graph.push('[' + indexOf.get(l.id) + ':a]'
         + chain([
           'asetpts=PTS-STARTPTS',
           l.volume !== 1 ? 'volume=' + fixed(l.volume) : null,
+          // Step 22a, and the opposite placement to the video above. adelay has
+          // to stay last, so the fades go before it, which means they are still
+          // in the layer's own timebase: a fade in starts at 0 here, where on
+          // the video side it starts at the layer's timeline position.
+          fades.in > 0 ? 'afade=t=in:st=' + fixed(0) + ':d=' + fixed(fades.in) : null,
+          fades.out > 0
+            ? 'afade=t=out:st=' + fixed(l.duration - fades.out)
+              + ':d=' + fixed(fades.out)
+            : null,
           // adelay pads the front with silence, which is how a layer lands at
           // its timeline position. Nothing may reset the timestamps after it.
           l.start > 0 ? 'adelay=' + msFixed(l.start) + ':all=1' : null,

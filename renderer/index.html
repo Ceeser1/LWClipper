@@ -271,9 +271,21 @@
                tracks together, so the two cannot disagree about where the
                material ends. -->
           <div id="timelineBeyond" class="timeline-beyond" hidden></div>
+          <!-- V2.5. The stretches the render leaves out, one either side of the
+               trim range. Before the markers and the playhead, so the lines
+               that bound them are drawn over the veil rather than under it. -->
+          <div id="timelineOutsideStart" class="timeline-outside timeline-outside--start" hidden></div>
+          <div id="timelineOutsideEnd" class="timeline-outside timeline-outside--end" hidden></div>
           <div id="timelinePlayhead" class="playhead playhead--timeline" hidden></div>
-          <div id="timelineTrimIn" class="timeline-marker timeline-marker--in" hidden></div>
-          <div id="timelineTrimOut" class="timeline-marker timeline-marker--out" hidden></div>
+          <!-- The strip inside each marker is the whole of its grab area, and
+               it stands in the ruler. The press on it bubbles to the marker,
+               which is what the drag has been bound to all along. -->
+          <div id="timelineTrimIn" class="timeline-marker timeline-marker--in" hidden>
+            <div class="timeline-marker__grab"></div>
+          </div>
+          <div id="timelineTrimOut" class="timeline-marker timeline-marker--out" hidden>
+            <div class="timeline-marker__grab"></div>
+          </div>
         </div>
       </div>
     </section>

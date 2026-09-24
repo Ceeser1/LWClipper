@@ -423,6 +423,15 @@ function cropFilter(crop) {
 // both read it straight off this list.
 const AUDIO_EXTS = ['.mp3', '.wav', '.ogg', '.m4a', '.aac', '.flac', '.opus'];
 const VIDEO_EXTS = ['.mp4', '.mkv', '.webm', '.mov'];
+// V2.3. What the app will take as a still. Two formats because two were asked
+// for, and .jpeg alongside .jpg because they are one format with two spellings
+// and refusing the longer one would be a bug rather than a decision.
+//
+// This list is what an image IS, wherever the question is asked: the open
+// dialog offers these, describeMedia recognises them, and the layer made from
+// one carries kind 'image'. Nothing else works out what a still is by looking
+// at a file, because two answers to that eventually disagree.
+const IMAGE_EXTS = ['.jpg', '.jpeg', '.png'];
 
 module.exports = {
   volumeFactor,
@@ -430,6 +439,7 @@ module.exports = {
   VOLUME_MAX_PERCENT,
   AUDIO_EXTS,
   VIDEO_EXTS,
+  IMAGE_EXTS,
   COMPRESSION_STEPS,
   crfForCompression,
   vp9CrfForCompression,

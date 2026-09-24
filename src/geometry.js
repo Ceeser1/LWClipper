@@ -315,6 +315,49 @@ const layerGeometry = (() => {
   }
 
   /**
+   * Where something of this size sits along an axis of this length, anchored at
+   * the near edge, the middle, or the far edge.
+   *
+   * Returns the centre, because a centre is what the placement is carried as.
+   * At 0 it is the size's own half, so the near edge lands on 0; at 1 it is the
+   * span less that half, so the far edge lands on the span exactly. Which is
+   * the whole of what the corner rings were asked to do on 2026-09-23: "a click
+   * on left-top is the only one that positions it at 0, 0. Other circle clicks
+   * must position the bottom or right of the image so that they are not cut off
+   * but exactly at the edge".
+   *
+   * A size larger than the span gives a centre outside it, and that is right:
+   * the anchored edge still lands on the span and the other one hangs off, the
+   * same way a render rect is allowed to hang off the frame anywhere else.
+   */
+  function anchorCentre(anchor, span, size) {
+    return anchor * span + (0.5 - anchor) * size;
+  }
+
+  /**
+   * Which row of a clip an alpha of this much is drawn on.
+   *
+   * The user set the scale when they asked for the control: "From 100% to 0%
+   * height of the track." So 100% is the clip's first row and 0% is its last,
+   * and everything between them is linear.
+   *
+   * span - 1 rather than span, because a rectangle of 64 pixels has 64 rows and
+   * not 65 boundaries. Without it 0% lands one row past the bottom of the clip,
+   * where it is drawn by nobody and seen by no one, which is exactly what V2.4
+   * shipped.
+   *
+   * It lives here rather than in the window because four drawings read it: the
+   * line, the bar that moves it, and the top of each of the two fade ramps. A
+   * second copy of this sum would drift at the extremes first, which is where
+   * anybody would look.
+   */
+  function alphaRow(span, alpha) {
+    const rows = Math.max(0, finite(span, 0) - 1);
+    const a = Math.min(1, Math.max(0, finite(alpha, 1)));
+    return (1 - a) * rows;
+  }
+
+  /**
    * The preview canvas: the project's own shape, capped at the rough-preview
    * size. Keeping it at the project aspect is what lets the letterboxing show up
    * on screen exactly where it will be in the file.
@@ -395,6 +438,8 @@ const layerGeometry = (() => {
     ratioResize,
     sideFraction,
     splitHeight,
+    anchorCentre,
+    alphaRow,
     placeLayer,
     previewCanvasSize,
     drawImageArgs,

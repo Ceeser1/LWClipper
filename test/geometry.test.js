@@ -481,3 +481,93 @@ test('floors that cross are settled in the sides favour', () => {
   assert.equal(at.side, 130);
   assert.equal(at.middle, 240);
 });
+
+// --- alphaRow, V2.5 ---------------------------------------------------------
+//
+// The row an alpha line is drawn on. Four drawings read it and they all have to
+// agree, so what these check is the agreement rather than any one of them.
+
+test('a whole layer draws its line on the clip first row', () => {
+  assert.equal(G.alphaRow(64, 1), 0);
+});
+
+test('a layer at nothing draws its line on the clip last row, not past it', () => {
+  // V2.4 used the span itself, which put 0% one row below the clip, where it
+  // was cut off and seen by nobody. 64 pixels are rows 0 to 63.
+  assert.equal(G.alphaRow(64, 0), 63);
+});
+
+test('half way up is half way down the clip', () => {
+  assert.equal(G.alphaRow(65, 0.5), 32);
+  assert.equal(G.alphaRow(64, 0.5), 31.5);
+});
+
+test('the row moves in a straight line, because the ramp it caps does', () => {
+  // The fade ramp ends on this row and the ramp is linear. A row that was not
+  // would meet the line at the ends and miss it everywhere in between.
+  const mid = G.alphaRow(101, 0.5);
+  assert.equal(mid, (G.alphaRow(101, 0) + G.alphaRow(101, 1)) / 2);
+});
+
+test('an alpha outside the range is held at the edges of the clip', () => {
+  // setAlpha clamps, but this is read from a layer that was written anywhere,
+  // and a line drawn off the clip is a line nobody can see.
+  assert.equal(G.alphaRow(64, 4), 0);
+  assert.equal(G.alphaRow(64, -2), 63);
+});
+
+test('a missing alpha reads as whole, the way the model reads it', () => {
+  // timelineModel.alphaOf defaults to 1 and this has to agree with it, or a
+  // layer with no alpha set would draw its line somewhere other than the top.
+  assert.equal(G.alphaRow(64, undefined), 0);
+  assert.equal(G.alphaRow(64, NaN), 0);
+});
+
+test('a clip with no height has no rows rather than a negative one', () => {
+  for (const span of [1, 0, -5]) assert.equal(G.alphaRow(span, 0), 0);
+});
+
+// --- anchorCentre, the nine rings on the Render Position tab -----------------
+
+// The user's rule, in their own words: "a click on left-top is the only one
+// that positions it at 0, 0. Other circle clicks must position the bottom or
+// right of the image so that they are not cut off but exactly at the edge(s)".
+// Which is a statement about edges, so these check edges rather than centres.
+const corner = (a, span, size) => G.anchorCentre(a, span, size) - size / 2;
+
+test('the near anchor is the only one that lands on zero', () => {
+  assert.equal(corner(0, 1920, 640), 0);
+  assert.notEqual(corner(1, 1920, 640), 0);
+  assert.notEqual(corner(0.5, 1920, 640), 0);
+});
+
+test('the far anchor puts the far edge on the edge, not past it', () => {
+  const near = corner(1, 1920, 640);
+  assert.equal(near, 1280);
+  assert.equal(near + 640, 1920);
+});
+
+test('the middle anchor leaves the same room on both sides', () => {
+  assert.equal(corner(0.5, 1920, 640), 640);
+  assert.equal(corner(0.5, 1920, 640) + 640, 1920 - 640);
+});
+
+test('a picture the size of the frame is at zero whichever corner is asked for', () => {
+  for (const a of [0, 0.5, 1]) assert.equal(corner(a, 1920, 1920), 0);
+});
+
+test('a picture larger than the frame keeps the anchored edge and hangs off the other', () => {
+  // Scaling past 100% is allowed, and a corner click on one still means that
+  // corner: the right edge is on the right edge and the left is off to the left.
+  assert.equal(corner(1, 1920, 2400) + 2400, 1920);
+  assert.equal(corner(0, 1920, 2400), 0);
+});
+
+test('the ring is inset from the stage by the gap plus its own radius', () => {
+  // How the rings are placed: a span of twice the inset plus the radius, so
+  // one call does both the drawing and the placing.
+  const span = 2 * (10 + 9);
+  assert.equal(G.anchorCentre(0, 600, span), 19);
+  assert.equal(G.anchorCentre(1, 600, span), 581);
+  assert.equal(G.anchorCentre(0.5, 600, span), 300);
+});

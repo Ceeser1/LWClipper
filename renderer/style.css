@@ -314,11 +314,18 @@ progress {
 
 /* A grip rather than a line down the frame: the gap is already a boundary, and
    what is worth saying is that this one can be taken hold of. Upright, where
-   the one above the timeline lies flat, because that is the way each moves. */
+   the one above the timeline lies flat, because that is the way each moves.
+
+   --grip-mid is the middle of the frame beside it, measured and written on by
+   placeSideGrips. Not 50%, which is the middle of the cell: every cell in the
+   row is the same height because the grid stretches them, and that height comes
+   from the middle frame, which is the tall one. Centring on it put the grip
+   below the middle of the two frames it actually divides. The 50% fallback is
+   only what is shown before the first measurement. */
 .preview-splitter::before {
   content: "";
   position: absolute;
-  top: 50%;
+  top: var(--grip-mid, 50%);
   left: 4px;
   width: 2px;
   height: 44px;
@@ -1264,22 +1271,85 @@ body.advanced .timeline-section {
   display: none;
 }
 
+/* V2.5. What the render leaves out: "Overlay audio/video tracks that are behind
+   the start/end time sliders grey until the sliders." The same veil the
+   headroom past the last layer wears, for the same reason, so "outside the
+   output" looks like one thing on this frame and not two.
+
+   Below the ruler only. The ruler already draws the selected span as a band of
+   its own, and a second statement of the same fact laid over the first would
+   only make the time marks harder to read. Where this meets the headroom the
+   two veils stack, which is honest: that stretch is outside the output twice
+   over. */
+.timeline-outside {
+  position: absolute;
+  top: 25px;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+.timeline-outside--start { left: 0; }
+.timeline-outside--end { right: 0; }
+
+.timeline-outside[hidden] {
+  display: none;
+}
+
 /* Runs the full height of the frame so the trim range reads through the stack
    and not just across the ruler. The hit area is 9px wide because a 1px line
    cannot be grabbed; the line and the tab at its top are drawn inside it, so
-   the part you see is not the part you have to hit. */
+   the part you see is not the part you have to hit.
+
+   V2.5 takes the pointer off the marker itself and gives it to a strip in the
+   ruler: "Make Start/End time sliders only dragable at the top while the mouse
+   is above the timelines position". Below the ruler the line is a mark and
+   nothing more, so a press there reaches the clip or the bare track under it,
+   which is what a press there looks like it should do. The element keeps its
+   full height because it is still what draws the line, and the press that
+   lands on the strip bubbles up to it, so the drag it has been bound to since
+   Step 10 is unchanged. */
 .timeline-marker {
   position: absolute;
   top: 0;
   bottom: 0;
   width: 9px;
-  cursor: ew-resize;
   touch-action: none;
-  /* The lane around these takes no clicks; a marker has to be dragged. */
+  pointer-events: none;
+}
+
+/* The part over the tracks: half there, because it is a boundary being shown
+   rather than a control being offered. */
+.timeline-marker::before {
+  content: "";
+  position: absolute;
+  top: 25px;
+  bottom: 0;
+  width: 1px;
+  background: currentColor;
+  opacity: 0.5;
+}
+
+/* The ruler strip, which is both the whole of the grab area and the part of the
+   line that is drawn at full strength. 25px is the ruler plus its border, the
+   same number the playhead starts at.
+
+   The cursor is the clip's own: "change the cursor to the hand like hovering a
+   track so the user sees a difference between hovering start/end and the
+   timeline". The ruler under it says ew-resize, which is what the difference is
+   against. */
+.timeline-marker__grab {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 25px;
+  cursor: grab;
+  touch-action: none;
   pointer-events: auto;
 }
 
-.timeline-marker::before {
+.timeline-marker__grab::before {
   content: "";
   position: absolute;
   top: 0;
@@ -1304,11 +1374,13 @@ body.advanced .timeline-section {
    ends at exactly the pixel the line is on. Leaning inwards keeps the whole of
    it reachable at both extremes. */
 .timeline-marker--in { margin-left: 0; }
-.timeline-marker--in::before { left: 0; }
+.timeline-marker--in::before,
+.timeline-marker--in .timeline-marker__grab::before { left: 0; }
 .timeline-marker--in::after { left: 0; border-radius: 0 0 2px 0; }
 
 .timeline-marker--out { margin-left: -9px; }
-.timeline-marker--out::before { right: 0; }
+.timeline-marker--out::before,
+.timeline-marker--out .timeline-marker__grab::before { right: 0; }
 .timeline-marker--out::after { right: 0; border-radius: 0 0 0 2px; }
 
 /* The same green and red as the trim handles, so a boundary here reads as the
@@ -1364,12 +1436,19 @@ body.advanced .timeline-section {
 }
 
 /* Something to aim at. Without a head the line is 1px of white on a dark track
-   and reads as a mark rather than as a control. */
+   and reads as a mark rather than as a control.
+
+   V2.5 lifts it so that four of its seven pixels stand in the ruler: "Make the
+   current position slider overlap the timeline by 50% of the top knob height."
+   The head only, not the line and not the grab area, which still begin where
+   the tracks do. The ruler keeps its own drag through the pixels the head is
+   drawn over, and the lane it sits in reaches the top of the frame, so nothing
+   clips it. */
 .playhead--timeline::after {
   content: "";
   position: absolute;
   left: 1px;
-  top: 0;
+  top: -4px;
   width: 9px;
   height: 7px;
   background: #ffffff;
@@ -1385,10 +1464,18 @@ body.layer-trimming .playhead--timeline {
 
 /* ---- layer rows ---- */
 
+/* V2.4. 72px, which is the 48 this was until 2026-09-24 and half again, at the
+   user's word: "increase the default height of video/audio tracks by 50% so
+   they are not as crammed vertically."
+
+   The one number. The clip insets itself from it, the filmstrip and the
+   waveform are drawn at whatever height the clip turns out to be, and the alpha
+   line divides that same height, so this is the only place the figure appears
+   and nothing has to be changed alongside it. */
 .layer-row {
   display: flex;
   align-items: stretch;
-  height: 48px;
+  height: 72px;
   border-bottom: 1px solid #26262d;
 }
 
@@ -1517,7 +1604,14 @@ body.layer-trimming .playhead--timeline {
 /* The two edge grips. Over the art rather than beside it, so trimming does not
    cost the clip any width, and above it in the stack so a press on the first
    few pixels is a trim and not a move. Their width is set in script: a clip too
-   narrow to spare the room gives each edge a third and keeps a body to grab. */
+   narrow to spare the room gives each edge a third and keeps a body to grab.
+
+   V2.2 started them at 15px rather than at the top, because the fade handles
+   stood in the corners and two controls cannot share the same pixels and both
+   take the press. V2.4 undoes that, at the user's word: "increase their height
+   again so it matches the tracks height - a few pixels like at the bottom."
+   The handles moved aside instead, past the width of a grip, so nothing is
+   shared and nothing has to be shortened. */
 .layer-clip__edge {
   position: absolute;
   top: 0;
@@ -1536,7 +1630,13 @@ body.layer-trimming .playhead--timeline {
 }
 
 /* A grip line, so an edge looks like something to take hold of rather than an
-   invisible region found by accident. */
+   invisible region found by accident.
+
+   V2.4. On the edge itself rather than two pixels in, "exactly on the outer
+   edges", and the same three pixels short at the top as at the bottom, which is
+   the "a few pixels like at the bottom" the user measured it against. Zero
+   here is the inside of the clip's own border, which is as far out as anything
+   drawn inside the clip goes. */
 .layer-clip__edge::after {
   content: '';
   position: absolute;
@@ -1548,28 +1648,201 @@ body.layer-trimming .playhead--timeline {
 }
 
 .layer-clip__edge--start::after {
-  left: 2px;
+  left: 0;
 }
 
 .layer-clip__edge--end::after {
-  right: 2px;
+  right: 0;
 }
 
 .layer-clip__edge:hover::after {
   background: rgba(238, 242, 250, 0.9);
 }
 
+/* V2.2. The fade handle, one in each top corner of a clip.
+
+   The degree sign the user named, and the cursor is the same ring drawn small,
+   which is the other half of what they asked for: "When hovering °, change the
+   mouse symbol into a ° as well."
+
+   The cursor is a 20x20 PNG behind a data URI rather than an SVG or a file.
+   Chromium's support for SVG cursors is not something the window can be asked
+   about from inside itself, and a cursor that quietly fell back to the default
+   would look exactly like this rule never running, so the format that is
+   certain wins over the one that is readable. */
+.clip-fade-dot {
+  position: absolute;
+  top: 0;
+  width: 19px;
+  height: 20px;
+  z-index: 4;
+  display: flex;
+  align-items: flex-start;
+  font-size: 20px;
+  line-height: 1;
+  color: #dfe4ee;
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.9), 0 0 4px rgba(0, 0, 0, 0.7);
+  cursor: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAACNiR0NAAAAoElEQVR42u1TyQ2AIBC0iCloO6ARKuHDl58l+KMt6WDNGNYYH6IGfTkfMntMZoEdhh8GAAJgAjAD0HqSyxOx0TmnOWfdg5xx5m+Jee/1DMxfEuU4dGAopWhKSUMI60luqE6lJTjZmGwWETbFep+R3ERZx/qW4GwO6Igih3xk3MD6luBWzDGPI5EzvhPUzx12v8O+r9z9H76yKa/s8o9bWABDP0+QRPItjgAAAABJRU5ErkJggg==") 10 10, pointer;
+  user-select: none;
+}
+
+/* V2.4. Past the trim grip rather than over it, so the grip can have its whole
+   height back. Seven is CLIP_EDGE_GRAB, and the handles only ever show on a
+   clip wide enough for the grips to be at their full width: placeFadeGrips
+   hides them below 2 * (CLIP_FADE_W + gripW) + 12, which cannot be met while a
+   grip is still being given a third of a narrow clip.
+
+   V2.5 asked them closer to the ends of the clip and a third larger. Seven is
+   as close as they go: the pixels before it belong to the trim grip, which got
+   its full height back one version ago for exactly this reason, and two
+   controls cannot share a corner and both take the press. What moved instead
+   is the glyph inside the box, which was centred in it and is now hard against
+   its own outer edge, so the sign sits four pixels nearer the end than it did
+   and the box grows inwards rather than outwards. */
+.clip-fade-dot--in {
+  left: 7px;
+  justify-content: flex-start;
+}
+
+.clip-fade-dot--out {
+  right: 7px;
+  justify-content: flex-end;
+}
+
+.clip-fade-dot:hover {
+  color: #ffffff;
+}
+
+.clip-fade-dot[hidden] {
+  display: none;
+}
+
+/* Where a fade ends, and the way to move it once it is there: "Click and drag
+   to the right creates a new grey vertical line on the track with can be
+   dragged." One element for both jobs, so what is on screen and what takes the
+   pointer cannot drift apart. The band is wide enough for a hand and the line
+   is the single pixel down the middle of it. */
+.clip-fade-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  margin-left: -3px;
+  z-index: 3;
+  cursor: ew-resize;
+}
+
+.clip-fade-line::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
+  background: #b0b4be;
+}
+
+.clip-fade-line:hover::after {
+  background: #eef2fa;
+}
+
+.clip-fade-line[hidden] {
+  display: none;
+}
+
+/* V2.4. The maximum alpha of a video layer, as the user asked for it: "Add a
+   new horizontal line (yes horizontal) to set maximum alpha of video tracks.
+   Give it a vertical clickable bar to drag it up/down on the track it belongs.
+   From 100% to 0% height of the track."
+
+   So the line's height in the clip is the value: at the top the layer is whole,
+   at the bottom it is gone. It is a readout and takes no presses, because it
+   runs the width of the clip and a clip whose whole body sets the alpha is a
+   clip that can no longer be moved. The bar is the control, and it is the only
+   thing here that takes a pointer.
+
+   V2.5 moves both of them out of the clip and into the track. The clip is
+   overflow: hidden, and the bar has to be able to sit on the clip's own top and
+   bottom edges with a pixel to spare either side of them, which inside the clip
+   is a pixel that gets cut off. The track has four pixels of room above the
+   clip and four below, so out here the whole bar is on screen at 100% and at
+   0%. Both are placed by script in the track's pixels: the line gets the left
+   and width of whatever part of the clip is on screen, for the reason the art
+   canvas does, and neither of them is a child of the thing it is drawn on any
+   more. */
+.clip-alpha-line {
+  position: absolute;
+  height: 1px;
+  z-index: 3;
+  background: rgba(176, 180, 190, 0.85);
+  pointer-events: none;
+}
+
+/* The bar, as V2.5 asked for it: "a horizontal thin bar like the frame resize
+   bar between preview and timeline but in white". So it is the splitter's grip
+   in white, three pixels of it, and at the extremes it straddles the clip's
+   edge a pixel outside and a pixel in.
+
+   The element is eleven pixels tall and transparent, and the bar is drawn down
+   the middle of it. A three pixel target cannot be hit, which is the same trick
+   the playhead and the trim markers use for their one pixel lines: what you see
+   is not what you have to aim at.
+
+   The dark ring is the one departure from the splitter, which sits on a frame
+   of its own colour. This sits on a filmstrip, and white on a bright frame is
+   not a bar, it is nothing. */
+.clip-alpha-grip {
+  position: absolute;
+  width: 44px;
+  height: 11px;
+  z-index: 4;
+  background: transparent;
+  cursor: ns-resize;
+}
+
+.clip-alpha-grip::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 4px;
+  height: 3px;
+  border-radius: 1px;
+  background: #ffffff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+}
+
+.clip-alpha-grip:hover::before {
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), 0 0 4px rgba(255, 255, 255, 0.8);
+}
+
+.clip-alpha-grip[hidden] {
+  display: none;
+}
+
 /* While a clip is being dragged the pointer is captured, so it keeps sending
    events after it has left the clip, but the cursor under it is still whatever
    it happens to be over. These hold the gesture's own cursor for its duration. */
+body.trim-dragging,
+body.trim-dragging * {
+  cursor: grabbing !important;
+}
+
 body.layer-dragging,
 body.layer-dragging * {
   cursor: grabbing !important;
 }
 
 body.layer-trimming,
-body.layer-trimming * {
+body.layer-trimming *,
+body.layer-fading,
+body.layer-fading * {
   cursor: ew-resize !important;
+}
+
+body.layer-alpha,
+body.layer-alpha * {
+  cursor: ns-resize !important;
 }
 
 .layer-row--audio .layer-clip {
@@ -2088,6 +2361,42 @@ body.layer-trimming * {
   display: block;
   width: 100%;
   height: 100%;
+}
+
+/* The five anchors on the output frame: the four corners and the middle.
+   White, as asked, with a dark ring outside and inside it so they are still
+   visible over a white picture. Placed by the script, which is the only thing
+   that knows how big the stage came out.
+
+   left and top are the centre, which is what the negative margin is for: the
+   anchor maths works in centres and the ring should not have to be told the
+   difference. */
+/* V2.6. Eighteen across, which is PLACE_RING_R doubled and has to stay that
+   way: the same radius is the hit test, so a ring drawn larger than it would
+   have an edge that looks pressable and is not. Nine of them stand here now
+   where five did, and smaller is what the user asked for with them. */
+.place-ring {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  border: 2px solid #ffffff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), inset 0 0 0 1px rgba(0, 0, 0, 0.55);
+  cursor: pointer;
+}
+
+/* Green, and the same green the place box is drawn in, so hovering a ring says
+   in advance what the outline will look like once the picture has landed on it.
+   A white wash over a white ring read as grey, which is what it was called:
+   "light up green when hovering them instead of grey". */
+.place-ring:hover {
+  border-color: #78c88c;
+  background: rgba(120, 200, 140, 0.35);
+}
+
+.place-ring[hidden] {
+  display: none;
 }
 
 /* Where the layer being placed lands. An outline only while the tab is read

@@ -30,9 +30,15 @@ const locales = require('./src/locales');
 // they read off the same table the window does.
 const t = locales.t;
 const {
-  safeFilename, AUDIO_EXTS, VIDEO_EXTS, OUTPUT_FORMATS, outputsFor, containerFor,
-  compressionDisplay, stepForBitrate,
+  safeFilename, AUDIO_EXTS, VIDEO_EXTS, IMAGE_EXTS, OUTPUT_FORMATS, outputsFor,
+  containerFor, compressionDisplay, stepForBitrate,
 } = require('./src/backend');
+// V2.3. For IMAGE_SECONDS alone: how long a still opens at is the model's to
+// say, and describeMedia is where a still first gets a length. Requiring the
+// module here rather than repeating the number is the same rule PROJECT_EXT
+// follows, and for the same reason: two spellings of one fact is one of them
+// being wrong.
+const timelineModel = require('./src/timeline');
 const { ProcessCancelledError } = require('./src/processRunner');
 
 // ffprobe reads the duration either way; the extension only decides whether the
@@ -63,12 +69,49 @@ const BASE_HEIGHT = 845;
 let autoHeight = true;
 let lastAutoHeight = null;
 
+/**
+ * Where the window opens: the rightmost monitor, asked for on 2026-09-24.
+ *
+ * "Is it possible to always open the app on the right monitor (monitor 1 in
+ * windows)?" Windows' own monitor numbering is not something Electron exposes,
+ * and on this machine the two side monitors report the same label, so there is
+ * nothing to match a name against. **Position is the one handle there is**, and
+ * it is also the thing the user described first: the greatest bounds.x is the
+ * rightmost display. It keeps meaning the same thing if the monitors are ever
+ * rearranged, where an index or a saved id would quietly start meaning another
+ * screen.
+ *
+ * Note that the rightmost is not the primary here: the primary is the 2560x1440
+ * in the middle, so getPrimaryDisplay would have opened on the wrong one.
+ *
+ * Centred in the **work area** rather than in the bounds, so the taskbar does
+ * not take a strip off the bottom of the window, and never above the top of it,
+ * because a title bar off the top of a screen cannot be dragged back down.
+ *
+ * Null when there is only one display, where Electron's own placement is
+ * already right and setting a position is only a way to get it wrong.
+ */
+function openingSpot(width, height) {
+  const all = screen.getAllDisplays();
+  if (all.length < 2) return null;
+  const right = all.reduce((far, d) => (d.bounds.x > far.bounds.x ? d : far));
+  const area = right.workArea;
+  return {
+    x: Math.round(area.x + (area.width - width) / 2),
+    y: Math.round(area.y + Math.max(0, (area.height - height) / 2)),
+  };
+}
+
 function createWindow() {
   // Without this the taskbar and window show Electron's default icon, because
   // signAndEditExecutable is off and rcedit never stamps the inner executable.
   const icon = toolPaths.appIconPath();
+  // Passed to the constructor rather than set afterwards, so the window is
+  // never painted on one monitor and then moved to another.
+  const spot = openingSpot(1000, BASE_HEIGHT);
   mainWindow = new BrowserWindow({
     ...(icon ? { icon } : {}),
+    ...(spot || {}),
     width: 1000,
     // The frame boxes are locked to 16:9 of their own width, so height the
     // preview section is given beyond what its title, frame and controls need
@@ -474,6 +517,7 @@ ipcMain.handle('media:supportedTypes', () => {
   return {
     video: VIDEO_EXTS.map((e) => e.slice(1)),
     audio: AUDIO_EXTS.map((e) => e.slice(1)),
+    image: IMAGE_EXTS.map((e) => e.slice(1)),
     // The save row builds its toggle from these, so the buttons and the
     // encoders cannot come to disagree about what the app can write.
     videoOut: outputsFor(false).map(describeOutput),
@@ -518,7 +562,17 @@ function describeMedia(filePath) {
   if (ext === '.' + PROJECT_EXT) return { ok: false, project: true, path: filePath };
   const { duration, hasAudio, width, height, fps, videoCodec, audioCodec, audioBitrate } =
     trimmer.probeMedia(filePath);
-  if (!duration) {
+  // V2.3. A still has no duration, and until now that was the app's whole
+  // definition of media: ffprobe reports no format duration for a png or a jpg,
+  // so the line below refused every image before anything else got a look at
+  // it. A picture is media with a size and no length, which is a third kind of
+  // input rather than a broken one, so it is recognised by extension and given
+  // the length the model says a still gets.
+  const isImage = IMAGE_EXTS.includes(ext);
+  if (isImage && !(width > 0 && height > 0)) {
+    return { ok: false, error: 'ffprobe could not read that image.' };
+  }
+  if (!duration && !isImage) {
     return { ok: false, error: 'ffprobe could not read a duration from that file.' };
   }
   const isAudio = AUDIO_EXTS.includes(ext);
@@ -532,14 +586,20 @@ function describeMedia(filePath) {
     data: {
       path: filePath,
       title: path.basename(filePath, ext),
-      duration,
+      // A still opens at the length the model gives one, and the model is the
+      // only thing that gets to say what that is.
+      duration: isImage ? timelineModel.IMAGE_SECONDS : duration,
       isAudio,
+      isImage,
       hasAudio,
       width,
       height,
       // Advanced editing seeds the project's frame rate from its first source,
-      // the way it already seeds the frame size.
-      fps,
+      // the way it already seeds the frame size. Not from a still: ffprobe
+      // reports 25 for a png, which is the png_pipe demuxer's own default and
+      // says nothing at all about the picture. A project whose rate came from
+      // an image would be at 25 because a jpg was dropped on it.
+      fps: isImage ? 0 : fps,
       videoCodec,
       audioCodec,
       sourceFormat,
@@ -825,8 +885,9 @@ ipcMain.handle('dialog:openMedia', async () => {
     // can open should be openable from the button that says Open File.
     filters: [
       {
-        name: 'Audio, video and projects',
-        extensions: [...VIDEO_EXTS, ...AUDIO_EXTS].map((e) => e.slice(1)).concat([PROJECT_EXT]),
+        name: 'Audio, video, images and projects',
+        extensions: [...VIDEO_EXTS, ...AUDIO_EXTS, ...IMAGE_EXTS]
+          .map((e) => e.slice(1)).concat([PROJECT_EXT]),
       },
       { name: 'LWClipper project', extensions: [PROJECT_EXT] },
       { name: 'All files', extensions: ['*'] },
