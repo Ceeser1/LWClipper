@@ -354,9 +354,6 @@ const fpsSelect = el('fpsSelect');
 const videoEnabledToggle = el('videoEnabledToggle');
 const renderResolution = el('renderResolution');
 const renderResolutionText = el('renderResolutionText');
-const renderResolutionEdit = el('renderResolutionEdit');
-const frameWidthBox = el('frameWidthBox');
-const frameHeightBox = el('frameHeightBox');
 const videoHead = el('videoHead');
 const formatToggle = el('formatToggle');
 const compressionToggle = el('compressionToggle');
@@ -545,6 +542,7 @@ const trimSliderEl = el('trimSlider');
 // Step 21c. Between the preview and whichever editing frame is up, and it
 // belongs to neither: what it drags is how the two divide the column.
 const editSplitter = el('editSplitter');
+const layersSplitter = el('layersSplitter');
 const timelineStage = el('timelineStage');
 const timelineRuler = el('timelineRuler');
 // Where time is measured from. The lane starts after the layer headers, so x
@@ -971,39 +969,12 @@ fpsSelect.addEventListener('change', () => {
   commitHistory();
 });
 
-/**
- * The project renders at a different size from now on.
- *
- * A commit point for the same reason the rate above is one: it goes into the
- * .lwc and it changes what every later export is, however close to the format
- * buttons it happens to sit on screen.
- *
- * Every placed layer travels with it, in one gesture rather than two, so Ctrl+Z
- * takes the frame and the placements back together. Where they land, and why
- * that rather than leaving their numbers alone, is in geometry.rescaleRender.
- *
- * Refused while the project has no shape of its own. projectFrame() substitutes
- * a fallback so there is something to draw before a decoder has answered, and
- * accepting a size against that would freeze the fallback as the project's own
- * and stop the first source from ever seeding it.
- */
-function setProjectFrame(width, height) {
-  if (!timelineDriving() || busy || !compositeFrame) return false;
-  const size = layerGeometry.frameSize(width, height);
-  if (!size) return false;
-  const from = compositeFrame;
-  if (size.width === from.width && size.height === from.height) return false;
-  compositeFrame = { ...from, width: size.width, height: size.height };
-  sizeCompositeCanvas();
-  // Through setLayers even when no layer moved, because the composite canvas
-  // and the two trim frames are all pictures of a frame that has just changed
-  // shape and none of them redraws itself.
-  setLayers(layers.map((l) => (l.render
-    ? { ...l, render: layerGeometry.rescaleRender(l.render, from, size) }
-    : l)));
-  commitHistory();
-  return true;
-}
+// V2.8 took setProjectFrame out with the two boxes that were its only caller.
+// The project frame is decided in the Crop Render window now, and that window's
+// Accept writes each layer's rectangle from where it is pinned, which is
+// strictly more than rescaling every layer by the frame's change. Routing it
+// through a function that rescales first would have meant rescaling and then
+// overwriting the result. One road in, and git has the old one.
 
 async function loadOutputChoices() {
   const types = await window.lwclipper.supportedTypes();
@@ -1167,13 +1138,23 @@ changeAudioBtn.addEventListener('click', async () => {
 // A file off disk has no probe behind it, so the quality list left over from
 // any previous link goes, and with it the start offset inherited from that
 // link. Shared by Open File and by a file dropped on the main zone.
-function adoptLocalMedia(data) {
-  // V2.3. Simple editing is a view of one media file with a length to trim, and
-  // a still has no length to trim. Refused here rather than at each of the three
-  // ways in, so there is one answer: the Open File button, a drop on the frame,
-  // and the recent list all arrive through this.
+async function adoptLocalMedia(data) {
+  // Simple editing is a view of one media file with a length to trim, and a
+  // still has no length to trim. V2.3 said exactly that and refused the file.
+  //
+  // **V2.8 takes it instead.** The user, on 2026-09-24: "Instead it should just
+  // accept it and put into the timeline as a video layer." So the mode follows
+  // the file, which is the rule a .lwc has gone by since Step 17: handing the
+  // app something only one mode can hold is asking for that mode. Nothing is
+  // lost in the switch either, because the media simple editing was showing is
+  // still loaded and still there when the switch goes back.
+  //
+  // Handled here rather than at each of the ways in, so there is one answer:
+  // the Open File button, a drop on the frame and a drop on the audio frame
+  // with nothing loaded all arrive through this.
   if (data && data.isImage) {
-    reportFailure({ error: t('Images go on the timeline. Turn advanced editing on to use one.') });
+    if (!timelineDriving()) await setAdvancedEditing(true);
+    addLayerFromMedia('video', data);
     return;
   }
   probed = null;
@@ -1269,10 +1250,28 @@ function audioDropAllowed() {
   return !(media && media.isAudio);
 }
 
+/**
+ * Whether the frame at the top of the window will take a dropped file.
+ *
+ * V2.7. Not in advanced editing, at the user's word: "the title frame is hidden
+ * in advanced mode, but the drop zone still tries to show up there ... No upper
+ * drop zone in advanced mode."
+ *
+ * V2.6 collapsed that frame until it has something to report, but a job's
+ * progress or a quality list brings it back, and while it was up it was still
+ * lighting as a drop zone. It is a place the app speaks from now, not a place
+ * to put things: the empty layer rows are what take a file here, which is the
+ * argument the top zone was removed on in the first place.
+ */
+function mainDropTakesFiles() {
+  return !timelineDriving();
+}
+
 function setDropActive(on) {
   const active = on && !busy;
-  mainDrop.dataset.drop = String(active);
-  mainDropHint.hidden = !active;
+  const mainOn = active && mainDropTakesFiles();
+  mainDrop.dataset.drop = String(mainOn);
+  mainDropHint.hidden = !mainOn;
   const audioOn = active && audioDropAllowed();
   audioSection.dataset.drop = String(audioOn);
   audioDropHint.hidden = !audioOn;
@@ -1282,9 +1281,12 @@ function setDropActive(on) {
 // Both zones light up for the whole drag, so the one under the pointer is
 // marked separately to say which of them would actually take the file.
 function setDropHover(zone) {
-  mainDrop.dataset.dropHover = String(zone === mainDrop);
+  mainDrop.dataset.dropHover = String(zone === mainDrop && mainDropTakesFiles());
   audioSection.dataset.dropHover = String(zone === audioSection && audioDropAllowed());
-  for (const track of document.querySelectorAll('.layer-track[data-empty-type]')) {
+  // Every zone that carries the attribute, which since V2.8 is the empty rows
+  // and the Add a new Track block. The class is the empty row's name for it and
+  // the block borrows it rather than having a second one that means the same.
+  for (const track of document.querySelectorAll('[data-empty-type]')) {
     track.classList.toggle('layer-track--dropping', track === zone);
   }
 }
@@ -1298,7 +1300,11 @@ function dropZoneUnder(evt) {
   // #audioSection stays named here and goes inert on its own in advanced mode:
   // Step 10c hides it, and a display:none element is never an event target, so
   // closest() cannot reach it. The empty Audio row is the drop zone there.
-  return node.closest('.layer-track[data-empty-type], #mainDrop, #audioSection');
+  const zone = node.closest('[data-empty-type], #mainDrop, #audioSection');
+  // The frame at the top takes nothing in advanced editing, so a drag over it
+  // lands nowhere rather than there. See mainDropTakesFiles.
+  if (zone === mainDrop && !mainDropTakesFiles()) return null;
+  return zone;
 }
 
 document.addEventListener('dragenter', (evt) => {
@@ -1336,7 +1342,7 @@ document.addEventListener('drop', (evt) => {
   setDropActive(false);
   if (!zone || !zone.dataset.emptyType || busy) return;
   const filePath = droppedPath(evt);
-  if (filePath) openIntoLayer(zone.dataset.emptyType, filePath);
+  if (filePath) openIntoLayer(zone.dataset.emptyType, filePath, zone.dataset.emptyRow);
 });
 
 // A drag that ends abnormally, Escape being the usual way, need not leave a
@@ -1422,6 +1428,9 @@ async function handleAudioDrop(filePath) {
 // The listeners stay thin: pull the path out of the event and hand it on,
 // which leaves the routing above reachable without an operating system drag.
 mainDrop.addEventListener('drop', (evt) => {
+  // Guarded as well as unlit: a file let go over a frame that never offered to
+  // take it must not be taken anyway.
+  if (!mainDropTakesFiles()) return;
   const filePath = droppedPath(evt);
   if (filePath) handleMainDrop(filePath);
 });
@@ -1652,15 +1661,26 @@ function syncProjectTrim() {
   if (!appSettings.advancedEditing) return;
   const total = timelineModel.totalDuration(layers);
   if (total === trimSpan) return;
+  // Against the material rather than against the ceiling: "was the end sitting
+  // at the end of what there is" is the question, and V2.8 made those two
+  // different numbers.
   const wasWhole = slider.end >= trimSpan - 0.001;
+  // V2.8. And how far past it, because an end past the material is a length of
+  // black somebody asked for. Following the project back to its new end would
+  // throw that away, and standing still would turn it into a cut. Keeping the
+  // distance is the only one of the three that means the same thing afterwards
+  // as it did before.
+  const tail = Math.max(0, slider.end - trimSpan);
   trimSpan = total;
   if (total <= 0) {
     slider.reset();
   } else {
     const start = Math.min(slider.start, Math.max(0, total - slider.minSpan));
-    const end = wasWhole ? total
-      : Math.min(Math.max(slider.end, start + slider.minSpan), total);
-    slider.setRange(total, start, end);
+    // No longer pulled back to the material. An end deliberately put past the
+    // last layer stays there when a clip is nudged, the same way an end pulled
+    // deliberately inward already did.
+    const end = wasWhole ? total + tail : Math.max(slider.end, start + slider.minSpan);
+    slider.setRange(timelineModel.trimCeiling(layers), start, end);
   }
   setTrimEnabled(!busy && trimmable());
   refreshSelection(null);
@@ -1683,7 +1703,9 @@ function applyTrimSubject() {
     : (media ? media.duration || 0 : 0);
   trimSpan = advanced ? total : 0;
   if (total <= 0) slider.reset();
-  else slider.setRange(total, 0, total);
+  // Advanced editing's ceiling is past the material, V2.8 item 3. Simple
+  // editing's is the file, which has nothing past it to show.
+  else slider.setRange(advanced ? timelineModel.trimCeiling(layers) : total, 0, total);
   setTrimEnabled(!busy && trimmable());
   refreshSelection(null);
 }
@@ -2588,9 +2610,32 @@ let tlFitted = true;
  * there is nothing to seek along. Once the compositor lands, the answer is the
  * layers alone.
  */
-function timelineDuration() {
+/** How much material there is: the last thing that ends, and nothing beyond. */
+function timelineContent() {
   const fromMedia = media ? media.duration || 0 : 0;
   return Math.max(fromMedia, timelineModel.totalDuration(layers));
+}
+
+// V2.8 item 3. The strip of empty timeline the fitted view leaves past whatever
+// is furthest out, as a share of it. Small, because it comes out of the width
+// every clip is drawn in, and it only has to be enough to show that there is
+// room past the end and to give the marker somewhere to be dragged to. Further
+// than that is a zoom out, where the view can already pan an hour past the
+// material.
+const TRIM_TAIL_STRIP = 0.05;
+
+/**
+ * What the view is drawn against, which is no longer the same as what there is.
+ *
+ * The out marker may stand past the last layer since V2.8, and a view fitted to
+ * the material alone would put it off the right edge at the one zoom everything
+ * opens at. So the extent follows whichever is further, plus the strip.
+ */
+function timelineDuration() {
+  const content = timelineContent();
+  if (!timelineDriving()) return content;
+  const reach = Math.max(content, slider.end);
+  return reach > 0 ? reach * (1 + TRIM_TAIL_STRIP) : reach;
 }
 
 /** Back to showing the whole clip, which is where a newly loaded one starts. */
@@ -2634,6 +2679,9 @@ function syncTimelineView() {
 
 function positionTimelineMarkers() {
   const duration = timelineDuration();
+  // What the veil marks is where the material stops, which since V2.8 is not
+  // where the timeline stops.
+  const content = timelineContent();
   const show = duration > 0 && timelineLane.clientWidth > 0;
   timelineTrimIn.hidden = !show;
   timelineTrimOut.hidden = !show;
@@ -2650,7 +2698,7 @@ function positionTimelineMarkers() {
   // Anchored at the right edge, so it only needs its left told to it. Clamped
   // at zero, or scrolling past the content would put it off the left and leave
   // a sliver of undimmed headroom at the edge.
-  const endX = Math.max(0, timelineView.timeToX(tlView, duration));
+  const endX = Math.max(0, timelineView.timeToX(tlView, content));
   timelineBeyond.style.left = endX + 'px';
 
   // V2.5. The two stretches the render leaves out. Each is anchored to its own
@@ -2886,6 +2934,13 @@ function bindTimelineMarker(markerEl, isStart) {
     // no longer what decides the cursor. Held on the body, the way every other
     // gesture on this frame holds its own.
     document.body.classList.add('trim-dragging');
+    // V2.8. The extent follows the out marker now, and a fitted view would
+    // refit to it on every move: the scale would shrink under the hand and the
+    // marker would drift away from the pointer, because the drag turns pixels
+    // into seconds at whatever scale the view is showing. Frozen here and
+    // settled on release, the same way a fade drag does it.
+    tlFitted = false;
+    const laneAtPress = timelineLane.getBoundingClientRect();
     const drag = {
       anchorX: evt.clientX,
       anchorValue: isStart ? slider.start : slider.end,
@@ -2945,6 +3000,9 @@ function bindTimelineMarker(markerEl, isStart) {
       // seekDecodersTo skips a decoder that is already on the right frame, so
       // re-rendering an unchanged trim costs nothing but the restore.
       renderTrimFrames(mine);
+      // Whether what came out of the drag is the fitted view again, which is
+      // what decides if a window resize refits it.
+      noteTimelineFit(laneAtPress.width);
       commitHistory();
     };
     grabEl.addEventListener('pointermove', onMove);
@@ -3187,7 +3245,7 @@ function addLayerFromMedia(type, data) {
  * into an audio row keeps only its sound, which costs nothing here because the
  * layer records the type it was made as and the encoder reads that.
  */
-async function openIntoLayer(type, filePath) {
+async function openIntoLayer(type, filePath, rowId) {
   if (busy) return;
   const result = filePath
     ? await window.lwclipper.describeMedia(filePath)
@@ -3204,14 +3262,24 @@ async function openIntoLayer(type, filePath) {
     reportFailure(result);
     return;
   }
+  // V2.8. 'auto' is the Add a new Track block, which has no kind of its own and
+  // takes whatever the file is. Resolved once, here, so everything below sees a
+  // real type.
+  const want = type === 'auto'
+    ? (result.data.isAudio ? 'audio' : 'video')
+    : type;
   // V2.3. A still has no sound in it, so an Audio row is not somewhere it can
   // go. Said rather than quietly making a silent audio layer, which would look
-  // like the drop worked.
-  if (type === 'audio' && result.data.isImage) {
+  // like the drop worked. An image can never resolve to audio through 'auto',
+  // so this only ever answers a row that was asked for as an audio row.
+  if (want === 'audio' && result.data.isImage) {
     reportFailure({ error: t('An image has no sound to put on an audio track.') });
     return;
   }
-  addLayerFromMedia(type, result.data);
+  addLayerFromMedia(want, result.data);
+  // The row it went into is a row no longer: it has a layer in it now, and that
+  // layer is drawn by the real row above.
+  removeEmptyRow(rowId);
 }
 
 /**
@@ -3764,25 +3832,72 @@ function bindAlphaDrag(node, layerId) {
   });
 }
 
-function buildEmptyRow(type) {
+// ---- tracks that are not there yet, V2.8 item 5 ----
+//
+// renderLayerRows used to append one empty video row and one empty audio row
+// every time it ran, so the rows were derived and always there. The user, on
+// 2026-09-24: "Instead of having an 'Video 2 / Audio 2' or X layer prepared,
+// simply put an 'Add a new Track' as title after the active/used layers".
+//
+// An empty row is therefore something asked for, which means it is state. It is
+// deliberately **not** in `layers` and not in history: an empty track has
+// nothing to save, nothing to undo and nothing to export, and putting it in
+// that list would mean teaching every reader of it to skip a thing that is not
+// a layer. It does not survive a project being opened either, which is right,
+// because it was a thing somebody was in the middle of doing.
+let emptyRows = [];
+let emptyRowSeq = 0;
+
+function addEmptyRow(type) {
+  emptyRowSeq += 1;
+  emptyRows.push({ id: 'empty' + emptyRowSeq, type });
+  renderLayerRows();
+}
+
+function removeEmptyRow(id) {
+  if (!id) return;
+  const before = emptyRows.length;
+  emptyRows = emptyRows.filter((r) => r.id !== id);
+  if (emptyRows.length !== before) renderLayerRows();
+}
+
+function buildEmptyRow(entry, ordinal) {
+  const type = entry.type;
   const row = document.createElement('div');
   row.className = 'layer-row layer-row--' + type + ' layer-row--empty';
 
   const head = document.createElement('div');
   head.className = 'layer-head';
+  const top = document.createElement('div');
+  top.className = 'layer-head__top';
   const name = document.createElement('div');
   name.className = 'layer-name';
-  name.textContent = layerLabel(type, layersOfType(type).length + 1);
-  head.appendChild(name);
+  name.textContent = layerLabel(type, ordinal);
+  top.appendChild(name);
+  // A row that was asked for has to be refusable as well, or one added by
+  // mistake stays for the rest of the session with nothing to do about it. The
+  // same button the real rows carry, doing the only thing there is to do to a
+  // track with nothing in it.
+  //
+  // The standing row of each kind has no id and no button: it is derived from
+  // there being nothing of that kind, so there is nothing to take back and a
+  // button would only put it straight back on the next draw.
+  if (entry.id) {
+    top.appendChild(makeButton('layer-btn layer-btn--delete', '✕', t('Delete layer'),
+      () => removeEmptyRow(entry.id)));
+  }
+  head.appendChild(top);
 
   const track = document.createElement('div');
   track.className = 'layer-track';
   track.dataset.emptyType = type;
+  if (entry.id) track.dataset.emptyRow = entry.id;
   const empty = document.createElement('div');
   empty.className = 'layer-empty';
   const text = document.createElement('span');
   text.textContent = type === 'audio' ? t('No Audio track') : t('No Video track');
-  empty.appendChild(makeButton('', t('Open File'), '', () => openIntoLayer(type, null)));
+  empty.appendChild(makeButton('', t('Open File'), '',
+    () => openIntoLayer(type, null, entry.id)));
   empty.appendChild(text);
   track.appendChild(empty);
 
@@ -3791,13 +3906,69 @@ function buildEmptyRow(type) {
   return row;
 }
 
+/**
+ * The block under the rows: a title, the two ways to make a track, a way to
+ * open a file straight into one, and the words that say a file can simply be
+ * dropped here.
+ *
+ * **It is also the drop zone advanced editing now depends on.** V2.6 took the
+ * frame at the top out of the drop path on the argument that there is always an
+ * empty layer row to drop onto; item 5 takes those rows away, so the argument
+ * has to survive somewhere, and this is where. It is always present, whatever
+ * the timeline holds.
+ *
+ * 'auto' rather than a type: a file dropped here becomes the kind of track the
+ * file is, which is the same rule the frame at the top followed before V2.6.
+ */
+function buildAddRow() {
+  const row = document.createElement('div');
+  row.className = 'layer-add';
+
+  const head = document.createElement('div');
+  head.className = 'layer-add__head';
+  head.textContent = t('Add a new Track');
+  row.appendChild(head);
+
+  const body = document.createElement('div');
+  body.className = 'layer-add__body';
+  body.dataset.emptyType = 'auto';
+  body.appendChild(makeButton('layer-add__btn', t('New Video Track'), '',
+    () => addEmptyRow('video')));
+  body.appendChild(makeButton('layer-add__btn', t('New Audio Track'), '',
+    () => addEmptyRow('audio')));
+  body.appendChild(makeButton('layer-add__btn', t('Open File'), '',
+    () => openIntoLayer('auto', null, null)));
+  const hint = document.createElement('span');
+  hint.className = 'layer-add__hint';
+  hint.textContent = t('or drag and drop any supported file here');
+  body.appendChild(hint);
+  row.appendChild(body);
+  return row;
+}
+
 function renderLayerRows() {
   const stack = timelineStack;
   stack.replaceChildren();
-  for (const layer of layersOfType('video')) stack.appendChild(buildLayerRow(layer));
-  stack.appendChild(buildEmptyRow('video'));
-  for (const layer of layersOfType('audio')) stack.appendChild(buildLayerRow(layer));
-  stack.appendChild(buildEmptyRow('audio'));
+  // Each kind's empty rows follow its real ones, so the video block and the
+  // audio block stay whole, and the numbering carries on from the layers that
+  // are already there.
+  for (const type of ['video', 'audio']) {
+    const real = layersOfType(type);
+    for (const layer of real) stack.appendChild(buildLayerRow(layer));
+    const asked = emptyRows.filter((r) => r.type === type);
+    // One row of each kind stands ready while there is nothing of that kind at
+    // all, which is the user's amendment to item 5 on 2026-09-24: "Video 1 and
+    // Audio 1 should be default, but no auto-adding Video 2 if Video 1 gets
+    // track loaded in it". So the old always-there row survives exactly as far
+    // as the first file, and the Add a new Track block is what comes after.
+    if (!real.length && !asked.length) {
+      stack.appendChild(buildEmptyRow({ type, id: null }, 1));
+    }
+    asked.forEach((entry, i) => {
+      stack.appendChild(buildEmptyRow(entry, real.length + 1 + i));
+    });
+  }
+  stack.appendChild(buildAddRow());
   positionLayerClips();
 }
 
@@ -3941,9 +4112,28 @@ function placeAlphaLine(track, clip, layer, x0, from, visible, gripW) {
   if (!line) return;
   const alpha = timelineModel.alphaOf(layer);
   const row = clip.offsetTop + layerGeometry.alphaRow(clip.offsetHeight, alpha);
+
+  // V2.8. The line runs between the fades rather than under them: "Hide the max
+  // alpha horizontal line inside the fade in/out areas, there is already the
+  // diagonal". Inside a fade the ramp is what the alpha is, so a flat line
+  // across it would be drawing a value the layer does not have there.
+  //
+  // Both ends are already known to two other drawings: the ramps stop at this
+  // row and the two vertical fade lines stand at these exact seconds. Taking
+  // the seconds and converting here, rather than reading the elements, keeps
+  // this the same kind of sum as everything else in this function.
+  const fades = timelineModel.fadesOf(layer);
+  const lo = Math.max(x0 + from,
+    timelineView.timeToX(tlView, layer.start + fades.in));
+  const hi = Math.min(x0 + from + visible,
+    timelineView.timeToX(tlView, timelineModel.endOf(layer) - fades.out));
+  const span = hi - lo;
+  // Fades that meet leave no middle to draw in, and then the two diagonals are
+  // the whole picture, which is what the user says is enough.
+  line.hidden = span < 1;
   line.style.top = Math.round(row) + 'px';
-  line.style.left = (x0 + from) + 'px';
-  line.style.width = visible + 'px';
+  line.style.left = Math.round(lo) + 'px';
+  line.style.width = Math.max(0, Math.round(span)) + 'px';
 
   const grip = track.querySelector('.clip-alpha-grip');
   if (!grip) return;
@@ -3954,7 +4144,19 @@ function placeAlphaLine(track, clip, layer, x0, from, visible, gripW) {
   // full alpha would sit across both corners and swallow them.
   grip.hidden = visible < 2 * (gripW + CLIP_FADE_W) + CLIP_ALPHA_W + 16;
   if (grip.hidden) return;
-  grip.style.left = Math.round(x0 + from + (visible - CLIP_ALPHA_W) / 2) + 'px';
+  // V2.8. The bar rides the line now. It is the line's handle, and a handle
+  // standing over a stretch with no line under it is pointing at nothing. The
+  // middle of the visible part is still where it wants to be, for the reason
+  // above, so that is where it goes whenever the line reaches that far.
+  const half = CLIP_ALPHA_W / 2;
+  const want = span >= CLIP_ALPHA_W
+    ? Math.min(Math.max(x0 + from + visible / 2, lo + half), hi - half)
+    : (lo + hi) / 2;
+  // And inside the visible part whatever the fades are doing, or a clip scrolled
+  // half off screen would put its only alpha control off the screen with it.
+  const mid = Math.min(Math.max(want, x0 + from + half),
+    x0 + from + visible - half);
+  grip.style.left = Math.round(mid - half) + 'px';
   // Centred on the line and not held anywhere: the track has four pixels of
   // room above the clip and four below, which is more than the bar needs to
   // straddle either edge, and that is the whole reason it moved out here. The
@@ -5902,7 +6104,10 @@ async function adoptProject(result) {
   const total = timelineModel.totalDuration(keep);
   trimSpan = total;
   if (total <= 0) slider.reset();
-  else slider.setRange(total, result.doc.trim.start, result.doc.trim.end);
+  // The ceiling rather than the total, or a project saved with its end past the
+  // last layer would lose that the moment it was opened.
+  else slider.setRange(timelineModel.trimCeiling(keep),
+    result.doc.trim.start, result.doc.trim.end);
   setTrimEnabled(!busy && trimmable());
   refreshSelection(null);
   renderTrimFrames();
@@ -6074,7 +6279,9 @@ function applyHistory(next) {
   const total = timelineModel.totalDuration(state.layers);
   trimSpan = total;
   if (total <= 0) slider.reset();
-  else slider.setRange(total, state.start, state.end);
+  // The ceiling rather than the total, for the reason opening a project uses
+  // it: an end past the last layer is a thing to undo back to, not to lose.
+  else slider.setRange(timelineModel.trimCeiling(state.layers), state.start, state.end);
   setTrimEnabled(!busy && trimmable());
   refreshSelection(null);
   // The markers moved after setLayers asked for its rebuild, so both frames are
@@ -6106,16 +6313,12 @@ document.addEventListener('keydown', (evt) => {
 
 // ---- crop ----
 
-// Every dimension ffmpeg is handed has to be even, because yuv420p subsamples
-// chroma two pixels at a time and an odd one has no valid encoding. That is
-// what sets the step sizes below rather than any feel for how fast a bar
-// should move: one bar alone moves in twos, and a mirrored pair moves one each
-// so the dimension between them still changes in twos.
-const CROP_STEP = 2;
-const CROP_MIRROR_STEP = 1;
-// Small enough never to be in the way, large enough that the four grips do not
-// pile up on each other and become impossible to tell apart.
-const CROP_MIN = 16;
+// V2.7. The even step and the smallest box now live in src/geometry.js beside
+// resizeEdge, which is the arithmetic they exist for, and are aliased back here
+// so every use site below is spelled the way it always was. CROP_MIRROR_STEP
+// went with them and has no reader left on this side.
+const CROP_STEP = layerGeometry.CROP_STEP;
+const CROP_MIN = layerGeometry.CROP_MIN;
 
 // The frame fills 90% of the popup, which is itself 80% of the window. A tall
 // source would run off the bottom at that width, so the height is capped and
@@ -6462,25 +6665,19 @@ function updateRenderResolution() {
     // answers for the media file and there is none here.
     videoHead.hidden = !showing;
     renderResolution.hidden = !showing;
-    renderResolutionEdit.hidden = !showing;
-    renderResolutionText.textContent = '';
-    if (!showing) return;
-    const frame = projectFrame();
-    // Typeable only while the project has a shape of its own. projectFrame()
-    // substitutes a fallback until a decoder has answered, and a box over a
-    // number the project has not agreed to yet is a box that lies about what
-    // pressing Enter in it would do.
-    const editable = !!compositeFrame && !busy;
-    for (const [box, value] of [[frameWidthBox, frame.width], [frameHeightBox, frame.height]]) {
-      box.disabled = !editable;
-      // Never over what is being typed. A file dropped while a box has the
-      // focus comes back through here, and rewriting the value under the cursor
-      // would throw the edit away mid-word.
-      if (document.activeElement !== box) box.value = String(value);
+    if (!showing) {
+      renderResolutionText.textContent = '';
+      return;
     }
+    // V2.8. Text rather than boxes, at the user's word: "The main window should
+    // show text as info, not editboxes. The editboxes only inside the Crop
+    // Render." So this line is a readout in both modes now, and the frame is
+    // typed in the window that exists to decide it.
+    const frame = projectFrame();
+    renderResolutionText.textContent = t('Render Resolution: {w} x {h}',
+      { w: frame.width, h: frame.height });
     return;
   }
-  renderResolutionEdit.hidden = true;
   const size = sourceSize();
   const showing = !!media && !outputIsAudio() && !!size;
   renderResolution.hidden = !showing;
@@ -6489,36 +6686,6 @@ function updateRenderResolution() {
   const h = cropRect ? cropRect.height : size.h;
   renderResolutionText.textContent = t('Render Resolution: {w} x {h}', { w, h })
     + (cropRect ? ' ' + t('(cropped)') : '');
-}
-
-/**
- * The two boxes are one gesture, and that is arithmetic rather than tidiness.
- *
- * 1280x720 to 1920x1080 in one move carries a layer at 200,120 480x270 to
- * 300,180 720x405. The same change made as two, through 1920x720 on the way,
- * lands it at 520,300 480x270: pillarboxed and then letterboxed, which is a
- * different shot from the one that was asked for. So tabbing from one box to
- * the other does not commit anything, and whichever of the two is left last
- * commits both together.
- */
-function commitFrameBoxes() {
-  if (setProjectFrame(frameWidthBox.value, frameHeightBox.value)) return;
-  // Refused, or the same size it already was. Either way the boxes are now
-  // saying something the project is not, so they go back to what it says.
-  updateRenderResolution();
-}
-
-for (const box of [frameWidthBox, frameHeightBox]) {
-  box.addEventListener('focusout', (evt) => {
-    if (evt.relatedTarget === frameWidthBox || evt.relatedTarget === frameHeightBox) return;
-    commitFrameBoxes();
-  });
-  // Enter commits by leaving the box rather than by committing directly, so
-  // there is one path in and not two. It also puts the caret somewhere the
-  // even-down can be written back under it.
-  box.addEventListener('keydown', (evt) => {
-    if (evt.key === 'Enter') box.blur();
-  });
 }
 
 /**
@@ -6920,6 +7087,71 @@ for (const handle of [sideSplitterLeft, sideSplitterRight]) {
   if (stage) new ResizeObserver(() => placeSideGrips()).observe(stage);
 }
 
+// ---- the layer column's width, V2.8 item 6 ----
+//
+// --timeline-gutter is the one horizontal measurement the whole frame agrees
+// on, so this drag writes that and nothing else and the heads, the ruler and
+// the lane all follow it. Session state rather than saved, like the height
+// splitter above: it is a way of looking at the timeline, not part of the
+// project.
+//
+// The floor is what the head's own controls need to stay usable; the ceiling is
+// there so a drag cannot push the timeline itself off the frame.
+const GUTTER_MIN = 90;
+const GUTTER_MAX = 360;
+let gutterFrom = null;
+
+// Read from the property rather than measured off an element. The heads are
+// border-box and a pixel of border would come off every reading, so a drag made
+// of many small ones would walk the column leftwards on its own.
+function gutterNow() {
+  const raw = getComputedStyle(document.documentElement)
+    .getPropertyValue('--timeline-gutter');
+  return parseFloat(raw) || GUTTER_MIN;
+}
+
+layersSplitter.addEventListener('pointerdown', (evt) => {
+  if (evt.button !== 0) return;
+  gutterFrom = { x: evt.clientX, width: gutterNow() };
+  // So the drag survives the pointer leaving a six pixel strip, which it does
+  // at once and for the whole of the gesture.
+  layersSplitter.setPointerCapture(evt.pointerId);
+  document.body.classList.add('splitting-layers');
+  // The stage seeks on a press it does not recognise. This one is not a seek.
+  evt.stopPropagation();
+  evt.preventDefault();
+});
+
+layersSplitter.addEventListener('pointermove', (evt) => {
+  if (!gutterFrom) return;
+  // From where the column was when the pointer went down, the same as the
+  // height splitter and for the same reason: a pointer that runs past a floor
+  // and comes back lands where it started rather than a drag's worth away.
+  const want = clamp(Math.round(gutterFrom.width + (evt.clientX - gutterFrom.x)),
+    GUTTER_MIN, GUTTER_MAX);
+  document.documentElement.style.setProperty('--timeline-gutter', want + 'px');
+  // The lane is narrower or wider than it was and every second in it has moved,
+  // so the ruler, the clips and the playhead are all redrawn against the new
+  // width. drawTimeline does the first two.
+  drawTimeline();
+  updatePlayhead();
+});
+
+function endGutterDrag(evt) {
+  if (!gutterFrom) return;
+  gutterFrom = null;
+  document.body.classList.remove('splitting-layers');
+  if (layersSplitter.hasPointerCapture(evt.pointerId)) {
+    layersSplitter.releasePointerCapture(evt.pointerId);
+  }
+  // The view that came out of the drag may or may not be the fitted one any
+  // more, which is what decides whether a window resize refits it.
+  noteTimelineFit(timelineLane.getBoundingClientRect().width);
+}
+
+layersSplitter.addEventListener('pointerup', endGutterDrag);
+layersSplitter.addEventListener('pointercancel', endGutterDrag);
+
 editSplitter.addEventListener('pointerdown', (evt) => {
   if (evt.button !== 0) return;
   splitFrom = { y: evt.clientY, stack: timelineStack.getBoundingClientRect().height };
@@ -6981,12 +7213,24 @@ editSplitter.addEventListener('pointercancel', endSplit);
 function updateCropBtn() {
   // No picture in the output, nothing to crop out of it.
   cropBtn.hidden = outputIsAudio();
-  cropBtn.disabled = busy || !canCrop();
-  cropBtn.classList.toggle('btn--active', currentCrop() !== null);
-  // In advanced editing one button stands for however many video layers there
-  // are, so it says which one it will open on rather than leaving that to be
-  // guessed from which row happens to look selected.
-  const target = cropTargetLayer();
+  // V2.7. In advanced editing this button stopped being a crop of one layer and
+  // became the output frame itself, so it is live whenever there is a frame to
+  // reshape rather than only when a video row is selected. The per-layer crop is
+  // reached from the mark on the clip, which is where it has been since
+  // 2026-09-23 and which the 21a3 probe checks.
+  const frame = timelineDriving();
+  // Two calls rather than one with a ternary inside it, because
+  // check-locales.js reads t('...') literally and cannot see a key that
+  // is chosen at run time. It has missed strings that way before.
+  cropBtn.textContent = frame ? t('Crop Render') : t('Crop');
+  cropBtn.disabled = busy || (frame ? !canRenderCrop() : !canCrop());
+  // The green only ever meant "there is a crop in force", and the render frame
+  // is not a crop that can be in force or not.
+  cropBtn.classList.toggle('btn--active', !frame && currentCrop() !== null);
+  // In advanced editing one button used to stand for however many video layers
+  // there were, so it said which one it would open on. It opens on the frame
+  // now, and the frame needs no naming.
+  const target = frame ? null : cropTargetLayer();
   cropBtn.title = target
     ? t('Crop {name}', { name: layerLabel(target.type, layerOrdinal(target)) })
     : '';
@@ -7495,8 +7739,12 @@ let placeTouched = false;
 let placeCentre = null;
 let placeScalePct = 100;
 
-const PLACE_SCALE_MIN = 10;
-const PLACE_SCALE_MAX = 400;
+// V2.8 took the ceiling from 400% to 1000% and the floor from 10% to 1%, and
+// put the bend between them in geometry beside the rest of the placement sums.
+// The slider's own value is a position on that bend now rather than a
+// percentage, which is the only reason the two are told apart here.
+const PLACE_SCALE_MIN = layerGeometry.PLACE_SCALE_MIN;
+const PLACE_SCALE_MAX = layerGeometry.PLACE_SCALE_MAX;
 
 // V2.2. The anchors on the output frame, asked for on 2026-09-23: a ring in
 // each corner a few pixels in from the edge, one in the middle, and a click on
@@ -7538,6 +7786,16 @@ const PLACE_RING_SLOP = 3;
 // The ring the pointer went down on, while it is still allowed to become a
 // click. Cleared the moment the pointer leaves that ring or drags the picture.
 let placeRingPress = null;
+// V2.8 item 8. Which ring the picture is currently stuck to, by name, or null
+// for one that was put somewhere by hand. It is the layer's own `anchor` while
+// the popup is open: read from it when the popup opens and written back by
+// Accept, so a picture put on a corner is still on that corner the next time.
+//
+// What it does while it is set: the centre is worked out from the anchor and
+// the size every time the picture is rebuilt, rather than being held. So the
+// scale slider grows the picture about that corner instead of about its middle,
+// which is the whole of what was asked for.
+let placeAnchor = null;
 const placeRingEls = new Map();
 
 const sameRect = (a, b) => !!a && !!b && a.x === b.x && a.y === b.y
@@ -7609,6 +7867,35 @@ function showCropTab(which) {
  * Render Position tab follow the Video Frame tab instead of showing the shape
  * the crop used to be.
  */
+/**
+ * Put the held ring's centre back under the picture at the size it is about to
+ * be, V2.8 item 8.
+ *
+ * **Only when the size is actually changing**, which is the scale slider and an
+ * accepted crop, and is why this is a condition rather than a line in the
+ * rebuild. A picture that is not changing size has nothing to re-stick, and
+ * re-sticking it anyway would mean opening the Render Position tab could move
+ * the composition by itself, which is a thing no tab should do.
+ *
+ * That also settles what happens when the project frame changes under an
+ * anchored layer: nothing. Item 7 says a frame change keeps every layer's
+ * relative size and position rather than re-fitting anything, and a layer that
+ * jumped to a corner because it had once been put there would be exactly the
+ * re-fitting that item forbids. The ring stays lit and takes hold again the
+ * next time the picture is scaled.
+ */
+function holdPlaceAnchor(fit) {
+  const held = placeAnchor && PLACE_ANCHORS.find((a) => a.key === placeAnchor);
+  if (!held || !fit || !placeDraft) return;
+  const size = placeDraftSize(fit);
+  if (size.width === placeDraft.width && size.height === placeDraft.height) return;
+  const frame = projectFrame();
+  placeCentre = {
+    cx: layerGeometry.anchorCentre(held.ax, frame.width, size.width),
+    cy: layerGeometry.anchorCentre(held.ay, frame.height, size.height),
+  };
+}
+
 function rebuildPlaceDraft() {
   const fit = placeFitRect(cropTargetLayer());
   if (!fit) {
@@ -7622,6 +7909,7 @@ function rebuildPlaceDraft() {
     placeScalePct = 100;
     return;
   }
+  holdPlaceAnchor(fit);
   const { width, height } = placeDraftSize(fit);
   placeDraft = {
     x: Math.round(placeCentre.cx - width / 2),
@@ -7675,6 +7963,10 @@ function layoutPlaceRings() {
       placeRingEls.set(ring.key, node);
     }
     node.hidden = !on;
+    // V2.8 item 8: "Keep the selected circle highlighted green until it gets
+    // dragged or another circle gets clicked." The same green hovering one
+    // shows, held rather than following the pointer.
+    node.classList.toggle('place-ring--held', on && ring.key === placeAnchor);
     node.style.left = ring.cx + 'px';
     node.style.top = ring.cy + 'px';
   }
@@ -7694,6 +7986,9 @@ function snapPlaceTo(key) {
   const fit = placeFitRect(cropTargetLayer());
   if (!anchor || !fit || !placeDraft) return;
   if (!placeCentre) adoptPlaceRect(placeDraft, fit);
+  // V2.8 item 8. The picture sticks here from now on, until it is dragged off
+  // or another ring is clicked.
+  placeAnchor = key;
   const frame = projectFrame();
   const size = placeDraftSize(fit);
   // The centre rather than the corner, because the centre is what a placement
@@ -7725,7 +8020,7 @@ function adoptPlaceRect(rect, fit) {
 /** The draft's size as a percentage of the fit, which is what 100% means. */
 function showPlaceScale() {
   const percent = clamp(Math.round(placeScalePct), PLACE_SCALE_MIN, PLACE_SCALE_MAX);
-  placeScaleSlider.value = String(percent);
+  placeScaleSlider.value = String(layerGeometry.sliderFromScale(percent));
   placeScaleValue.textContent = percent + '%';
 }
 
@@ -7747,7 +8042,8 @@ function setPlaceScale(percent) {
   drawPlaceStage();
 }
 
-placeScaleSlider.addEventListener('input', () => setPlaceScale(Number(placeScaleSlider.value)));
+placeScaleSlider.addEventListener('input',
+  () => setPlaceScale(layerGeometry.scaleFromSlider(Number(placeScaleSlider.value))));
 
 /**
  * The stage's picture, in client pixels: where it starts and how big it is.
@@ -7840,6 +8136,10 @@ placeStage.addEventListener('pointermove', (evt) => {
     cy: p.y - placeDrag.dy + placeDraft.height / 2,
   };
   placeTouched = true;
+  // V2.8 item 8. Dragging the picture is how it comes off the ring it was stuck
+  // to, which is the same rule the click and the drag already settle between
+  // them: "dragging the image disables repositioning".
+  placeAnchor = null;
   drawPlaceStage();
 });
 
@@ -8002,47 +8302,6 @@ function setCropHint(mirrored, diagonal = false, locked = false) {
   }
 }
 
-/**
- * Where a pair of opposite edges ends up after a bar is dragged. Kept pure and
- * out of the handler so the arithmetic can be checked on its own: the two axes
- * and all four bars come through here, which is what stops the clamping to the
- * frame from being written four slightly different ways.
- *
- * lo/hi are the near and far edge in source pixels, floor and limit how far
- * either may travel on that axis, movesLo which of the two the bar being
- * dragged is, rawDelta the pointer's travel converted to source pixels, and
- * travelPx that same travel in screen pixels, which is what holds the mirrored
- * pair to its one pixel step.
- *
- * floor and limit are what is on the frame, not what is in the picture: zoomed
- * in, a bar dragged past the edge of the frame would take the box somewhere it
- * cannot be seen or grabbed. At 100% the two are the same thing.
- */
-function resizeEdge(lo0, hi0, limit, movesLo, mirrored, rawDelta, travelPx = Infinity, floor = 0) {
-  if (mirrored) {
-    // Both bars move by the same amount in opposite directions, so the centre
-    // holds and the dimension between them changes by two per step: still even.
-    // Outward they stop at the frame, inward at CROP_MIN apart.
-    //
-    // The rate is capped at a source pixel per pixel of travel. Without that
-    // cap the step is whatever a screen pixel happens to be worth, and the
-    // frame is usually shown small enough that this is two or three source
-    // pixels: on a 1280 wide clip one screen pixel is 1.81 source pixels, so
-    // the pair could only ever jump four at a time, never the two it is for.
-    // Zoomed in, where a screen pixel is worth less than a source one, the
-    // ordinary rate is already the slower of the two and still applies.
-    const rate = Math.sign(rawDelta) * Math.min(Math.abs(rawDelta), Math.abs(travelPx));
-    const outward = Math.max(0, Math.min(lo0 - floor, limit - hi0));
-    const inward = Math.max(0, Math.floor((hi0 - lo0 - CROP_MIN) / 2));
-    const d = clamp(Math.round(rate / CROP_MIRROR_STEP) * CROP_MIRROR_STEP,
-      movesLo ? -outward : -inward, movesLo ? inward : outward);
-    return movesLo ? { lo: lo0 + d, hi: hi0 - d } : { lo: lo0 - d, hi: hi0 + d };
-  }
-  const d = Math.round(rawDelta / CROP_STEP) * CROP_STEP;
-  if (movesLo) return { lo: clamp(lo0 + d, floor, hi0 - CROP_MIN), hi: hi0 };
-  return { lo: lo0, hi: clamp(hi0 + d, lo0 + CROP_MIN, limit) };
-}
-
 // The bounds a bar may travel between: what is on the frame, rounded inward to
 // an even number so the box can still land on one. The half pixel of slack
 // stops a rounding error at 100%, where the window is the whole picture, from
@@ -8106,22 +8365,45 @@ function applyDraft(shifted, diagonal = false, locked = false) {
   if (size) captureCropAnchor(size);
 }
 
+/**
+ * Everything the bars and the corners need to know about the box they move.
+ *
+ * V2.7. Gathered so that the Crop Render Frame window can hand the same two
+ * binders its own answers: a different rectangle, its own stage scale, its own
+ * hint line. Nothing in here is new. Each entry is the popup global that the
+ * binders read directly until now, and this object is the only thing that
+ * reads them on their behalf.
+ *
+ * rect is a function rather than the rectangle itself because cropDraft is
+ * replaced outright in several places, so a reference taken once would go
+ * stale. The binders call it again on every move, which is what the code they
+ * came from did by naming the global.
+ */
+const cropBoxCtx = {
+  size: sourceSize,
+  rect: () => cropDraft,
+  bounds: viewBounds,
+  scale: () => cropScale,
+  ratio: cropLockRatio,
+  hint: setCropHint,
+  commit: applyDraft,
+};
+
 // One bar at a time, or with Shift the bar opposite it as well. Both work on
 // the pair of edges the bar belongs to, lo and hi, which is what keeps the
 // clamping to the frame in one place instead of four.
-function bindGrip(grip) {
+function bindGrip(grip, ctx) {
   const edge = grip.dataset.edge;
   const vertical = edge === 'top' || edge === 'bottom';
   const movesLo = edge === 'left' || edge === 'top';
 
   grip.addEventListener('pointerdown', (evt) => {
-    const size = sourceSize();
-    if (!size || !cropDraft) return;
-    const bounds = viewBounds(size);
-    const floor = vertical ? bounds.minY : bounds.minX;
-    const limit = vertical ? bounds.maxY : bounds.maxX;
-    const lo0 = vertical ? cropDraft.y : cropDraft.x;
-    const hi0 = lo0 + (vertical ? cropDraft.height : cropDraft.width);
+    const size = ctx.size();
+    const draft = ctx.rect();
+    if (!size || !draft) return;
+    const bounds = ctx.bounds(size);
+    const lo0 = vertical ? draft.y : draft.x;
+    const hi0 = lo0 + (vertical ? draft.height : draft.width);
     const anchor = vertical ? evt.clientY : evt.clientX;
     // 21e. The scale the gesture started at, not the live one. Dragging the
     // frame out past the picture re-fits the stage under it, and reading the
@@ -8129,17 +8411,23 @@ function bindGrip(grip) {
     // further it went: a drag that fed on itself rather than following the
     // pointer. The box's place on the stage moves less and less instead, which
     // is the picture shrinking inside a growing frame.
-    const scale0 = cropScale;
-    setCropHint(evt.shiftKey);
+    const scale0 = ctx.scale();
+    ctx.hint(evt.shiftKey);
     // Stops the pointerdown from also starting a move of the whole box.
     evt.stopPropagation();
 
     // 21e-3. The shape to hold if the two modifiers are down, taken now for
     // the reason cropLockRatio gives.
-    const locked = { ...cropDraft };
-    const ratio0 = cropLockRatio();
+    const locked = { ...draft };
+    const ratio0 = ctx.ratio();
+
+    if (ctx.begin) ctx.begin({ el: grip, vertical, movesLo });
 
     beginDrag(grip, evt, (ev) => {
+      // Read here rather than at the press: see the note above bindGrip.
+      const floor = vertical ? bounds.minY : bounds.minX;
+      const limit = vertical ? bounds.maxY : bounds.maxX;
+      const least = (vertical ? bounds.leastY : bounds.leastX) || CROP_MIN;
       const travel = (vertical ? ev.clientY : ev.clientX) - anchor;
       if (ev.shiftKey && ev.ctrlKey && ratio0) {
         // The edge opposite this bar stays put, and the other axis grows about
@@ -8155,25 +8443,30 @@ function bindGrip(grip) {
             : { x: movesLo ? 'hi' : 'lo', y: 'mid' },
           vertical ? grown * ratio0 : grown, bounds, CROP_MIN);
         if (rect) {
-          cropDraft.x = rect.x;
-          cropDraft.y = rect.y;
-          cropDraft.width = rect.width;
-          cropDraft.height = rect.height;
-          applyDraft(false, false, true);
+          const live = ctx.rect();
+          live.x = rect.x;
+          live.y = rect.y;
+          live.width = rect.width;
+          live.height = rect.height;
+          ctx.commit(false, false, true);
           return;
         }
       }
-      const { lo, hi } = resizeEdge(lo0, hi0, limit, movesLo, ev.shiftKey,
-        travel / scale0, travel, floor);
+      const { lo, hi } = layerGeometry.resizeEdge(lo0, hi0, limit, movesLo,
+        ev.shiftKey, travel / scale0, travel, floor, least);
+      const live = ctx.rect();
       if (vertical) {
-        cropDraft.y = lo;
-        cropDraft.height = hi - lo;
+        live.y = lo;
+        live.height = hi - lo;
       } else {
-        cropDraft.x = lo;
-        cropDraft.width = hi - lo;
+        live.x = lo;
+        live.width = hi - lo;
       }
-      applyDraft(ev.shiftKey);
-    }, () => setCropHint(false));
+      ctx.commit(ev.shiftKey);
+    }, () => {
+      ctx.hint(false);
+      if (ctx.end) ctx.end();
+    });
   });
 }
 
@@ -8182,24 +8475,26 @@ function bindGrip(grip) {
 // and the corner diagonally opposite is the one that follows. Ctrl ties the two
 // axes together so the corner runs along the box's own diagonal, and the two
 // chain: Ctrl and Shift together move all four borders, a pixel at a time.
-function bindCorner(dot) {
+function bindCorner(dot, ctx) {
   const key = dot.dataset.corner;
   const movesLeft = key === 'tl' || key === 'bl';
   const movesTop = key === 'tl' || key === 'tr';
 
   dot.addEventListener('pointerdown', (evt) => {
-    const size = sourceSize();
-    if (!size || !cropDraft) return;
-    const start = { ...cropDraft };
-    const bounds = viewBounds(size);
+    const size = ctx.size();
+    const draft = ctx.rect();
+    if (!size || !draft) return;
+    const start = { ...draft };
+    const bounds = ctx.bounds(size);
     const anchorX = evt.clientX;
     const anchorY = evt.clientY;
     // The scale the gesture started at, for the reason given on the bars.
-    const scale0 = cropScale;
-    setCropHint(evt.shiftKey, evt.ctrlKey);
+    const scale0 = ctx.scale();
+    ctx.hint(evt.shiftKey, evt.ctrlKey);
     evt.stopPropagation();
 
-    const ratio0 = cropLockRatio();
+    const ratio0 = ctx.ratio();
+    if (ctx.begin) ctx.begin({ el: dot, corner: true, movesLo: movesLeft });
 
     beginDrag(dot, evt, (ev) => {
       let travelX = ev.clientX - anchorX;
@@ -8218,11 +8513,12 @@ function bindCorner(dot) {
           { x: movesLeft ? 'hi' : 'lo', y: movesTop ? 'hi' : 'lo' },
           want, bounds, CROP_MIN);
         if (rect) {
-          cropDraft.x = rect.x;
-          cropDraft.y = rect.y;
-          cropDraft.width = rect.width;
-          cropDraft.height = rect.height;
-          applyDraft(false, false, true);
+          const live = ctx.rect();
+          live.x = rect.x;
+          live.y = rect.y;
+          live.width = rect.width;
+          live.height = rect.height;
+          ctx.commit(false, false, true);
           return;
         }
       }
@@ -8237,21 +8533,27 @@ function bindCorner(dot) {
         travelX = movesLeft ? along : -along;
         travelY = movesTop ? along : -along;
       }
-      const across = resizeEdge(start.x, start.x + start.width, bounds.maxX, movesLeft,
-        ev.shiftKey, travelX / scale0, travelX, bounds.minX);
-      const down = resizeEdge(start.y, start.y + start.height, bounds.maxY, movesTop,
-        ev.shiftKey, travelY / scale0, travelY, bounds.minY);
-      cropDraft.x = across.lo;
-      cropDraft.width = across.hi - across.lo;
-      cropDraft.y = down.lo;
-      cropDraft.height = down.hi - down.lo;
-      applyDraft(ev.shiftKey, ev.ctrlKey);
-    }, () => setCropHint(false));
+      const across = layerGeometry.resizeEdge(start.x, start.x + start.width,
+        bounds.maxX, movesLeft, ev.shiftKey, travelX / scale0, travelX, bounds.minX,
+        bounds.leastX || CROP_MIN);
+      const down = layerGeometry.resizeEdge(start.y, start.y + start.height,
+        bounds.maxY, movesTop, ev.shiftKey, travelY / scale0, travelY, bounds.minY,
+        bounds.leastY || CROP_MIN);
+      const live = ctx.rect();
+      live.x = across.lo;
+      live.width = across.hi - across.lo;
+      live.y = down.lo;
+      live.height = down.hi - down.lo;
+      ctx.commit(ev.shiftKey, ev.ctrlKey);
+    }, () => {
+      ctx.hint(false);
+      if (ctx.end) ctx.end();
+    });
   });
 }
 
-for (const grip of cropBox.querySelectorAll('.crop-grip')) bindGrip(grip);
-for (const dot of cropBox.querySelectorAll('.crop-corner')) bindCorner(dot);
+for (const grip of cropBox.querySelectorAll('.crop-grip')) bindGrip(grip, cropBoxCtx);
+for (const dot of cropBox.querySelectorAll('.crop-corner')) bindCorner(dot, cropBoxCtx);
 
 // Dragging the middle slides the whole box, which is the only way to choose
 // which part of the frame a smaller box keeps.
@@ -8511,6 +8813,9 @@ function openCrop(layerId) {
   // Wherever this layer is now, placed or not, so the position tab has a
   // rectangle to drag the moment it is opened.
   placeTouched = !!(target && target.render);
+  // V2.8 item 8. Whatever this layer was stuck to last time, so the ring is lit
+  // and the scale slider goes on growing it about the same corner.
+  placeAnchor = (target && target.anchor) || null;
   placeDraft = target ? (target.render ? { ...target.render } : placeFitRect(target)) : null;
   // The scale and the centre are what the placement really is, so they are
   // taken from whatever it opens on rather than being left at their defaults
@@ -8526,6 +8831,7 @@ function closeCrop() {
   placeDrag = null;
   placeRingPress = null;
   placeTouched = false;
+  placeAnchor = null;
   // Back to following the selection. Cleared after the modal is hidden and
   // before anything redraws, so nothing reads it as still open on a layer.
   cropLayerId = null;
@@ -8534,8 +8840,12 @@ function closeCrop() {
 }
 
 // Wrapped rather than passed: the click hands its event to the first argument,
-// which is where openCrop now takes a layer id.
-cropBtn.addEventListener('click', () => openCrop());
+// which is where openCrop now takes a layer id. V2.7 sends advanced editing to
+// the other window, which is what the button now says it does.
+cropBtn.addEventListener('click', () => {
+  if (timelineDriving()) openRenderCrop();
+  else openCrop();
+});
 cropCancelBtn.addEventListener('click', closeCrop);
 
 // Takes the crop off outright, whatever is in the popup: the whole picture is
@@ -8585,7 +8895,10 @@ cropAcceptBtn.addEventListener('click', () => {
   // After the crop, and through the id rather than the layer object: setLayers
   // has just replaced the array that object came out of.
   if (cropLayerId) {
-    setLayers(timelineModel.setLayer(layers, cropLayerId, { render }));
+    // V2.8 item 8. The ring travels with the placement, so reopening this layer
+    // finds the same one lit and scaling goes on sticking to it.
+    setLayers(timelineModel.setLayer(layers, cropLayerId,
+      { render, anchor: placeAnchor }));
   }
   commitHistory();
   closeCrop();
@@ -8609,6 +8922,627 @@ cropModal.addEventListener('pointerdown', (evt) => {
 cropModal.addEventListener('click', (evt) => {
   if (evt.target === cropModal && cropPressedBackdrop) closeCrop();
 });
+
+// ---- V2.7, Crop Render Frame ----
+//
+// The output frame itself, not a crop of a picture. Dragging a bar changes what
+// the composition covers rather than cutting anything out of it, and it may be
+// dragged outwards to make room beside what is already there.
+//
+// **One rectangle, in a working space.** renderDraft is the output frame,
+// renderBase is the composition the window opened on, and renderPins is where
+// every layer stands. All three are in the same pixels, and the only thing that
+// ever rescales them is a resample, which does all three at once. Dragging
+// moves renderDraft and nothing else, so Accept is one subtraction: every
+// layer's placement is its pin less the draft's own origin.
+//
+// The alternative, carrying a coverage rectangle and an output size side by
+// side, was rejected on the same grounds as everything else in this file: two
+// numbers that have to be kept agreeing eventually disagree.
+
+const renderModal = el('renderModal');
+const renderStage = el('renderStage');
+const renderCanvas = el('renderCanvas');
+const renderBox = el('renderBox');
+const renderHintEl = el('renderHint');
+const renderWidthBox = el('renderWidthBox');
+const renderHeightBox = el('renderHeightBox');
+const renderPresetRow = el('renderPresets');
+const renderResRow = el('renderResPresets');
+const renderAcceptBtn = el('renderAcceptBtn');
+const renderCancelBtn = el('renderCancelBtn');
+
+// How far past its own edge the pointer has to sit, and for how long, before a
+// bar is let out past the composition. The dwell is TRIM_DWELL_MS rather than
+// the 200 the user first suggested, because that constant already means "held
+// on purpose rather than passed over" everywhere else in this window.
+const RENDER_EXTEND_SLACK = 6;
+
+// Room left around the frame on the stage, so the four grips are reachable.
+// Each one sits at -4px of its own edge and so hangs outside the box, and the
+// stage clips what leaves it: with the frame fitted edge to edge, every grip was
+// clipped away and no bar could be grabbed at all. The crop popup never shows
+// this because its picture is fitted inside a 16:9 stage and usually leaves bars
+// of its own. Ten is the four pixels of overhang with room over.
+const RENDER_STAGE_INSET = 10;
+
+// 9:21 is here and not in the crop popup. That one crops a source, where there
+// is nothing outside the picture to reach; this one chooses an output shape,
+// and 21:9 had no portrait twin while every other landscape ratio did. Sony's
+// CinemaWide phones are the real thing behind it.
+const RENDER_ASPECTS = [
+  { label: 'Original', ratio: null },
+  { label: '21:9', ratio: 21 / 9, wide: true },
+  { label: '16:9', ratio: 16 / 9 },
+  { label: '4:3', ratio: 4 / 3 },
+  { label: '1:1', ratio: 1 },
+  { label: '4:5', ratio: 4 / 5 },
+  { label: '3:4', ratio: 3 / 4 },
+  { label: '9:16', ratio: 9 / 16 },
+  { label: '9:21', ratio: 9 / 21, wide: true },
+];
+
+// Named after the short side, which is the one number that does not depend on
+// which way up the frame is: 16:9 with 2160p is 3840x2160 and 9:16 with 1080p
+// is 1080x1920. The nickname is the part that moves, because the aspect is
+// always chosen first: at 21:9 the 2160p button reads UW-4K.
+const RENDER_SHORTS = [
+  { short: 2160, name: '4K' },
+  { short: 1440, name: '2K' },
+  { short: 1080, name: 'FHD' },
+  { short: 720, name: 'HD' },
+  { short: 480, name: 'SD' },
+];
+
+let renderDraft = null;      // the output frame, in working pixels
+let renderBase = null;       // the composition it opened on, same pixels
+let renderPins = null;       // Map layerId -> placement, same pixels
+let renderFromFrame = null;  // the project frame it opened on
+let renderScale = 1;         // display pixels per working pixel
+let renderAspect = null;     // the lit ratio, or null for none
+let renderAspectBtn = null;
+let renderShortBtn = null;
+let renderGesture = null;    // the drag in progress, for the dwell
+
+function canRenderCrop() {
+  return !!(timelineDriving() && compositeFrame
+    && layers.some((l) => l.type === 'video'));
+}
+
+// Where a layer stands right now, placed or fitted, in the frame the window
+// opened on. Not placeFitRect, which reads cropDraft: that is the other
+// popup's draft and means nothing here.
+function renderPinOf(layer) {
+  const source = layerSource(layer);
+  if (!source) return null;
+  const placement = layerGeometry.placeLayer({
+    source,
+    crop: layer.crop,
+    render: layer.render,
+    project: renderFromFrame,
+  });
+  return placement ? { ...placement.dest } : null;
+}
+
+// Everything the stage has to hold: the frame and the composition, whichever
+// way round they have grown.
+function renderUnion() {
+  const d = renderDraft;
+  const b = renderBase;
+  const x0 = Math.min(d.x, b.x);
+  const y0 = Math.min(d.y, b.y);
+  const x1 = Math.max(d.x + d.width, b.x + b.width);
+  const y1 = Math.max(d.y + d.height, b.y + b.height);
+  return { x: x0, y: y0, w: Math.max(1, x1 - x0), h: Math.max(1, y1 - y0) };
+}
+
+function sizeRenderStage() {
+  const panel = renderStage.parentElement.parentElement;
+  // Always 16:9 whatever shape the frame is, the same rule the crop stage
+  // follows and for the same reason: a portrait project must not make the
+  // window narrow and tall.
+  let w = Math.round(panel.clientWidth * CROP_FRAME_SHARE);
+  let h = Math.round(w * 9 / 16);
+  const maxH = Math.round(window.innerHeight * CROP_HEIGHT_SHARE);
+  if (h > maxH) {
+    h = maxH;
+    w = Math.round(h * 16 / 9);
+  }
+  renderStage.style.width = w + 'px';
+  renderStage.style.height = h + 'px';
+}
+
+/**
+ * The scale, which only ever drops part way through a gesture.
+ *
+ * This is the user's "first by filling out grey bars if they exist, else by
+ * shrinking the displayed content accordingly if there are no dark grey bars to
+ * fill anymore", and it is one conditional rather than a mechanism. While the
+ * frame is growing into the bars around the picture the union still fits at the
+ * scale it already has, so nothing on screen moves at all. Once it does not
+ * fit, everything shrinks to make room.
+ *
+ * Settled outright on release, not during, which is the rule the crop popup's
+ * box-move already follows: re-fitting upward mid-drag would slide the picture
+ * out from under the pointer as soon as a bar came back in.
+ */
+function fitRenderScale(settle) {
+  const u = renderUnion();
+  const across = Math.max(1, renderStage.clientWidth - 2 * RENDER_STAGE_INSET);
+  const down = Math.max(1, renderStage.clientHeight - 2 * RENDER_STAGE_INSET);
+  const room = Math.min(across / u.w, down / u.h);
+  if (settle || !(renderScale > 0) || room < renderScale) renderScale = room;
+}
+
+// Where a working rectangle lands on the stage.
+function renderOnStage(rect) {
+  const u = renderUnion();
+  const ox = (renderStage.clientWidth - u.w * renderScale) / 2;
+  const oy = (renderStage.clientHeight - u.h * renderScale) / 2;
+  return {
+    left: ox + (rect.x - u.x) * renderScale,
+    top: oy + (rect.y - u.y) * renderScale,
+    width: rect.width * renderScale,
+    height: rect.height * renderScale,
+  };
+}
+
+function placeRenderBox() {
+  const box = renderOnStage(renderDraft);
+  renderBox.style.left = Math.round(box.left) + 'px';
+  renderBox.style.top = Math.round(box.top) + 'px';
+  renderBox.style.width = Math.round(box.width) + 'px';
+  renderBox.style.height = Math.round(box.height) + 'px';
+  const pic = renderOnStage(renderBase);
+  renderCanvas.style.left = Math.round(pic.left) + 'px';
+  renderCanvas.style.top = Math.round(pic.top) + 'px';
+  renderCanvas.style.width = Math.round(pic.width) + 'px';
+  renderCanvas.style.height = Math.round(pic.height) + 'px';
+  // The boxes say what the frame is, and typing in them is how it is said back.
+  // V2.8 dropped the line of text above them that said the same two numbers,
+  // the user having counted them: shown twice, so shown once.
+  if (document.activeElement !== renderWidthBox) {
+    renderWidthBox.value = String(renderDraft.width);
+  }
+  if (document.activeElement !== renderHeightBox) {
+    renderHeightBox.value = String(renderDraft.height);
+  }
+}
+
+// The composite, drawn at the size the opening frame takes up on the stage.
+// paintLayers maps the whole project frame onto whatever canvas it is handed,
+// and renderBase is that frame, so the two agree without being told to.
+function paintRenderFrame() {
+  const pic = renderOnStage(renderBase);
+  const w = Math.max(1, Math.round(pic.width));
+  const h = Math.max(1, Math.round(pic.height));
+  const dpr = window.devicePixelRatio || 1;
+  renderCanvas.width = Math.max(1, Math.round(w * dpr));
+  renderCanvas.height = Math.max(1, Math.round(h * dpr));
+  paintLayers(renderCanvas.getContext('2d'), renderCanvas, compositeAt);
+}
+
+function setRenderHint(mirrored, diagonal = false, locked = false) {
+  if (locked) {
+    renderHintEl.textContent = t('Locked: the frame keeps the shape selected below');
+  } else if (mirrored && diagonal) {
+    renderHintEl.textContent = t('Mirrored and diagonal: all four borders, 1 px each');
+  } else if (mirrored) {
+    renderHintEl.textContent = t('Mirrored: both bars moving together, 1 px each');
+  } else if (diagonal) {
+    renderHintEl.textContent = t('Diagonal: both borders of the corner, 2 px each');
+  } else {
+    renderHintEl.textContent = t(CROP_HINT_IDLE);
+  }
+}
+
+/**
+ * How far a bar may travel, as positions in the working space.
+ *
+ * Getters rather than numbers, because the dwell widens them part way through a
+ * gesture: until it fires a bar is held at the edge of the composition, and
+ * after it the caps are the only thing left in the way. bindGrip reads these on
+ * every move, which is what makes that possible.
+ *
+ * leastX and leastY are the shortest legal side on each axis, which is not a
+ * constant here: the ratio cap means the smallest width depends on the current
+ * height and the other way round.
+ */
+function renderDragBounds() {
+  const across = layerGeometry.renderFrameSide(renderDraft.height);
+  const down = layerGeometry.renderFrameSide(renderDraft.width);
+  const x0 = renderDraft.x;
+  const y0 = renderDraft.y;
+  const x1 = x0 + renderDraft.width;
+  const y1 = y0 + renderDraft.height;
+  const b = renderBase;
+  const out = () => !!(renderGesture && renderGesture.extended);
+  return {
+    get minX() { return out() ? x1 - across.max : Math.min(b.x, x0); },
+    get maxX() { return out() ? x0 + across.max : Math.max(b.x + b.width, x1); },
+    get minY() { return out() ? y1 - down.max : Math.min(b.y, y0); },
+    get maxY() { return out() ? y0 + down.max : Math.max(b.y + b.height, y1); },
+    leastX: across.min,
+    leastY: down.min,
+  };
+}
+
+function renderCommit(shifted, diagonal = false, locked = false) {
+  setRenderHint(shifted, diagonal, locked);
+  clearRenderPresets();
+  fitRenderScale(false);
+  paintRenderFrame();
+  placeRenderBox();
+}
+
+const renderBoxCtx = {
+  size: () => (renderFromFrame
+    ? { w: renderFromFrame.width, h: renderFromFrame.height }
+    : null),
+  rect: () => renderDraft,
+  bounds: renderDragBounds,
+  scale: () => renderScale,
+  ratio: () => (renderAspect
+    || (renderDraft && renderDraft.height ? renderDraft.width / renderDraft.height : null)),
+  hint: setRenderHint,
+  commit: renderCommit,
+  begin: (info) => {
+    renderGesture = { ...info, extended: false, timer: null, last: null };
+    document.addEventListener('pointermove', renderWatchPointer, true);
+  },
+  end: () => {
+    renderStopDwell();
+    document.removeEventListener('pointermove', renderWatchPointer, true);
+    renderGesture = null;
+    // The scale is allowed back up now that the hand is off, which is the one
+    // moment doing so cannot move anything out from under the pointer.
+    fitRenderScale(true);
+    paintRenderFrame();
+    placeRenderBox();
+  },
+};
+
+function renderStopDwell() {
+  if (renderGesture && renderGesture.timer) clearTimeout(renderGesture.timer);
+  if (renderGesture) renderGesture.timer = null;
+}
+
+/**
+ * The gate on extending, which is a hold rather than a drag.
+ *
+ * The user asked for it in as many words: push a bar against its own border,
+ * keep the pointer a few pixels outside for a moment, and the frame starts
+ * growing. Before that the bounds hold the bar at the edge of the composition,
+ * so a bar pinned there with the pointer past it is exactly the state this is
+ * watching for.
+ *
+ * When the clock runs out the bar is let go and a pointermove is dispatched
+ * back at the grip, so bindGrip's own handler does the arithmetic rather than a
+ * second copy of it living here. That works because its move is absolute: it is
+ * computed from the press's own edges and the total travel, so one event with
+ * the current pointer position lands the bar exactly where it belongs.
+ */
+function renderWatchPointer(ev) {
+  const g = renderGesture;
+  if (!g || g.extended || !renderDraft) return;
+  g.last = ev;
+  // A corner has two axes and no single border to be pushed against, so it is
+  // left out: extending is a bar gesture.
+  if (g.corner) return;
+  const edgeAt = g.vertical
+    ? (g.movesLo ? renderDraft.y : renderDraft.y + renderDraft.height)
+    : (g.movesLo ? renderDraft.x : renderDraft.x + renderDraft.width);
+  const on = renderOnStage({ x: edgeAt, y: edgeAt, width: 0, height: 0 });
+  const box = renderStage.getBoundingClientRect();
+  const edge = g.vertical ? box.top + on.top : box.left + on.left;
+  const at = g.vertical ? ev.clientY : ev.clientX;
+  const past = g.movesLo ? edge - at : at - edge;
+  if (past < RENDER_EXTEND_SLACK) {
+    renderStopDwell();
+    return;
+  }
+  if (g.timer) return;
+  g.timer = setTimeout(() => {
+    if (!renderGesture || renderGesture !== g) return;
+    g.timer = null;
+    g.extended = true;
+    const e = g.last;
+    if (!e) return;
+    g.el.dispatchEvent(new PointerEvent('pointermove', {
+      clientX: e.clientX,
+      clientY: e.clientY,
+      shiftKey: e.shiftKey,
+      ctrlKey: e.ctrlKey,
+      pointerId: e.pointerId,
+      bubbles: true,
+    }));
+  }, TRIM_DWELL_MS);
+}
+
+// ---- the two preset rows ----
+
+function clearRenderPresets() {
+  renderAspect = null;
+  if (renderAspectBtn) renderAspectBtn.classList.remove('btn--active');
+  if (renderShortBtn) renderShortBtn.classList.remove('btn--active');
+  renderAspectBtn = null;
+  renderShortBtn = null;
+  markRenderShorts();
+}
+
+// The ratio the resolution row composes with: the lit aspect, or the shape the
+// frame already has when none is lit.
+function renderRatioNow() {
+  if (renderAspect) return renderAspect;
+  if (!renderDraft || !renderDraft.height) return null;
+  return renderDraft.width / renderDraft.height;
+}
+
+// The aspect is always chosen first, so the resolution row can say what it will
+// actually produce. At 21:9 the 2160p button is ultrawide 4K and says so.
+function markRenderShorts() {
+  const wide = !!(renderAspectBtn && renderAspectBtn.dataset.wide === '1');
+  const ratio = renderRatioNow();
+  for (const btn of renderResRow.children) {
+    const short = Number(btn.dataset.short);
+    if (!short) continue;
+    const entry = RENDER_SHORTS.find((e) => e.short === short);
+    btn.textContent = short + 'p / ' + (wide ? 'UW-' : '') + entry.name;
+    // Disabled, not clamped: a button that cannot do what its label says would
+    // be lying about it.
+    btn.disabled = !ratio || !layerGeometry.renderFrameFor(ratio, short);
+  }
+}
+
+function renderResample(next, centre) {
+  if (!next || !renderDraft) return;
+  const from = { width: renderDraft.width, height: renderDraft.height };
+  if (next.width === from.width && next.height === from.height) return;
+  const rel = (r) => ({
+    x: r.x - renderDraft.x,
+    y: r.y - renderDraft.y,
+    width: r.width,
+    height: r.height,
+  });
+  // The same call the boxes above the preview have always made, so the two
+  // cannot drift apart: the old frame is fitted into the new one and everything
+  // in it travels by the same scale.
+  renderBase = layerGeometry.rescaleRender(rel(renderBase), from, next);
+  for (const [id, pin] of renderPins) {
+    renderPins.set(id, layerGeometry.rescaleRender(rel(pin), from, next));
+  }
+  renderDraft = { x: 0, y: 0, width: next.width, height: next.height };
+  // A resolution button re-centres for the same reason an aspect button does.
+  // The boxes do not: a typed number is a size, not a decision about where the
+  // frame sits.
+  if (centre) renderCentreOnBase();
+  fitRenderScale(true);
+  paintRenderFrame();
+  placeRenderBox();
+}
+
+/**
+ * V2.8, item 7.1: "when a direct aspect ratio/resolution gets clicked using
+ * buttons, recenter the whole preview frame in the new aspect ratio/resolution
+ * (again match relative size/scale and positions)."
+ *
+ * The frame moves rather than the picture, which is the same arrangement seen
+ * from the other side and one object instead of a base and every pin. Only the
+ * two of them relative to each other means anything here: Accept subtracts the
+ * frame's origin from everything.
+ *
+ * A drag is left alone on purpose. Dragging the frame off the picture is how
+ * the window reframes, and a button is a fresh decision about the shape, so the
+ * two want opposite things from a composition that is off centre.
+ */
+function renderCentreOnBase() {
+  if (!renderDraft || !renderBase) return;
+  renderDraft = {
+    ...renderDraft,
+    x: Math.round(renderBase.x + (renderBase.width - renderDraft.width) / 2),
+    y: Math.round(renderBase.y + (renderBase.height - renderDraft.height) / 2),
+  };
+}
+
+// An aspect button changes the frame's shape, growing rather than cutting
+// wherever the caps leave room, and leaves it centred on the picture.
+function renderReshapeTo(ratio) {
+  const next = ratio === null
+    ? { width: renderFromFrame.width, height: renderFromFrame.height }
+    : layerGeometry.renderReshape(renderDraft, ratio);
+  if (!next) return;
+  if (ratio === null) {
+    // Original is the frame the window opened on, exactly, wherever the
+    // dragging went. renderBase is where that frame still is, so this is the
+    // centring below as well, arrived at by being the same rectangle.
+    renderDraft = { ...renderBase };
+    return;
+  }
+  renderDraft = { ...renderDraft, width: next.width, height: next.height };
+  renderCentreOnBase();
+}
+
+function buildRenderPresets() {
+  renderPresetRow.innerHTML = '';
+  for (const preset of RENDER_ASPECTS) {
+    const btn = document.createElement('button');
+    btn.textContent = preset.label;
+    if (preset.wide) btn.dataset.wide = '1';
+    btn.addEventListener('click', () => {
+      if (!renderDraft) return;
+      clearRenderPresets();
+      renderReshapeTo(preset.ratio);
+      renderAspect = preset.ratio;
+      renderAspectBtn = btn;
+      btn.classList.add('btn--active');
+      markRenderShorts();
+      fitRenderScale(true);
+      paintRenderFrame();
+      placeRenderBox();
+    });
+    renderPresetRow.appendChild(btn);
+  }
+
+  renderResRow.innerHTML = '';
+  // Original carries its own number, because it means the pixel count the
+  // project opened at while the other Original, in the row above, means its
+  // shape. Both are useful and together they give the frame exactly.
+  const first = document.createElement('button');
+  const openedShort = Math.min(renderFromFrame.width, renderFromFrame.height);
+  first.textContent = 'Original (' + openedShort + 'p)';
+  first.addEventListener('click', () => {
+    if (renderShortBtn) renderShortBtn.classList.remove('btn--active');
+    renderShortBtn = first;
+    first.classList.add('btn--active');
+    const ratio = renderRatioNow();
+    renderResample(ratio ? layerGeometry.renderFrameFor(ratio, openedShort) : null, true);
+  });
+  renderResRow.appendChild(first);
+
+  for (const entry of RENDER_SHORTS) {
+    const btn = document.createElement('button');
+    btn.dataset.short = String(entry.short);
+    btn.addEventListener('click', () => {
+      const ratio = renderRatioNow();
+      const next = ratio ? layerGeometry.renderFrameFor(ratio, entry.short) : null;
+      if (!next) return;
+      if (renderShortBtn) renderShortBtn.classList.remove('btn--active');
+      renderShortBtn = btn;
+      btn.classList.add('btn--active');
+      renderResample(next, true);
+    });
+    renderResRow.appendChild(btn);
+  }
+  markRenderShorts();
+}
+
+// ---- the boxes, which resample and never reframe ----
+
+function commitRenderBoxes() {
+  if (!renderDraft) return;
+  const want = layerGeometry.frameSize(renderWidthBox.value, renderHeightBox.value);
+  if (!want) {
+    placeRenderBox();
+    return;
+  }
+  // Held inside the caps rather than refused, because a typed number is a
+  // request and not a button making a promise about itself.
+  const across = layerGeometry.renderFrameSide(want.height);
+  const down = layerGeometry.renderFrameSide(want.width);
+  const next = {
+    width: clamp(want.width, across.min, across.max),
+    height: clamp(want.height, down.min, down.max),
+  };
+  renderResample(next);
+  placeRenderBox();
+}
+
+for (const box of [renderWidthBox, renderHeightBox]) {
+  box.addEventListener('blur', (evt) => {
+    if (evt.relatedTarget === renderWidthBox || evt.relatedTarget === renderHeightBox) return;
+    commitRenderBoxes();
+  });
+  box.addEventListener('keydown', (evt) => {
+    if (evt.key === 'Enter') {
+      evt.preventDefault();
+      commitRenderBoxes();
+      box.blur();
+    }
+  });
+}
+
+// ---- open, accept, close ----
+
+function openRenderCrop() {
+  if (busy || !canRenderCrop()) return;
+  renderFromFrame = { ...compositeFrame };
+  renderDraft = { x: 0, y: 0, width: renderFromFrame.width, height: renderFromFrame.height };
+  renderBase = { x: 0, y: 0, width: renderFromFrame.width, height: renderFromFrame.height };
+  // Every layer, pinned where it stands. A layer with no placement of its own is
+  // auto-fitted to the frame, so a frame that changed shape would re-fit it and
+  // hand back exactly the bars this window exists to get rid of.
+  renderPins = new Map();
+  for (const l of layers) {
+    if (l.type !== 'video') continue;
+    const pin = renderPinOf(l);
+    if (pin) renderPins.set(l.id, pin);
+  }
+  renderAspect = null;
+  renderAspectBtn = null;
+  renderShortBtn = null;
+  renderGesture = null;
+  renderScale = 0;
+  renderModal.hidden = false;
+  sizeRenderStage();
+  buildRenderPresets();
+  fitRenderScale(true);
+  paintRenderFrame();
+  placeRenderBox();
+  setRenderHint(false);
+}
+
+function closeRenderCrop() {
+  renderStopDwell();
+  document.removeEventListener('pointermove', renderWatchPointer, true);
+  renderModal.hidden = true;
+  renderDraft = null;
+  renderBase = null;
+  renderPins = null;
+  renderFromFrame = null;
+  renderGesture = null;
+}
+
+renderAcceptBtn.addEventListener('click', () => {
+  if (!renderDraft || !renderFromFrame) return;
+  const out = { width: renderDraft.width, height: renderDraft.height };
+  const dx = renderDraft.x;
+  const dy = renderDraft.y;
+  const pins = renderPins;
+  const from = renderFromFrame;
+  const moved = out.width !== from.width || out.height !== from.height || dx || dy;
+  if (!moved) {
+    closeRenderCrop();
+    return;
+  }
+  // The frame first, because everything that redraws below is a picture of it.
+  compositeFrame = { ...from, width: out.width, height: out.height };
+  sizeCompositeCanvas();
+  // Then every layer, pinned. One subtraction, which is all the reframe is once
+  // the pins are carried in the same space as the frame.
+  setLayers(layers.map((l) => {
+    const pin = pins.get(l.id);
+    if (!pin) return l;
+    return {
+      ...l,
+      render: {
+        x: Math.round(pin.x - dx),
+        y: Math.round(pin.y - dy),
+        width: Math.round(pin.width),
+        height: Math.round(pin.height),
+      },
+    };
+  }));
+  commitHistory();
+  closeRenderCrop();
+  updateCropOverlays();
+  updateCropBtn();
+});
+
+renderCancelBtn.addEventListener('click', closeRenderCrop);
+
+// Backdrop only, and the press rather than the release, for the reason written
+// over the crop popup's own copy of this: a drag that ends out on the backdrop
+// would otherwise throw the frame away.
+let renderPressedBackdrop = false;
+renderModal.addEventListener('pointerdown', (evt) => {
+  renderPressedBackdrop = evt.target === renderModal;
+});
+renderModal.addEventListener('click', (evt) => {
+  if (evt.target === renderModal && renderPressedBackdrop) closeRenderCrop();
+});
+
+for (const grip of renderBox.querySelectorAll('.crop-grip')) bindGrip(grip, renderBoxCtx);
+for (const dot of renderBox.querySelectorAll('.crop-corner')) bindCorner(dot, renderBoxCtx);
 
 // The note only applies while the copy path is selected, and that switch lives
 // outside the popup, so it can change while the popup is open.
@@ -8952,6 +9886,15 @@ loadCachedBtn.addEventListener('click', async () => {
   if (!result.ok) {
     reportFailure(result);
     updateStatusScale();
+    return;
+  }
+  // V2.8. The rule the main drop zone has followed since V2.1, now on the
+  // button beside it: in advanced editing there is no single media file for the
+  // window to be a view of, so a file opened here becomes a track. It used to
+  // load into simple editing's media, which advanced editing does not show, so
+  // the button looked like it had done nothing at all.
+  if (timelineDriving()) {
+    addLayerFromMedia(result.data.isAudio ? 'audio' : 'video', result.data);
     return;
   }
   adoptLocalMedia(result.data);

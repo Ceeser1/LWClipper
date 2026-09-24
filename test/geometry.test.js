@@ -317,6 +317,273 @@ test('the clamp does not move a second time, which is what lets it re-run', () =
   assert.equal(G.splitHeight(low, 600, 192, 279), low);
 });
 
+// ---- resizeEdge, V2.1 21e and 22a, moved out of the window in V2.7 ----
+//
+// One bar of the crop box, dragged. Every bar and both axes come through here,
+// which is what stops the clamping to the frame from being written four
+// slightly different ways. Until V2.7 it sat in renderer/app.js and could only
+// be reached by driving a real pointer at a real window, so the rules below had
+// been fixed several times over without ever being stated anywhere.
+//
+// The arguments, in order: the near and far edge, the far limit, which of the
+// two this bar is, whether Shift is down, the pointer's travel in source
+// pixels, that same travel in screen pixels, and the near limit.
+
+const EDGE_LIMIT = 1280;
+
+test('the far bar moves by the pointer, snapped to an even step', () => {
+  assert.deepEqual(G.resizeEdge(200, 600, EDGE_LIMIT, false, false, 10),
+    { lo: 200, hi: 610 });
+  // Seven rounds to eight rather than to seven: an odd edge has no valid
+  // encoding, which is the whole reason for the step.
+  assert.deepEqual(G.resizeEdge(200, 600, EDGE_LIMIT, false, false, 7),
+    { lo: 200, hi: 608 });
+});
+
+test('the near bar moves instead when it is the one being dragged', () => {
+  assert.deepEqual(G.resizeEdge(200, 600, EDGE_LIMIT, true, false, -10),
+    { lo: 190, hi: 600 });
+});
+
+test('a bar dragged past the frame stops at it', () => {
+  // Out to the left, where the floor is zero by default.
+  assert.deepEqual(G.resizeEdge(200, 600, EDGE_LIMIT, true, false, -5000),
+    { lo: 0, hi: 600 });
+  // And out to the right, where the limit is the frame's far edge.
+  assert.deepEqual(G.resizeEdge(200, 600, EDGE_LIMIT, false, false, 5000),
+    { lo: 200, hi: EDGE_LIMIT });
+});
+
+test('the floor is a real argument, for a frame dragged while zoomed in', () => {
+  // Zoomed in, a bar dragged past the edge of the window would take the box
+  // somewhere it can be neither seen nor grabbed, so the near limit is the
+  // window rather than zero.
+  assert.deepEqual(G.resizeEdge(200, 600, EDGE_LIMIT, true, false, -5000, Infinity, 100),
+    { lo: 100, hi: 600 });
+});
+
+test('the two bars can never be driven closer than the smallest box', () => {
+  const near = G.resizeEdge(200, 600, EDGE_LIMIT, true, false, 5000);
+  assert.deepEqual(near, { lo: 600 - G.CROP_MIN, hi: 600 });
+  const far = G.resizeEdge(200, 600, EDGE_LIMIT, false, false, -5000);
+  assert.deepEqual(far, { lo: 200, hi: 200 + G.CROP_MIN });
+  // Which is the same distance either way round, and it is an even one.
+  assert.equal(near.hi - near.lo, far.hi - far.lo);
+  assert.equal((far.hi - far.lo) % 2, 0);
+});
+
+test('Shift moves both bars, so the centre holds and the span changes by two a step', () => {
+  const out = G.resizeEdge(200, 600, EDGE_LIMIT, true, true, -10, -10);
+  assert.deepEqual(out, { lo: 190, hi: 610 });
+  // The middle is where it was, and the span grew by twice the step.
+  assert.equal((out.lo + out.hi) / 2, (200 + 600) / 2);
+  assert.equal((out.hi - out.lo) - (600 - 200), 20);
+});
+
+test('mirrored, either bar of the pair does the same thing', () => {
+  // Dragging the near bar out ten is the far bar out ten: one gesture, one
+  // answer, whichever end the hand took hold of.
+  assert.deepEqual(G.resizeEdge(200, 600, EDGE_LIMIT, true, true, -10, -10),
+    G.resizeEdge(200, 600, EDGE_LIMIT, false, true, 10, 10));
+});
+
+test('a mirrored pair is capped at a source pixel per pixel of travel', () => {
+  // The frame is usually shown small enough that one screen pixel is worth two
+  // or three source pixels, and without the cap the pair could only ever jump
+  // by that many at a time, never by the one it is for. Twenty source pixels
+  // asked for, five pixels of hand movement, five is what it gets.
+  assert.deepEqual(G.resizeEdge(200, 600, EDGE_LIMIT, true, true, -20, -5),
+    { lo: 195, hi: 605 });
+  // Zoomed in it is the other way round and the ordinary rate is the slower of
+  // the two, so that one still applies.
+  assert.deepEqual(G.resizeEdge(200, 600, EDGE_LIMIT, true, true, -5, -20),
+    { lo: 195, hi: 605 });
+});
+
+test('a mirrored pair stops as soon as either bar reaches the frame', () => {
+  // The near bar is ten from the floor and the far one has 680 to spare. Ten is
+  // what the pair gets, because the far bar going further would move the centre.
+  assert.deepEqual(G.resizeEdge(10, 600, EDGE_LIMIT, true, true, -5000, -5000),
+    { lo: 0, hi: 610 });
+});
+
+test('a mirrored pair closing in stops at the smallest box', () => {
+  // Twenty apart, so there are two pixels a side to give before the two bars
+  // are CROP_MIN apart.
+  const out = G.resizeEdge(200, 220, EDGE_LIMIT, true, true, 5000, 5000);
+  assert.deepEqual(out, { lo: 202, hi: 218 });
+  assert.equal(out.hi - out.lo, G.CROP_MIN);
+});
+
+test('with no screen travel given the cap is off', () => {
+  // The default is Infinity, so the source delta is the only rate. bindCorner
+  // passes its travel; anything that has none is not being held to a hand.
+  assert.deepEqual(G.resizeEdge(200, 600, EDGE_LIMIT, true, true, -30),
+    { lo: 170, hi: 630 });
+});
+
+// ---- the render frame caps, V2.7 ----
+//
+// Settled with the user on 2026-09-24: neither side above 3840, the shorter
+// side never above 2160, the ratio never past 21:9 either way, even numbers.
+// Their own statement of it was "A square should not exceed 2160px. If one side
+// reaches that only the other side can still move."
+
+test('the largest square is 2160, and one side can still grow from there', () => {
+  const at2160 = G.renderFrameSide(2160);
+  // 5040, which is 21:9 at 2160 tall and the widest anything may be.
+  assert.equal(at2160.max, G.RENDER_MAX_SIDE);
+  // Which is to say 2160x2160 is legal and so is growing one side all the way.
+  assert.ok(2160 <= at2160.max);
+  // And the largest 16:9 is still 3840x2160, which is what 4K means.
+  assert.deepEqual(G.renderFrameFor(16 / 9, 2160), { width: 3840, height: 2160 });
+});
+
+test('once one side is past 2160 the other is held to 2160', () => {
+  assert.equal(G.renderFrameSide(3840).max, G.RENDER_MAX_SHORT);
+  assert.equal(G.renderFrameSide(2162).max, G.RENDER_MAX_SHORT);
+  // So the largest 16:9 is 3840x2160 and there is no way to ask for more.
+  assert.equal(G.renderFrameSide(2160).max, G.RENDER_MAX_SIDE);
+});
+
+test('the 21:9 rule is a floor on the short side, not a ceiling on the long', () => {
+  // The widest frame is 3840 across, and at that width the height may not go
+  // below 1646: 3840/1646 is just inside 21:9 and 3840/1644 is just outside.
+  assert.equal(G.renderFrameSide(3840).min, 1646);
+  assert.ok(3840 / 1646 <= G.RENDER_MAX_RATIO);
+  assert.ok(3840 / 1644 > G.RENDER_MAX_RATIO);
+});
+
+test('every side the caps allow is even', () => {
+  for (const other of [480, 720, 1080, 1440, 2160, 2161, 3000, 3840]) {
+    const side = G.renderFrameSide(other);
+    assert.equal(side.min % 2, 0, 'min at ' + other);
+    assert.equal(side.max % 2, 0, 'max at ' + other);
+  }
+});
+
+test('the short side names the frame whichever way up it is', () => {
+  // The one number that does not depend on orientation, which is why the second
+  // preset row is named after it.
+  assert.deepEqual(G.renderFrameFor(16 / 9, 2160), { width: 3840, height: 2160 });
+  assert.deepEqual(G.renderFrameFor(9 / 16, 1080), { width: 1080, height: 1920 });
+  assert.deepEqual(G.renderFrameFor(1, 1440), { width: 1440, height: 1440 });
+});
+
+test('21:9 reaches 2160p, which is what raising the ceiling to 5040 bought', () => {
+  // The user reopened the 3840 cap to get this one: "if there is
+  // resolution/pixels spare let it extend".
+  assert.deepEqual(G.renderFrameFor(21 / 9, 2160), { width: 5040, height: 2160 });
+  // And stood on its end, because the short side does not care which way up.
+  assert.deepEqual(G.renderFrameFor(9 / 21, 2160), { width: 2160, height: 5040 });
+});
+
+test('a combination past the caps gives null rather than a clamped lie', () => {
+  // A button that cannot do what its label says is disabled, not corrected.
+  // Nothing the two rows offer is out of reach now, so this is the rule being
+  // kept honest rather than a case the user can reach.
+  assert.equal(G.renderFrameFor(16 / 9, 3000), null);
+  assert.equal(G.renderFrameFor(0, 1080), null);
+  assert.equal(G.renderFrameFor(16 / 9, 0), null);
+});
+
+test('every preset the app offers is either legal or refused, never out of range', () => {
+  const ratios = [21 / 9, 16 / 9, 4 / 3, 1, 4 / 5, 3 / 4, 9 / 16];
+  const shorts = [2160, 1440, 1080, 720, 480];
+  for (const r of ratios) {
+    for (const short of shorts) {
+      const size = G.renderFrameFor(r, short);
+      if (!size) continue;
+      const lo = Math.min(size.width, size.height);
+      const hi = Math.max(size.width, size.height);
+      assert.ok(hi <= G.RENDER_MAX_SIDE, r + ' at ' + short + ' is ' + hi + ' long');
+      assert.ok(lo <= G.RENDER_MAX_SHORT, r + ' at ' + short + ' is ' + lo + ' short');
+      assert.ok(hi / lo <= G.RENDER_MAX_RATIO, r + ' at ' + short + ' is too wide');
+      assert.equal(size.width % 2, 0);
+      assert.equal(size.height % 2, 0);
+      // And the short side really is the one the button is named after.
+      assert.equal(lo, short);
+    }
+  }
+});
+
+test('a side the caps allow is a side the other axis accepts back', () => {
+  // The two directions have to agree, or a frame could be dragged into a shape
+  // that the opposite bar then refuses to leave alone.
+  for (const other of [480, 1080, 2160, 3000, 3840]) {
+    const side = G.renderFrameSide(other);
+    for (const v of [side.min, side.max]) {
+      const back = G.renderFrameSide(v);
+      assert.ok(other >= back.min - 2 && other <= back.max + 2,
+        other + ' against ' + v + ' giving ' + JSON.stringify(back));
+    }
+  }
+});
+
+test('resizeEdge takes a smallest side, which the crop popup leaves alone', () => {
+  // V2.7. The render frame's shortest legal side depends on the other axis, so
+  // it cannot be the constant the crop box uses.
+  assert.deepEqual(G.resizeEdge(200, 600, EDGE_LIMIT, false, false, -5000, Infinity, 0, 400),
+    { lo: 200, hi: 600 });
+  assert.deepEqual(G.resizeEdge(200, 600, EDGE_LIMIT, true, false, 5000, Infinity, 0, 400),
+    { lo: 200, hi: 600 });
+  // Left out, it is CROP_MIN, which is what every existing caller relies on.
+  assert.deepEqual(G.resizeEdge(200, 600, EDGE_LIMIT, false, false, -5000),
+    { lo: 200, hi: 200 + G.CROP_MIN });
+});
+
+// ---- renderReshape, V2.7: an aspect button extends ----
+
+test('an aspect button grows the axis that has to change and leaves the other', () => {
+  // The user's own example, on 2026-09-24: "if there is resolution/pixels spare
+  // let it extend, e.g. 1080p from 1920x1080 at 16:9 to 2520x1080 at 21:9".
+  assert.deepEqual(G.renderReshape({ width: 1920, height: 1080 }, 21 / 9),
+    { width: 2520, height: 1080 });
+  // The same the other way: a taller shape grows the height and keeps the width.
+  assert.deepEqual(G.renderReshape({ width: 1920, height: 1080 }, 1),
+    { width: 1920, height: 1920 });
+});
+
+test('it extends right up to the raised ceiling', () => {
+  assert.deepEqual(G.renderReshape({ width: 3840, height: 2160 }, 21 / 9),
+    { width: 5040, height: 2160 });
+});
+
+test('it cuts only when there is no room left to grow', () => {
+  // 5040x2160 asked for 16:9 would want 2835 of height, past the short side
+  // cap, so this one takes it out of the width instead.
+  assert.deepEqual(G.renderReshape({ width: 5040, height: 2160 }, 16 / 9),
+    { width: 3840, height: 2160 });
+});
+
+test('and falls back to the largest legal frame when neither will do', () => {
+  const out = G.renderReshape({ width: 3840, height: 2160 }, 9 / 21);
+  assert.deepEqual(out, G.renderLargest(9 / 21));
+  assert.deepEqual(out, { width: 2160, height: 5040 });
+});
+
+test('whatever an aspect button returns is inside the caps', () => {
+  const ratios = [21 / 9, 16 / 9, 4 / 3, 1, 4 / 5, 3 / 4, 9 / 16, 9 / 21];
+  const starts = [
+    { width: 1920, height: 1080 }, { width: 3840, height: 2160 },
+    { width: 5040, height: 2160 }, { width: 480, height: 480 },
+    { width: 1080, height: 1920 },
+  ];
+  for (const r of ratios) {
+    for (const start of starts) {
+      const out = G.renderReshape(start, r);
+      assert.ok(out, r + ' from ' + start.width + 'x' + start.height);
+      assert.ok(G.fitsCaps(out),
+        r + ' from ' + start.width + 'x' + start.height + ' gave ' + JSON.stringify(out));
+    }
+  }
+});
+
+test('a frame nobody asked about is left alone rather than guessed at', () => {
+  assert.equal(G.renderReshape(null, 16 / 9), null);
+  assert.equal(G.renderReshape({ width: 1920, height: 1080 }, 0), null);
+});
+
 // ---- ratioResize, V2.1 step 21e-3 ----
 //
 // Shift and Ctrl held together on a bar or a corner. The shape is whatever
@@ -570,4 +837,69 @@ test('the ring is inset from the stage by the gap plus its own radius', () => {
   assert.equal(G.anchorCentre(0, 600, span), 19);
   assert.equal(G.anchorCentre(1, 600, span), 581);
   assert.equal(G.anchorCentre(0.5, 600, span), 300);
+});
+
+// --- the Render Position scale slider, V2.8 item 12 -------------------------
+
+test('a slider position below the knee is the percentage itself', () => {
+  for (const pos of [1, 2, 37, 100, 199, 200]) {
+    assert.equal(G.scaleFromSlider(pos), pos);
+  }
+});
+
+test('the knee sits at exactly half the slider', () => {
+  assert.equal(G.PLACE_SLIDER_MAX, G.PLACE_SCALE_KNEE * 2);
+  assert.equal(G.scaleFromSlider(G.PLACE_SLIDER_MAX / 2), G.PLACE_SCALE_KNEE);
+});
+
+test('the two ends are the two ends', () => {
+  assert.equal(G.scaleFromSlider(1), G.PLACE_SCALE_MIN);
+  assert.equal(G.scaleFromSlider(G.PLACE_SLIDER_MAX), G.PLACE_SCALE_MAX);
+});
+
+test('the jumps above the knee grow rather than staying even', () => {
+  const at = (p) => G.scaleFromSlider(p);
+  const low = at(210) - at(209);
+  const mid = at(300) - at(299);
+  const high = at(400) - at(399);
+  assert.ok(low < mid && mid < high,
+    'each step is bigger than the last: ' + [low, mid, high].join(' '));
+  // And still fine enough at the bottom of the upper half to be usable: a
+  // couple of percent a step, not twenty.
+  assert.ok(low <= 3, 'the first step past the knee is small: ' + low);
+});
+
+test('the scale never goes backwards as the handle goes forwards', () => {
+  let last = 0;
+  for (let pos = 1; pos <= G.PLACE_SLIDER_MAX; pos += 1) {
+    const now = G.scaleFromSlider(pos);
+    assert.ok(now >= last, 'position ' + pos + ' gave ' + now + ' after ' + last);
+    last = now;
+  }
+});
+
+test('every position survives the round trip, so the handle never jumps', () => {
+  // The one property the pair has to have. showPlaceScale writes the handle
+  // from the percentage it just read off the handle, so a position that does
+  // not come back is a handle that moves on its own under the hand.
+  for (let pos = 1; pos <= G.PLACE_SLIDER_MAX; pos += 1) {
+    assert.equal(G.sliderFromScale(G.scaleFromSlider(pos)), pos);
+  }
+});
+
+test('a percentage from outside the range is held inside it', () => {
+  assert.equal(G.sliderFromScale(0), G.PLACE_SCALE_MIN);
+  assert.equal(G.sliderFromScale(-40), G.PLACE_SCALE_MIN);
+  assert.equal(G.sliderFromScale(99999), G.PLACE_SLIDER_MAX);
+  assert.equal(G.scaleFromSlider(9999), G.PLACE_SCALE_MAX);
+  assert.equal(G.scaleFromSlider(-3), G.PLACE_SCALE_MIN);
+  for (const bad of [NaN, undefined, 'x', {}]) {
+    assert.equal(G.scaleFromSlider(bad), G.PLACE_SCALE_KNEE);
+    assert.equal(G.sliderFromScale(bad), G.PLACE_SCALE_KNEE);
+  }
+  // null and an emptied box are not nothing, they are zero: Number(null) is 0
+  // and finite() takes it. So they land on the floor rather than on the
+  // fallback, which is worth saying out loud rather than leaving to be found.
+  assert.equal(G.scaleFromSlider(null), G.PLACE_SCALE_MIN);
+  assert.equal(G.sliderFromScale(''), G.PLACE_SCALE_MIN);
 });

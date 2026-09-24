@@ -42,6 +42,8 @@ const layerGeometry = (() => {
     return Number.isFinite(Number(v)) ? Number(v) : fallback;
   }
 
+  const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
+
   /**
    * The part of the source frame a layer shows, in source pixels, even-aligned
    * and clamped inside the frame. A null or whole-frame crop gives the lot.
@@ -228,6 +230,211 @@ const layerGeometry = (() => {
     };
   }
 
+  // Every dimension ffmpeg is handed has to be even, because yuv420p subsamples
+  // chroma two pixels at a time and an odd one has no valid encoding. That is
+  // what sets the step sizes below rather than any feel for how fast a bar
+  // should move: one bar alone moves in twos, and a mirrored pair moves one
+  // each so the dimension between them still changes in twos.
+  //
+  // V2.7. These came over from renderer/app.js together with resizeEdge, which
+  // is the only arithmetic that reads them. The window aliases the two it still
+  // uses itself, so every use site over there is spelled as it always was.
+  const CROP_STEP = 2;
+  const CROP_MIRROR_STEP = 1;
+  // Small enough never to be in the way, large enough that the four grips do
+  // not pile up on each other and become impossible to tell apart.
+  const CROP_MIN = 16;
+
+  /**
+   * Where a pair of opposite edges ends up after a bar is dragged. Kept pure and
+   * out of the handler so the arithmetic can be checked on its own: the two axes
+   * and all four bars come through here, which is what stops the clamping to the
+   * frame from being written four slightly different ways.
+   *
+   * lo/hi are the near and far edge in source pixels, floor and limit how far
+   * either may travel on that axis, movesLo which of the two the bar being
+   * dragged is, rawDelta the pointer's travel converted to source pixels, and
+   * travelPx that same travel in screen pixels, which is what holds the mirrored
+   * pair to its one pixel step. `least` is how close the two edges may come,
+   * which the crop popup leaves alone at CROP_MIN and the render frame works
+   * out per axis, its shortest legal side depending on the other one.
+   *
+   * floor and limit are what is on the frame, not what is in the picture: zoomed
+   * in, a bar dragged past the edge of the frame would take the box somewhere it
+   * cannot be seen or grabbed. At 100% the two are the same thing.
+   *
+   * V2.7. Moved here from renderer/app.js unchanged, before the Crop Render
+   * Frame window was built, because that window needs this same rule and
+   * because here it can finally be checked by node --test rather than only
+   * through a window probe. It is the part with the scars: the mirrored rate
+   * cap, the even step and the two clampings were each fixed separately over
+   * 21e and 22a.
+   */
+  function resizeEdge(lo0, hi0, limit, movesLo, mirrored, rawDelta, travelPx = Infinity,
+    floor = 0, least = CROP_MIN) {
+    if (mirrored) {
+      // Both bars move by the same amount in opposite directions, so the centre
+      // holds and the dimension between them changes by two per step: still even.
+      // Outward they stop at the frame, inward at CROP_MIN apart.
+      //
+      // The rate is capped at a source pixel per pixel of travel. Without that
+      // cap the step is whatever a screen pixel happens to be worth, and the
+      // frame is usually shown small enough that this is two or three source
+      // pixels: on a 1280 wide clip one screen pixel is 1.81 source pixels, so
+      // the pair could only ever jump four at a time, never the two it is for.
+      // Zoomed in, where a screen pixel is worth less than a source one, the
+      // ordinary rate is already the slower of the two and still applies.
+      const rate = Math.sign(rawDelta) * Math.min(Math.abs(rawDelta), Math.abs(travelPx));
+      const outward = Math.max(0, Math.min(lo0 - floor, limit - hi0));
+      const inward = Math.max(0, Math.floor((hi0 - lo0 - least) / 2));
+      const d = clamp(Math.round(rate / CROP_MIRROR_STEP) * CROP_MIRROR_STEP,
+        movesLo ? -outward : -inward, movesLo ? inward : outward);
+      return movesLo ? { lo: lo0 + d, hi: hi0 - d } : { lo: lo0 - d, hi: hi0 + d };
+    }
+    const d = Math.round(rawDelta / CROP_STEP) * CROP_STEP;
+    if (movesLo) return { lo: clamp(lo0 + d, floor, hi0 - least), hi: hi0 };
+    return { lo: lo0, hi: clamp(hi0 + d, lo0 + least, limit) };
+  }
+
+  /**
+   * What the render frame may be, settled with the user on 2026-09-24.
+   *
+   *     neither side above 5040, the shorter side never above 2160,
+   *     the ratio never past 21:9 either way, and even numbers
+   *
+   * In their words: "A square should not exceed 2160px. If one side reaches
+   * that only the other side can still move." So 2160x2160 is the largest
+   * square and 3840x2160 the largest 16:9.
+   *
+   * Note which way the 21:9 rule bites. It is a floor on the short side rather
+   * than a ceiling on the long one: given a long side, the short one may not be
+   * so short that the pair goes past the ratio.
+   *
+   * The long side was 3840 when this was first agreed, on the argument that
+   * nothing reachable should exceed 4K's pixel count. That made 21:9 at 2160p
+   * impossible, and the user reopened it the same day and chose the other way:
+   * "if there is resolution/pixels spare let it extend". So the ceiling is
+   * 5040, which is exactly 21:9 at 2160 tall, and the largest frame is 10.9M
+   * pixels against 4K's 8.3M. 5040 rather than the 5120 of an ultrawide
+   * monitor, because the button says 21:9 and 5040x2160 is 21:9 while
+   * 5120x2160 is 64:27. The screen's name for it belongs on the label, not in
+   * the arithmetic.
+   */
+  const RENDER_MAX_SIDE = 5040;
+  const RENDER_MAX_SHORT = 2160;
+  const RENDER_MAX_RATIO = 21 / 9;
+
+  const evenUp = (v) => Math.ceil(v / 2) * 2;
+
+  /**
+   * How long one side of the render frame may be, with the other side where it
+   * is. Both bars of an axis are clamped through this, which is what stops the
+   * four of them from each having their own idea of the caps.
+   */
+  function renderFrameSide(other) {
+    const o = Math.max(2, evenDown(finite(other, 2)));
+    // This side is the short one whenever the other is longer, and a short side
+    // stops at 2160. Once the other side is past that, this one cannot be the
+    // long one at all, so 2160 is the whole of it.
+    const max = o > RENDER_MAX_SHORT
+      ? RENDER_MAX_SHORT
+      : Math.min(RENDER_MAX_SIDE, o * RENDER_MAX_RATIO);
+    // And never so short that the pair goes past 21:9 the other way round.
+    const min = o / RENDER_MAX_RATIO;
+    return { min: Math.max(2, evenUp(min)), max: Math.max(2, evenDown(max)) };
+  }
+
+  /**
+   * The frame a resolution button asks for, or null when that combination
+   * cannot be built.
+   *
+   * `ratio` is width over height, as the aspect row already spells it, and
+   * `shortSide` is what the second row is named after: the short side is the
+   * one number that does not depend on which way up the frame is, which is why
+   * 16:9 plus 2160p is 3840x2160 and 9:16 plus 1080p is 1080x1920.
+   *
+   * Null rather than a clamped answer on purpose: a button that cannot do what
+   * its label says is disabled, not quietly corrected. With the ceiling at 5040
+   * every combination the two rows offer is reachable, so nothing is disabled
+   * today. The rule stays because it is what keeps a later row honest.
+   */
+  function renderFrameFor(ratio, shortSide) {
+    const r = finite(ratio, 0);
+    const s = evenDown(finite(shortSide, 0));
+    if (!(r > 0) || !(s >= 2)) return null;
+    const long = evenDown(s * (r >= 1 ? r : 1 / r));
+    const size = r >= 1 ? { width: long, height: s } : { width: s, height: long };
+    const lo = Math.min(size.width, size.height);
+    const hi = Math.max(size.width, size.height);
+    if (hi > RENDER_MAX_SIDE || lo > RENDER_MAX_SHORT) return null;
+    // Rounding down to even can only have made the long side shorter, so the
+    // ratio this is checked at is the one the frame really has.
+    if (hi / lo > RENDER_MAX_RATIO) return null;
+    return size;
+  }
+
+  /**
+   * Whether a frame is one the caps allow. One statement of the three rules,
+   * because three callers reach them by different roads and a road that skipped
+   * the check would be a way round them.
+   */
+  function fitsCaps(size) {
+    const w = finite(size && size.width, 0);
+    const h = finite(size && size.height, 0);
+    if (w < 2 || h < 2 || w % 2 || h % 2) return false;
+    const lo = Math.min(w, h);
+    const hi = Math.max(w, h);
+    if (hi > RENDER_MAX_SIDE || lo > RENDER_MAX_SHORT) return false;
+    return hi / lo <= RENDER_MAX_RATIO;
+  }
+
+  /**
+   * The largest frame of a given shape the caps allow, which is what an aspect
+   * button falls back to when neither growing nor cutting can be done legally.
+   */
+  function renderLargest(ratio) {
+    const r = finite(ratio, 0);
+    if (!(r > 0)) return null;
+    const long = r >= 1 ? r : 1 / r;
+    return renderFrameFor(r, evenDown(Math.min(RENDER_MAX_SHORT, RENDER_MAX_SIDE / long)));
+  }
+
+  /**
+   * What an aspect button does to the frame it is pressed on.
+   *
+   * **It extends rather than cuts, where there is room.** The user, on
+   * 2026-09-24: "if there is resolution/pixels spare let it extend, e.g. 1080p
+   * from 1920x1080 at 16:9 to 2520x1080 at 21:9". So the axis that does not
+   * have to change is left exactly where it is and the other one grows to meet
+   * the ratio.
+   *
+   * This is the opposite of what the per-layer crop popup does, where every
+   * preset is "the way back inside the picture". That rule is right for a crop
+   * of a source, because there is nothing outside a source to reach. It is
+   * wrong for a render frame, where growing is the whole point of the window.
+   *
+   * Cutting is the fallback, not the default: it happens only when growing
+   * would breach a cap, and if that cannot be done either the answer is the
+   * largest legal frame of that shape.
+   */
+  function renderReshape(size, ratio) {
+    const w0 = evenDown(finite(size && size.width, 0));
+    const h0 = evenDown(finite(size && size.height, 0));
+    const r = finite(ratio, 0);
+    if (!(r > 0) || w0 < 2 || h0 < 2) return null;
+    // Too narrow for the shape wanted means the width is the one that grows.
+    const needsWider = w0 / h0 < r;
+    const grown = needsWider
+      ? { width: evenDown(h0 * r), height: h0 }
+      : { width: w0, height: evenDown(w0 / r) };
+    if (fitsCaps(grown)) return grown;
+    const cut = needsWider
+      ? { width: w0, height: evenDown(w0 / r) }
+      : { width: evenDown(h0 * r), height: h0 };
+    if (fitsCaps(cut)) return cut;
+    return renderLargest(r);
+  }
+
   /**
    * How many fr units the two side columns of the preview get.
    *
@@ -351,6 +558,45 @@ const layerGeometry = (() => {
    * second copy of this sum would drift at the extremes first, which is where
    * anybody would look.
    */
+  // ---- the Render Position scale slider, V2.8 item 12 ----
+  //
+  // The user asked for 1% to 1000%, "kinda logarithmic but with 1%-precise
+  // steps up to 200% (50% of the slider length) and then increasingly bigger
+  // jumps towards 1000%". So the slider is 400 positions of an ordinary linear
+  // range element and the bend is here, in two functions that have to be each
+  // other's inverse or the handle jumps under the hand.
+  //
+  // Below the knee a position **is** the percentage, which is the 1% precision
+  // asked for and needs no arithmetic at all. Above it the percentage is
+  // multiplied rather than added to, so each step is a fixed fraction bigger
+  // than the last: that is what makes the jumps grow, and it is why the top
+  // half covers 200 to 1000 while the bottom half covers 1 to 200.
+  const PLACE_SCALE_MIN = 1;
+  const PLACE_SCALE_KNEE = 200;
+  const PLACE_SCALE_MAX = 1000;
+  // Twice the knee, so the knee really is at half the travel.
+  const PLACE_SLIDER_MAX = PLACE_SCALE_KNEE * 2;
+
+  /** What a slider position means, as a percentage. */
+  function scaleFromSlider(pos) {
+    const s = clamp(Math.round(finite(pos, PLACE_SCALE_KNEE)),
+      PLACE_SCALE_MIN, PLACE_SLIDER_MAX);
+    if (s <= PLACE_SCALE_KNEE) return s;
+    const up = (s - PLACE_SCALE_KNEE) / PLACE_SCALE_KNEE;
+    return Math.round(PLACE_SCALE_KNEE
+      * Math.pow(PLACE_SCALE_MAX / PLACE_SCALE_KNEE, up));
+  }
+
+  /** And where the handle stands for a given percentage. */
+  function sliderFromScale(percent) {
+    const p = clamp(Math.round(finite(percent, PLACE_SCALE_KNEE)),
+      PLACE_SCALE_MIN, PLACE_SCALE_MAX);
+    if (p <= PLACE_SCALE_KNEE) return p;
+    const up = Math.log(p / PLACE_SCALE_KNEE)
+      / Math.log(PLACE_SCALE_MAX / PLACE_SCALE_KNEE);
+    return PLACE_SCALE_KNEE + Math.round(PLACE_SCALE_KNEE * up);
+  }
+
   function alphaRow(span, alpha) {
     const rows = Math.max(0, finite(span, 0) - 1);
     const a = Math.min(1, Math.max(0, finite(alpha, 1)));
@@ -436,10 +682,28 @@ const layerGeometry = (() => {
     frameSize,
     rescaleRender,
     ratioResize,
+    CROP_STEP,
+    CROP_MIRROR_STEP,
+    CROP_MIN,
+    resizeEdge,
+    RENDER_MAX_SIDE,
+    RENDER_MAX_SHORT,
+    RENDER_MAX_RATIO,
+    renderFrameSide,
+    renderFrameFor,
+    fitsCaps,
+    renderLargest,
+    renderReshape,
     sideFraction,
     splitHeight,
     anchorCentre,
     alphaRow,
+    PLACE_SCALE_MIN,
+    PLACE_SCALE_KNEE,
+    PLACE_SCALE_MAX,
+    PLACE_SLIDER_MAX,
+    scaleFromSlider,
+    sliderFromScale,
     placeLayer,
     previewCanvasSize,
     drawImageArgs,

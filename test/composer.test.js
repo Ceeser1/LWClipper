@@ -212,10 +212,36 @@ test('the trim markers cut the finished timeline, not the layers', () => {
   assert.deepEqual(args.slice(args.indexOf('-i') - 4, args.indexOf('-i')), ['-ss', '0.0', '-t', '30.0']);
 });
 
-test('trimming past the end of the content is clamped to it', () => {
+test('an end past the last layer is kept, and the output runs on into black', () => {
+  // V2.8 item 3. It used to be clamped back to the material.
   const layers = [vid({ id: 'v', duration: 10 })];
-  assert.deepEqual(outputSpan(layers, { start: 2, end: 999 }), { start: 2, end: 10, duration: 8 });
+  assert.deepEqual(outputSpan(layers, { start: 2, end: 16 }), { start: 2, end: 16, duration: 14 });
   assert.deepEqual(outputSpan(layers, null), { start: 0, end: 10, duration: 10 });
+});
+
+test('but not past the ceiling, so a silly number cannot ask for a week of it', () => {
+  const layers = [vid({ id: 'v', duration: 10 })];
+  const ceiling = timeline.trimCeiling(layers);
+  assert.equal(outputSpan(layers, { start: 0, end: 1e9 }).end, ceiling);
+  assert.equal(ceiling, 10 + timeline.TAIL_REACH);
+});
+
+test('the black the tail is made of is the base every layer sits on', () => {
+  // Nothing was added to the graph for this: the base is built to the output's
+  // length and the layers stop when they stop, so the tail is what is left.
+  const layers = [vid({ id: 'v', duration: 6 }), aud({ id: 'a', duration: 6 })];
+  const args = buildComposeArgs({
+    layers, project: HD, output: 'out.mp4', sources: SOURCES, trim: { start: 0, end: 10 },
+  });
+  const graph = graphOf(args);
+  assert.ok(find(graph, 'color=c=black')[0].includes(':d=10.0'),
+    'the black frame runs the whole ten seconds: ' + find(graph, 'color=c=black')[0]);
+  assert.ok(find(graph, 'overlay=')[0].includes("lt(t,6.0)"),
+    'and the layer stops at six, where it ends');
+  assert.ok(find(graph, 'apad=whole_dur=10.0').length,
+    'the sound is padded with silence to the same ten seconds');
+  assert.equal(args[args.lastIndexOf('-t') + 1], '10.0',
+    'and the file is ten seconds long');
 });
 
 test('no number ever reaches ffmpeg in exponential notation', () => {

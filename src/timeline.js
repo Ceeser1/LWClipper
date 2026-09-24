@@ -132,6 +132,23 @@ const timelineModel = (() => {
       groupId: props.groupId || null,
       // Step 2's geometry owns what goes in here. null means the whole frame.
       crop: props.crop || null,
+      // V2.8 item 8. Which of the Render Position rings the picture was put on,
+      // by name, so it can stay there when it is scaled rather than growing
+      // about its own centre and coming away from the edge it was put against.
+      // The user: "When a layer gets positioned at any position (circle) in
+      // render position, remember where it should stick to, also while scaling
+      // it it should stick to e.g. right-top floating if thats the selected
+      // circle."
+      //
+      // Declared here for the reason render and fadeIn are: the project open
+      // path runs every layer back through createLayer, and a field this does
+      // not name is a field it drops.
+      //
+      // The name only. What the names mean is the window's business, and a name
+      // it does not recognise simply does nothing, which is why this checks that
+      // it is a string and not which string it is. null is a picture that was
+      // put somewhere by hand and sticks to nothing.
+      anchor: typeof props.anchor === 'string' && props.anchor ? props.anchor : null,
       // V2.1's Render Position tab owns this one: where the cropped picture is
       // placed and scaled inside the project frame, in project pixels. null
       // means centre and fit, which is what placeLayer works out for itself.
@@ -492,6 +509,28 @@ const timelineModel = (() => {
     });
   }
 
+  /**
+   * How far past the last layer a project may be trimmed to, V2.8 item 3.
+   *
+   * The user, on 2026-09-24: "Let the End-time slider being dragged past the
+   * last tracks end. This simply extends the video with a black screen if there
+   * is simply nothing anymore, but it should be possible." So the out marker
+   * stops being held to the material and the stretch past it renders as black,
+   * which the composer was already building anyway: every layer is overlaid
+   * onto a black frame the length of the output.
+   *
+   * An hour, which is the same reach the timeline view can already pan into, so
+   * the marker cannot be dragged somewhere the view cannot follow it. It exists
+   * to stop a corrupt or hand-edited .lwc asking for a week of black rather
+   * than to be a wall anybody meets: nothing in advanced editing is drawn
+   * against it, the Trim frame being hidden there.
+   */
+  const TAIL_REACH = 3600;
+
+  function trimCeiling(layers) {
+    return round(totalDuration(layers) + TAIL_REACH);
+  }
+
   function setLayer(layers, id, props) {
     return replace(layers, id, (l) => ({ ...l, ...props }));
   }
@@ -504,14 +543,34 @@ const timelineModel = (() => {
    * safe; it is what makes the number the clip draws and the number the handle
    * reports the same one, so a fade dragged past the end of the clip stops
    * under the pointer rather than carrying on invisibly.
+   *
+   * **V2.8. The two fades share the clip and cannot both have all of it.**
+   * Until now each was clamped to the span on its own, so two and a half
+   * seconds in and two and a half out on a three second clip was allowed and
+   * the ramps crossed. The user, on 2026-09-24: "If fade in/out are both used
+   * and their vertical lines would collide/overlap, shift the other
+   * (non-dragged) further to its side, dont let fade in/out overlap."
+   *
+   * So **the one being set wins** and the other gives way to it, which is the
+   * only rule that can be obeyed by a hand holding one handle: stopping the
+   * dragged one would leave the pointer somewhere the fade is not. The one that
+   * gave way stays given way when the drag comes back, because it was shortened
+   * rather than pushed, and there is nothing to remember it was ever longer.
+   *
+   * They may meet exactly. Touching is not overlapping, and a fade in that runs
+   * straight into a fade out is a real thing to ask for.
    */
   function setFade(layers, id, which, seconds) {
     const key = which === 'out' ? 'fadeOut' : 'fadeIn';
+    const twin = which === 'out' ? 'fadeIn' : 'fadeOut';
     return replace(layers, id, (l) => {
       const span = Math.max(0, round(Number(l.duration) || 0));
       const n = Number(seconds);
       const want = Number.isFinite(n) ? clamp(round(n), 0, span) : 0;
-      return want === round(Number(l[key]) || 0) ? l : { ...l, [key]: want };
+      const other = round(Number(l[twin]) || 0);
+      const gives = clamp(other, 0, round(span - want));
+      if (want === round(Number(l[key]) || 0) && gives === other) return l;
+      return { ...l, [key]: want, [twin]: gives };
     });
   }
 
@@ -672,6 +731,8 @@ const timelineModel = (() => {
     indexOfLayer,
     layersAt,
     totalDuration,
+    TAIL_REACH,
+    trimCeiling,
     addLayer,
     removeLayer,
     reorderLayer,

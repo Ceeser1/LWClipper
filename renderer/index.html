@@ -66,22 +66,13 @@
       <!-- Centred on the section, which puts it over the middle cell's title,
            rather than being placed after the controls to its left. -->
       <div id="renderResolution" class="render-resolution" hidden>
-        <!-- Two readouts in one place, because they are two different facts.
-             Simple editing shows the source and its crop, which is what the
-             file already is and nothing can type into. Advanced editing shows
-             the project frame, which is a setting. The x between the boxes is
-             drawn by the stylesheet rather than written here: it is a separator
-             between two numbers, not a word, and a text node saying "x" would
-             go looking for a translation of it. -->
+        <!-- One readout saying two different facts. Simple editing shows the
+             source and its crop, which is what the file already is. Advanced
+             editing shows the project frame, which is a setting, and V2.8 made
+             it a readout here as well: the boxes that used to stand in this
+             span live in the Crop Render window now, which is where the rest of
+             the deciding about the frame happens. -->
         <span id="renderResolutionText"></span>
-        <span id="renderResolutionEdit" class="render-resolution__edit" hidden>
-          <span>Render Resolution:</span>
-          <input id="frameWidthBox" class="render-resolution__box" type="text"
-            inputmode="numeric" maxlength="4" />
-          <span class="render-resolution__x"></span>
-          <input id="frameHeightBox" class="render-resolution__box" type="text"
-            inputmode="numeric" maxlength="4" />
-        </span>
       </div>
     </div>
     <div class="preview-grid">
@@ -256,9 +247,12 @@
       </div>
       <div id="timelineStage" class="timeline-stage">
         <div class="timeline-ruler-row">
-          <!-- Empty, and exactly as wide as a layer's header, so the ruler
-               above the tracks starts where the tracks do. -->
-          <div class="timeline-gutter"></div>
+          <!-- Exactly as wide as a layer's header, so the ruler above the
+               tracks starts where the tracks do. V2.8 gave it the one thing
+               that square is good for: saying what the column under it is. -->
+          <div class="timeline-gutter">
+            <span class="timeline-gutter__title">Layers</span>
+          </div>
           <canvas id="timelineRuler" class="timeline-ruler"></canvas>
         </div>
         <div id="timelineStack" class="timeline-stack"></div>
@@ -287,6 +281,12 @@
             <div class="timeline-marker__grab"></div>
           </div>
         </div>
+        <!-- V2.8. The layer column's own right edge, standing in the head's
+             padding with a pixel to spare before the border, so it is over
+             nothing that can be clicked and leaves a visible gap to the lane.
+             After the lane in the markup, so it is above it for a press. -->
+        <div id="layersSplitter" class="layers-splitter" role="separator"
+             aria-orientation="vertical"></div>
       </div>
     </section>
 
@@ -533,8 +533,11 @@
            frame, above it it overflows. -->
       <div id="placeScaleRow" class="crop-zoom" hidden>
         <span class="crop-zoom__caption">Scale:</span>
-        <input id="placeScaleSlider" class="crop-zoom__slider" type="range"
-               min="10" max="400" step="1" value="100" />
+        <!-- The value is a position on the bend in geometry.scaleFromSlider,
+             not a percentage: 1 to 200 are the percentages themselves and 200
+             to 400 carry 200% to 1000% in steps that grow. -->
+        <input id="placeScaleSlider" class="crop-zoom__slider crop-zoom__slider--long"
+               type="range" min="1" max="400" step="1" value="100" />
         <span id="placeScaleValue" class="crop-zoom__value">100%</span>
       </div>
       <div id="cropZoomRow" class="crop-zoom">
@@ -551,6 +554,62 @@
         <button id="cropAcceptBtn" class="crop-accept-btn">Accept</button>
         <button id="cropRemoveBtn" class="crop-remove-btn">Remove</button>
         <button id="cropCancelBtn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- V2.7. The render frame, which is not a crop of a picture but the output
+       frame itself: dragging a bar changes what the composition covers rather
+       than cutting anything out of it, and it may be dragged outwards to make
+       room beside what is already there.
+
+       A second window rather than a mode of the crop popup, decided by counting
+       what the two would share: the largest part of that one exists to serve a
+       zoom and a pan, and this has neither. What they do share is the
+       arithmetic, which is now in src/geometry.js, and the pointer plumbing,
+       which is bindGrip and bindCorner.
+
+       No tabs, because with no subject layer Render Position has nothing to
+       position. No arrows, because they light up only when part of the picture
+       is off the edge of the stage, which cannot happen here. The two boxes
+       that were above the preview live in here instead, where the shape and the
+       pixel count are chosen in one place. -->
+  <div id="renderModal" class="modal" hidden>
+    <div class="modal__panel modal__panel--crop" role="dialog" aria-modal="true"
+      aria-labelledby="renderTitle">
+      <div id="renderTitle" class="modal__title">Crop Render Frame</div>
+      <div class="crop-frame crop-frame--render">
+        <div id="renderStage" class="crop-stage">
+          <canvas id="renderCanvas" class="crop-canvas"></canvas>
+          <div id="renderBox" class="crop-box">
+            <div class="crop-grip crop-grip--left" data-edge="left"></div>
+            <div class="crop-grip crop-grip--right" data-edge="right"></div>
+            <div class="crop-grip crop-grip--top" data-edge="top"></div>
+            <div class="crop-grip crop-grip--bottom" data-edge="bottom"></div>
+            <div class="crop-corner crop-corner--tl" data-corner="tl"></div>
+            <div class="crop-corner crop-corner--tr" data-corner="tr"></div>
+            <div class="crop-corner crop-corner--bl" data-corner="bl"></div>
+            <div class="crop-corner crop-corner--br" data-corner="br"></div>
+          </div>
+        </div>
+      </div>
+      <div id="renderHint" class="hint-label crop-hint">Hold Shift to move bars mirrored, Ctrl on a corner to move it diagonally, both to keep the shape</div>
+      <div class="render-resolution__edit render-frame-res">
+        <span>Render Resolution:</span>
+        <input id="renderWidthBox" class="render-resolution__box" type="text"
+          inputmode="numeric" maxlength="4" />
+        <span class="render-resolution__x"></span>
+        <input id="renderHeightBox" class="render-resolution__box" type="text"
+          inputmode="numeric" maxlength="4" />
+      </div>
+      <!-- Two rows that compose: the shape, and the short side. The short side
+           is the one number that does not depend on which way up the frame is,
+           so 16:9 with 2160p is 3840x2160 and 9:16 with 1080p is 1080x1920. -->
+      <div class="crop-presets" id="renderPresets"></div>
+      <div class="crop-presets" id="renderResPresets"></div>
+      <div class="crop-actions">
+        <button id="renderAcceptBtn" class="crop-accept-btn">Accept</button>
+        <button id="renderCancelBtn">Cancel</button>
       </div>
     </div>
   </div>

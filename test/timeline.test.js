@@ -706,6 +706,56 @@ test('a fade is clamped to the clip on the way in, not only on the way out', () 
   }
 });
 
+test('the two fades cannot overlap, and the one being set is the one that wins', () => {
+  // V2.8 item 1. Three seconds of clip, two seconds of fade in already on it,
+  // and a fade out of two asked for: the out gets what it asked for and the in
+  // gives up the second they were fighting over.
+  const list = [video({ duration: 3, fadeIn: 2 })];
+  const out = T.setFade(list, list[0].id, 'out', 2);
+  assert.equal(out[0].fadeOut, 2, 'the one being dragged gets what it asked for');
+  assert.equal(out[0].fadeIn, 1, 'and the other one gave way rather than crossing it');
+  assert.equal(out[0].fadeIn + out[0].fadeOut, 3, 'together they are the clip, no more');
+});
+
+test('a fade may run exactly into the other, touching being different from crossing', () => {
+  const list = [video({ duration: 4, fadeIn: 2 })];
+  const out = T.setFade(list, list[0].id, 'out', 2);
+  assert.equal(out[0].fadeIn, 2, 'nothing had to give: two and two is the whole clip');
+  assert.equal(out[0].fadeOut, 2);
+});
+
+test('a fade taking the whole clip leaves the other at nothing', () => {
+  const list = [video({ duration: 5, fadeOut: 3 })];
+  const both = T.setFade(list, list[0].id, 'in', 5);
+  assert.equal(both[0].fadeIn, 5);
+  assert.equal(both[0].fadeOut, 0, 'there is no room left for it to be anywhere');
+});
+
+test('the fade that gave way stays where it was pushed', () => {
+  // It was shortened, not held aside, so dragging back does not restore it.
+  // Nothing remembers it was ever longer, and inventing that memory would mean
+  // a fade growing on its own while a different handle is being dragged.
+  const list = [video({ duration: 4, fadeIn: 3 })];
+  const squeezed = T.setFade(list, list[0].id, 'out', 3);
+  assert.equal(squeezed[0].fadeIn, 1);
+  const back = T.setFade(squeezed, squeezed[0].id, 'out', 1);
+  assert.equal(back[0].fadeOut, 1);
+  assert.equal(back[0].fadeIn, 1, 'the fade in stayed short, having been shortened');
+});
+
+test('a fade set on a group squeezes each member against its own span', () => {
+  // The group rule and the overlap rule meet here: each half is held to its own
+  // length, so a pair whose halves are not quite equal still comes out sane.
+  const g = T.newGroupId();
+  const list = [video({ duration: 3, fadeIn: 2, groupId: g }),
+    audio({ duration: 4, fadeIn: 2, groupId: g })];
+  const faded = T.fadeGroup(list, list[0].id, 'out', 2);
+  assert.equal(faded[0].fadeOut, 2);
+  assert.equal(faded[0].fadeIn, 1, 'the three second half gave up a second');
+  assert.equal(faded[1].fadeOut, 2);
+  assert.equal(faded[1].fadeIn, 2, 'the four second half had the room and kept it');
+});
+
 test('setting a fade to what it already is leaves the layer untouched', () => {
   // The same object back, not an equal one. replace still hands over a fresh
   // array, which costs nothing; what matters is that the layer itself is the
@@ -738,4 +788,45 @@ test('a fade on an ungrouped clip goes nowhere else', () => {
   const faded = T.fadeGroup(list, list[0].id, 'in', 1);
   assert.equal(faded[0].fadeIn, 1);
   assert.equal(faded[1].fadeIn, 0);
+});
+
+// --- how far past the material a project may be trimmed, V2.8 item 3 --------
+
+test('the trim ceiling is the material plus an hour', () => {
+  const list = [video({ duration: 10 })];
+  assert.equal(T.trimCeiling(list), 10 + T.TAIL_REACH);
+  assert.equal(T.trimCeiling([]), T.TAIL_REACH,
+    'an empty project still has somewhere to put an end marker');
+});
+
+test('the ceiling follows the last layer rather than the longest one', () => {
+  // totalDuration is where the last thing ends, so a clip starting late counts
+  // its start as well as its length. The ceiling is measured from there.
+  const list = [video({ duration: 4, start: 30 })];
+  assert.equal(T.trimCeiling(list), 34 + T.TAIL_REACH);
+});
+
+// --- the anchor a placement sticks to, V2.8 item 8 --------------------------
+
+test('a layer carries the ring it was put on, and loses nothing reopening', () => {
+  const made = T.createLayer({ type: 'video', sourceDuration: 10, anchor: 'topRight' });
+  assert.equal(made.anchor, 'topRight');
+  // The project open path runs every layer back through createLayer, which is
+  // where render and fadeIn were each dropped once before being declared.
+  assert.equal(T.createLayer(made).anchor, 'topRight');
+});
+
+test('a layer with no anchor has none rather than a guess at one', () => {
+  assert.equal(T.createLayer({ type: 'video', sourceDuration: 10 }).anchor, null);
+  for (const bad of [0, 1, {}, [], true, '']) {
+    assert.equal(T.createLayer({ type: 'video', sourceDuration: 10, anchor: bad }).anchor,
+      null, JSON.stringify(bad) + ' is not the name of a ring');
+  }
+});
+
+test('the anchor is set and cleared like any other field', () => {
+  const list = [video({ duration: 10 })];
+  const stuck = T.setLayer(list, list[0].id, { anchor: 'bottomLeft' });
+  assert.equal(stuck[0].anchor, 'bottomLeft');
+  assert.equal(T.setLayer(stuck, stuck[0].id, { anchor: null })[0].anchor, null);
 });

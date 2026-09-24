@@ -56,12 +56,22 @@ function chain(parts) {
  * Works out the span of timeline the output covers. `trim` is the project's in
  * and out markers; without them the output is everything up to the last layer's
  * end.
+ *
+ * **V2.8 item 3: the end may be past the last layer**, and then the output runs
+ * on into black. Nothing else in here had to change for that, which is the
+ * happy part: the video is already composited onto a black frame built to the
+ * output's length, and the audio is already padded to it, so a span that
+ * reaches past the material produces exactly what it should. It was only ever
+ * this one Math.min that forbade it.
+ *
+ * Still bounded, by timeline.trimCeiling, so a .lwc with a silly number in it
+ * cannot ask ffmpeg for an hour of black past an hour of black.
  */
 function outputSpan(layers, trim) {
   const total = timeline.totalDuration(layers);
   const start = Math.max(0, Number(trim && trim.start) || 0);
   const rawEnd = trim && Number.isFinite(Number(trim.end)) ? Number(trim.end) : total;
-  const end = Math.min(total, Math.max(start, rawEnd));
+  const end = Math.min(timeline.trimCeiling(layers), Math.max(start, rawEnd));
   return { start, end, duration: end - start };
 }
 
