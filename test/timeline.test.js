@@ -830,3 +830,340 @@ test('the anchor is set and cleared like any other field', () => {
   assert.equal(stuck[0].anchor, 'bottomLeft');
   assert.equal(T.setLayer(stuck, stuck[0].id, { anchor: null })[0].anchor, null);
 });
+
+// ---- v2.9 lanes ----
+
+test('a lane survives createLayer, and nonsense reads as none', () => {
+  // The project open path runs every layer back through createLayer, and a
+  // field it does not name is a field it drops.
+  assert.equal(video({ lane: 2 }).lane, 2);
+  assert.equal(video({ lane: '1' }).lane, 1);
+  for (const bad of [undefined, null, '', -1, 1.5, 'x']) {
+    assert.equal(video({ lane: bad }).lane, null, String(bad));
+  }
+});
+
+test('a project from before lanes opens exactly as it was laid out', () => {
+  const old = [video({ id: 'v1' }), video({ id: 'v2' }), audio({ id: 'a1' }), audio({ id: 'a2' })];
+  const out = T.arrangeLanes(old);
+  assert.deepEqual(out.map((l) => l.id), ['v1', 'v2', 'a1', 'a2']);
+  assert.deepEqual(out.map((l) => l.lane), [0, 1, 0, 1]);
+});
+
+test('arranging an arranged list hands back the same list', () => {
+  const once = T.arrangeLanes([video({ id: 'v1' }), audio({ id: 'a1' })]);
+  assert.equal(T.arrangeLanes(once), once);
+});
+
+test('lanes keep their numbers, gaps and all, and the list follows them', () => {
+  // V2.9.1: an emptied row is not closed up by itself.
+  const list = [audio({ id: 'a', lane: 4 }), video({ id: 'y', lane: 7 }), video({ id: 'x', lane: 3 })];
+  const out = T.arrangeLanes(list);
+  assert.deepEqual(out.map((l) => [l.id, l.lane]), [['x', 3], ['y', 7], ['a', 4]]);
+  const lanes = T.lanesOf(out, 'video');
+  assert.equal(lanes.length, 8);
+  assert.equal(lanes[5], undefined, 'an empty lane is a hole');
+});
+
+test('a layer without a lane takes the next one after those in use', () => {
+  const out = T.arrangeLanes([video({ id: 'p', lane: 2 }), video({ id: 'n' })]);
+  assert.equal(T.layerById(out, 'n').lane, 3);
+});
+
+test('a lane emptied by removing its only clip stays numbered as it was', () => {
+  const list = T.arrangeLanes([video({ id: 'p', lane: 0 }), video({ id: 'q', lane: 1 }),
+    video({ id: 'r', lane: 2 })]);
+  const out = T.arrangeLanes(T.removeLayer(list, 'q'));
+  assert.deepEqual(out.map((l) => [l.id, l.lane]), [['p', 0], ['r', 2]]);
+});
+
+test('on a lane the later clip is stacked on top, and read left to right', () => {
+  // The list is the stacking order, top first, so the later clip comes first:
+  // a clip put down over another is the one meant to be seen. lanesOf and
+  // readingOrder are the order a person reads the timeline in.
+  const list = [video({ id: 'early', lane: 0, start: 5 }), video({ id: 'late', lane: 0, start: 20 }),
+    video({ id: 'below', lane: 1, start: 0 })];
+  const out = T.arrangeLanes(list);
+  assert.deepEqual(out.map((l) => l.id), ['late', 'early', 'below']);
+  assert.deepEqual(T.lanesOf(out, 'video').map((lane) => lane.map((l) => l.id)),
+    [['early', 'late'], ['below']]);
+  assert.deepEqual(T.readingOrder(out).map((l) => l.id), ['early', 'late', 'below']);
+});
+
+test('a new layer gets a new lane below the others of its kind', () => {
+  let list = T.addLayer([video({ id: 'v1', lane: 0 }), video({ id: 'v1b', lane: 0, start: 30 })],
+    video({ id: 'v2' }));
+  assert.equal(T.layerById(list, 'v2').lane, 1);
+  list = T.addLayer(list, audio({ id: 'a1' }));
+  assert.equal(T.layerById(list, 'a1').lane, 0);
+  // And one that names its lane joins it.
+  list = T.addLayer(list, video({ id: 'join', lane: 0, start: 50 }));
+  assert.deepEqual(T.lanesOf(list, 'video')[0].map((l) => l.id), ['v1', 'v1b', 'join']);
+});
+
+test('the arrows move a whole lane, never out of its kind', () => {
+  const list = T.arrangeLanes([video({ id: 'p', lane: 0 }), video({ id: 'q', lane: 0, start: 30 }),
+    video({ id: 'r', lane: 1 }), audio({ id: 'a', lane: 0 })]);
+  const down = T.reorderLane(list, 'video', 0, 1);
+  assert.deepEqual(down.map((l) => [l.id, l.lane]), [['r', 0], ['q', 1], ['p', 1], ['a', 0]]);
+  // Through reorderLayer too, from any clip on the lane.
+  assert.deepEqual(T.reorderLayer(list, 'q', 1).map((l) => l.id), ['r', 'q', 'p', 'a']);
+  assert.equal(T.reorderLane(list, 'video', 1, 1), list, 'the bottom lane has nowhere to go');
+  assert.equal(T.reorderLane(list, 'audio', 0, -1), list, 'nor does the top one');
+});
+
+test('deleting a lane takes every clip on it and the rest close up', () => {
+  const list = T.arrangeLanes([video({ id: 'p', lane: 0 }), video({ id: 'q', lane: 0, start: 30 }),
+    video({ id: 'r', lane: 1 }), audio({ id: 'a', lane: 0 })]);
+  const out = T.removeLane(list, 'video', 0);
+  assert.deepEqual(out.map((l) => [l.id, l.lane]), [['r', 0], ['a', 0]]);
+  // And an empty lane in the middle can be deleted too, closing the gap.
+  const gap = T.arrangeLanes([video({ id: 'p', lane: 0 }), video({ id: 'r', lane: 2 })]);
+  assert.deepEqual(T.removeLane(gap, 'video', 1).map((l) => [l.id, l.lane]), [['p', 0], ['r', 1]]);
+});
+
+test('the arrows can move a lane into an empty row the window is showing', () => {
+  const list = T.arrangeLanes([video({ id: 'p', lane: 0 })]);
+  assert.equal(T.reorderLane(list, 'video', 0, 1), list, 'no second row, nowhere to go');
+  const out = T.reorderLane(list, 'video', 0, 1, 2);
+  assert.equal(T.layerById(out, 'p').lane, 1);
+});
+
+test('the row head writes to every clip on its lane and nothing else', () => {
+  const list = T.arrangeLanes([video({ id: 'p', lane: 0 }), video({ id: 'q', lane: 0, start: 30 }),
+    video({ id: 'r', lane: 1 })]);
+  const out = T.setLane(list, 'video', 0, { enabled: false });
+  assert.deepEqual(out.map((l) => [l.id, l.enabled]), [['q', false], ['p', false], ['r', true]]);
+});
+
+// ---- v2.9 splitting ----
+
+test('a split makes two clips that together show what the one did', () => {
+  const list = T.arrangeLanes([video({ id: 'v', start: 10, sourceIn: 4, duration: 30, lane: 0,
+    crop: { x: 1, y: 2, width: 30, height: 40 }, alpha: 0.5, anchor: 'topLeft' })]);
+  const out = T.splitLayer(list, 'v', 22);
+  assert.equal(out.length, 2);
+  const [left, right] = T.readingOrder(out);
+  assert.equal(left.id, 'v', 'the left half is the layer that was there');
+  assert.notEqual(right.id, 'v');
+  assert.deepEqual([left.start, left.duration, left.sourceIn], [10, 12, 4]);
+  assert.deepEqual([right.start, right.duration, right.sourceIn], [22, 18, 16]);
+  assert.equal(T.sourceTimeFor(right, 22), T.sourceTimeFor(list[0], 22),
+    'the frame at the cut is the same frame either side of it');
+  for (const half of out) {
+    assert.deepEqual(half.crop, { x: 1, y: 2, width: 30, height: 40 });
+    assert.equal(half.alpha, 0.5);
+    assert.equal(half.anchor, 'topLeft');
+    assert.equal(half.lane, 0);
+  }
+});
+
+test('the fade in stays left, the fade out goes right, the cut carries neither', () => {
+  const list = [video({ id: 'v', duration: 30, fadeIn: 3, fadeOut: 4 })];
+  const [left, right] = T.readingOrder(T.splitLayer(list, 'v', 15));
+  assert.deepEqual([left.fadeIn, left.fadeOut], [3, 0]);
+  assert.deepEqual([right.fadeIn, right.fadeOut], [0, 4]);
+  // A fade the cut goes through is shortened to the half it is on.
+  const [l2] = T.readingOrder(T.splitLayer([video({ id: 'w', duration: 30, fadeIn: 10 })], 'w', 6));
+  assert.equal(l2.fadeIn, 6);
+});
+
+test('a split too close to either end, or outside the clip, is refused', () => {
+  const list = [video({ id: 'v', start: 10, duration: 30 })];
+  for (const at of [10, 10.01, 39.99, 40, 5, 50, NaN, 'x']) {
+    assert.equal(T.splitLayer(list, 'v', at), list, String(at));
+  }
+  assert.equal(T.splitLayer(list, 'nope', 20), list);
+});
+
+test('a still splits without a clock to move along', () => {
+  const still = T.createLayer({ type: 'video', kind: 'image', src: 'i.png', duration: 10 });
+  const [left, right] = T.readingOrder(T.splitLayer([still], still.id, 4));
+  assert.deepEqual([left.duration, right.duration, right.start], [4, 6, 4]);
+  assert.equal(right.sourceIn, still.sourceIn);
+  assert.equal(right.kind, 'image');
+});
+
+test('splitting a group makes two groups, the old one on the left', () => {
+  // The user, 2026-09-25: "Splitting a grouped tracks splits its video and
+  // audio into 2 groups instead, the old one (earlier on the timeline) and the
+  // new one with a new shape and color (more right on the timeline)".
+  const g = 'gOld';
+  const list = T.arrangeLanes([video({ id: 'v', duration: 30, groupId: g }),
+    audio({ id: 'a', duration: 30, groupId: g })]);
+  const out = T.splitLayer(list, 'a', 12);
+  assert.equal(out.length, 4);
+  const left = out.filter((l) => l.start === 0);
+  const right = out.filter((l) => l.start === 12);
+  assert.deepEqual(left.map((l) => l.id).sort(), ['a', 'v']);
+  assert.ok(left.every((l) => l.groupId === g), 'the left halves keep the old group');
+  assert.ok(right[0].groupId && right[0].groupId !== g, 'the right halves have a new one');
+  assert.equal(right[0].groupId, right[1].groupId, 'and share it');
+  assert.deepEqual(right.map((l) => l.type).sort(), ['audio', 'video']);
+  // And the old group is still the first to appear in reading order, which is
+  // what the markers are numbered by, so it keeps its marker.
+  assert.deepEqual(T.groupIds(T.readingOrder(out)), [g, right[0].groupId]);
+  // Each half now moves on its own, taking only its own sound.
+  const moved = T.moveGroup(out, right[0].id, 20);
+  assert.ok(moved.filter((l) => l.groupId === g).every((l) => l.start === 0));
+  assert.ok(moved.filter((l) => l.groupId !== g).every((l) => l.start === 20));
+});
+
+test('a group member the cut misses goes with the side it is on', () => {
+  const g = 'g1';
+  const list = T.arrangeLanes([video({ id: 'v', duration: 30, groupId: g }),
+    audio({ id: 'short', duration: 5, groupId: g })]);
+  const out = T.splitLayer(list, 'v', 12);
+  assert.equal(out.length, 3, 'the sound ended before the cut and is not cut');
+  assert.equal(T.layerById(out, 'short').groupId, g, 'so it stays in the old group');
+  const right = out.find((l) => l.type === 'video' && l.start === 12);
+  assert.deepEqual(T.groupOf(out, right.id).map((l) => l.id), [right.id],
+    'and the right half is a group of one');
+});
+
+test('an ungrouped split stays ungrouped', () => {
+  const out = T.splitLayer([video({ id: 'v', duration: 30 })], 'v', 10);
+  assert.ok(out.every((l) => l.groupId === null));
+});
+
+// ---- v2.9 the clipboard ----
+
+test('a copy is a copy: nothing done afterwards reaches it', () => {
+  const list = [video({ id: 'v', duration: 10 })];
+  const clip = T.copyOf(list, 'v');
+  const changed = T.setLayer(list, 'v', { alpha: 0.2 });
+  assert.equal(clip.items[0].alpha, 1);
+  assert.equal(T.layerById(changed, 'v').alpha, 0.2);
+  assert.equal(T.copyOf(list, 'nope'), null);
+});
+
+test('a paste lands at the time and on the lane it was given, with a new id', () => {
+  const list = T.arrangeLanes([video({ id: 'v', duration: 10, lane: 0, alpha: 0.4 }),
+    video({ id: 'w', duration: 10, lane: 1 })]);
+  const out = T.pasteInto(list, T.copyOf(list, 'v'), 25, 1);
+  assert.equal(out.length, 3);
+  const pasted = out.find((l) => !['v', 'w'].includes(l.id));
+  assert.deepEqual([pasted.start, pasted.lane, pasted.alpha], [25, 1, 0.4]);
+  assert.deepEqual(T.lanesOf(out, 'video')[1].map((l) => l.id), ['w', pasted.id]);
+});
+
+test('with no lane a paste makes a new one, and a given lane is used as it is', () => {
+  const list = T.arrangeLanes([video({ id: 'v', duration: 10 })]);
+  const clip = T.copyOf(list, 'v');
+  for (const lane of [null, undefined]) {
+    const out = T.pasteInto(list, clip, 3, lane);
+    assert.equal(T.lanesOf(out, 'video').length, 2, String(lane));
+  }
+  // An empty row further down, which the window can show and the model has no
+  // clip on: the paste goes there, not to the first free number.
+  const onto = T.pasteInto(list, clip, 3, 4);
+  assert.equal(onto.find((l) => l.id !== 'v').lane, 4);
+});
+
+test('a grouped copy pastes as a new group, the sound keeping its distance', () => {
+  const g = 'g1';
+  const list = T.arrangeLanes([
+    video({ id: 'v', start: 4, duration: 10, groupId: g }),
+    audio({ id: 'a', start: 5, duration: 10, groupId: g }),
+    audio({ id: 'b', start: 0, duration: 60, lane: 1 }),
+  ]);
+  const out = T.pasteInto(list, T.copyOf(list, 'v'), 30, 0);
+  const fresh = out.filter((l) => !['v', 'a', 'b'].includes(l.id));
+  assert.equal(fresh.length, 2);
+  const pv = fresh.find((l) => l.type === 'video');
+  const pa = fresh.find((l) => l.type === 'audio');
+  assert.equal(pv.start, 30);
+  assert.equal(pa.start, 31, 'a second after the picture, as it was');
+  assert.equal(pa.lane, T.layerById(out, 'a').lane, 'on the lane its original is on');
+  assert.ok(pv.groupId && pv.groupId === pa.groupId && pv.groupId !== g,
+    'a group of their own, apart from the one they were copied from');
+});
+
+test('a paste never starts before the project does', () => {
+  const g = 'g1';
+  const list = T.arrangeLanes([video({ id: 'v', start: 4, duration: 10, groupId: g }),
+    audio({ id: 'a', start: 1, duration: 10, groupId: g })]);
+  const out = T.pasteInto(list, T.copyOf(list, 'v'), 0, 0);
+  assert.ok(out.every((l) => l.start >= 0));
+});
+
+test('an empty clipboard pastes nothing', () => {
+  const list = [video({ id: 'v' })];
+  assert.equal(T.pasteInto(list, null, 5, 0), list);
+  assert.equal(T.pasteInto(list, { items: [] }, 5, 0), list);
+});
+
+// ---- v2.9 transitions ----
+
+function pair(type, bStart, props) {
+  const make = type === 'audio' ? audio : video;
+  return T.arrangeLanes([make({ id: 'A', start: 0, duration: 10, lane: 0, ...(props || {}) }),
+    make({ id: 'B', start: bStart, duration: 10, lane: 0 })]);
+}
+const fades = (list) => {
+  const a = T.layerById(list, 'A');
+  const b = T.layerById(list, 'B');
+  return { aOut: a.fadeOut, bIn: b.fadeIn };
+};
+
+test('pictures overlapping on a lane dissolve: the later one fades in over the earlier', () => {
+  const out = T.crossfade(pair('video', 12), pair('video', 8));
+  assert.deepEqual(fades(out), { aOut: 0, bIn: 2 });
+  // Exactly half way through, the one on top is at half and the one under it
+  // is whole, which is what makes the blend come to one half of each.
+  const a = T.layerById(out, 'A');
+  const b = T.layerById(out, 'B');
+  assert.equal(T.fadeAlphaAt(b, 9), 0.5);
+  assert.equal(T.fadeAlphaAt(a, 9), 1);
+  // And the later one is on top, first in the list.
+  assert.deepEqual(out.map((l) => l.id), ['B', 'A']);
+});
+
+test('sounds overlapping on a lane both fade, since a mix adds', () => {
+  const out = T.crossfade(pair('audio', 12), pair('audio', 8));
+  assert.deepEqual(fades(out), { aOut: 2, bIn: 2 });
+});
+
+test('a longer or shorter overlap rewrites the transition', () => {
+  const first = T.crossfade(pair('audio', 12), pair('audio', 8));
+  const moved = T.moveLayer(first, 'B', 7);
+  assert.deepEqual(fades(T.crossfade(first, moved)), { aOut: 3, bIn: 3 });
+});
+
+test('pulled apart, a transition takes back what it wrote', () => {
+  const first = T.crossfade(pair('audio', 12), pair('audio', 8));
+  const apart = T.moveLayer(first, 'B', 12);
+  assert.deepEqual(fades(T.crossfade(first, apart)), { aOut: 0, bIn: 0 });
+});
+
+test('a fade set by hand inside a transition stays as it was set', () => {
+  const first = T.crossfade(pair('video', 12), pair('video', 8));
+  const hand = T.setFade(first, 'B', 'in', 1);
+  assert.equal(T.crossfade(first, hand), hand, 'nothing moved, so nothing is written');
+  // And pulling the pair apart afterwards leaves it too: it is not the number
+  // the transition wrote any more, so it is somebody's.
+  const apart = T.moveLayer(hand, 'B', 12);
+  assert.equal(T.layerById(T.crossfade(hand, apart), 'B').fadeIn, 1);
+});
+
+test('the picture underneath is held whole through a dissolve', () => {
+  // A fade out on the earlier picture would dim it under the one fading in,
+  // and the middle would come to three quarters of the light.
+  const out = T.crossfade(pair('video', 12, { fadeOut: 3 }), pair('video', 8, { fadeOut: 3 }));
+  assert.deepEqual(fades(out), { aOut: 0, bIn: 2 });
+});
+
+test('a clip wholly inside another is laid on top, not dissolved into', () => {
+  const before = T.arrangeLanes([video({ id: 'A', duration: 30, lane: 0 }),
+    video({ id: 'B', start: 40, duration: 5, lane: 0 })]);
+  const after = T.moveLayer(before, 'B', 10);
+  const out = T.crossfade(before, after);
+  assert.equal(T.overlapsOf(after).size, 0);
+  assert.deepEqual(fades(out), { aOut: 0, bIn: 0 });
+});
+
+test('clips on different lanes never make a transition', () => {
+  const list = T.arrangeLanes([video({ id: 'A', duration: 10, lane: 0 }),
+    video({ id: 'B', start: 8, duration: 10, lane: 1 })]);
+  assert.equal(T.overlapsOf(list).size, 0);
+});

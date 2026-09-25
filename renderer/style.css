@@ -603,7 +603,10 @@ body.splitting-side {
   width: 100%;
   aspect-ratio: 16 / 9;
   flex: 0 1 auto;
-  min-height: 60px;
+  /* V2.9.1. A tenth of the frame's 16:9 height once the preview-timeline handle
+     has been taken, set by applySplit, so the handle can press the frames down
+     that far. 60px until then, which is what it always was. */
+  min-height: var(--frame-least, 60px);
   background: #121214;
   /* Step 21e. The crop outline is placed from the picture, and since 21e the
      crop may reach outside it, so the box can want to be drawn past this stage.
@@ -1179,6 +1182,12 @@ body.advanced .timeline-section {
   background: #1e1e22;
   border-radius: 4px;
   overflow: hidden;
+  /* Nothing on the timeline is text anybody wants to copy, and every gesture on
+     it is a drag: a drag on the ruler carried down over the rows used to
+     highlight row names, buttons and the empty rows' words on the way past.
+     Sliders and checkboxes are unaffected; this only stops text selection,
+     and a selection cannot start in here to spread outside either. */
+  user-select: none;
   /* Measured in JS, because the stack's scrollbar appears and disappears with
      the number of rows and its width is the browser's business, not CSS's. The
      ruler and the lane both step back by it, or a scrollbar would make the
@@ -1658,6 +1667,26 @@ body.layer-trimming .playhead--timeline {
   box-shadow: 0 0 0 1px rgba(120, 200, 140, 0.8);
 }
 
+/* V2.9. The clip being carried to another row, dimmed while the box on that
+   row shows where it will land. */
+.layer-clip--leaving {
+  opacity: 0.45;
+}
+
+/* And the box: the drop zone's own green, the size of the clip, on the row it
+   is aimed at. Over an empty row's contents as well as a full row's clips,
+   and taking no presses, since the pointer is captured by the clip anyway. */
+.layer-drop-ghost {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  z-index: 4;
+  border: 1px dashed #78c88c;
+  border-radius: 3px;
+  background: rgba(120, 200, 140, 0.18);
+  pointer-events: none;
+}
+
 /* The two edge grips. Over the art rather than beside it, so trimming does not
    cost the clip any width, and above it in the stack so a press on the first
    few pixels is a trim and not a move. Their width is set in script: a clip too
@@ -1805,6 +1834,28 @@ body.layer-trimming .playhead--timeline {
 
 .clip-fade-line[hidden] {
   display: none;
+}
+
+/* V2.9.1. A fade line or a trim grip that has just snapped, and the one it
+   snapped to, while the pull holds: "highlight the current dragged fade/trim
+   slider and the one of the track it snapped to in green". The drop zone's
+   green, and a pixel wider than the line is at rest so it reads at a glance.
+   The playhead is lit the same way when it is the line that was met. */
+.clip-fade-line.snap-lit::after {
+  left: 2px;
+  width: 3px;
+  background: #78c88c;
+}
+
+.layer-clip__edge.snap-lit::after {
+  width: 3px;
+  background: #78c88c;
+}
+
+.playhead.playhead--timeline.snap-lit::before {
+  left: 4px;
+  width: 3px;
+  background: #78c88c;
 }
 
 /* V2.4. The maximum alpha of a video layer, as the user asked for it: "Add a
@@ -1994,8 +2045,16 @@ body.layer-alpha * {
 
 /* A layer switched off keeps its place and its clip, and says so by going
    quiet rather than by disappearing. */
-.layer-row--off .layer-clip {
+.layer-row--off .layer-clip,
+.layer-clip--off {
   opacity: 0.35;
+}
+
+/* V2.9. Which of a row's clips is the selected one, now that a row can hold
+   several. The row keeps its glow; this is the clip's own border in the same
+   green, so it says which one without anything moving by a pixel. */
+.layer-clip--selected {
+  border-color: rgba(120, 200, 140, 0.9);
 }
 
 .layer-row--off .layer-name {
@@ -2184,6 +2243,44 @@ body.layer-alpha * {
 }
 
 /* ---- "Settings & Info" popup ---- */
+
+/* V2.9. The right click menu on a clip. Fixed, placed at the pointer in
+   script, and above everything including a modal's veil, since it can only be
+   opened on the timeline and a modal takes the timeline away. The panel's own
+   colours, so it reads as one of the app's surfaces rather than the system's. */
+.clip-menu {
+  position: fixed;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 130px;
+  padding: 4px;
+  background: #2a2a30;
+  border: 1px solid #45454e;
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+
+.clip-menu__item {
+  text-align: left;
+  padding: 5px 10px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #d2d2d8;
+  font: inherit;
+  cursor: pointer;
+}
+
+.clip-menu__item:hover:not(:disabled) {
+  background: rgba(120, 200, 140, 0.16);
+  color: #ebebf0;
+}
+
+.clip-menu__item:disabled {
+  color: #66666f;
+  cursor: default;
+}
 
 /* Fixed rather than absolute, so it covers the window regardless of scroll or
    which frame happens to be tallest. */

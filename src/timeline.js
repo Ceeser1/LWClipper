@@ -57,6 +57,14 @@ const timelineModel = (() => {
     return 'l' + Math.random().toString(36).slice(2, 10);
   }
 
+  // V2.9. A lane number, or nothing. Nothing is what every layer written before
+  // lanes existed carries, and arrangeLanes gives those one each.
+  function laneValue(v) {
+    if (v === null || v === undefined || v === '') return null;
+    const n = Number(v);
+    return Number.isInteger(n) && n >= 0 ? n : null;
+  }
+
   function newGroupId() {
     return 'g' + Math.random().toString(36).slice(2, 10);
   }
@@ -130,6 +138,17 @@ const timelineModel = (() => {
       // serialisable shape wants settling in one place, not because anything
       // reads it yet.
       groupId: props.groupId || null,
+      // V2.9. Which row of its own kind the layer sits on: 0 is Video 1 or
+      // Audio 1. Several layers can share one, which is how a row comes to hold
+      // more than one clip. In the user's words the row is the layer and each
+      // clip on it is a track; the code keeps `layer` for the clip, because
+      // that is what every reader of this object already means by it, and
+      // calls the row a lane.
+      //
+      // null until arrangeLanes has seen it, which is what a project written
+      // before v2.9 opens with. Declared here for the reason anchor and render
+      // are: a field createLayer does not name is a field it drops.
+      lane: laneValue(props.lane),
       // Step 2's geometry owns what goes in here. null means the whole frame.
       crop: props.crop || null,
       // V2.8 item 8. Which of the Render Position rings the picture was put on,
@@ -415,12 +434,22 @@ const timelineModel = (() => {
    * Adds a layer, by default at the end of its own type's block so the video and
    * audio rows stay in their groups. An explicit index overrides that.
    */
+  //
+  // V2.9. A layer that does not say which lane it wants gets a new one below
+  // the others of its kind, which is what adding a file has always meant: a
+  // new row.
   function addLayer(layers, layer, index) {
-    const at = index === undefined
-      ? blockEnd(layers, layer.type)
-      : clamp(index, 0, layers.length);
+    if (index === undefined) {
+      const settled = arrangeLanes(layers);
+      const lane = layer.lane === null || layer.lane === undefined
+        ? laneCount(settled, layer.type)
+        : layer.lane;
+      const next = settled.slice();
+      next.splice(blockEnd(settled, layer.type), 0, { ...layer, lane });
+      return arrangeLanes(next);
+    }
     const next = layers.slice();
-    next.splice(at, 0, layer);
+    next.splice(clamp(index, 0, layers.length), 0, layer);
     return next;
   }
 
@@ -438,26 +467,256 @@ const timelineModel = (() => {
     return touched ? next : layers;
   }
 
+  // ---- lanes ----
+  //
+  // V2.9. A row of the timeline holding more than one clip. The user's words
+  // for it are a layer holding several tracks; here it is several layers
+  // sharing a lane, which leaves every layer exactly the object it was. The
+  // composer already draws any number of video layers with their own windows
+  // in time, and layers have always been free to overlap, so it needs nothing.
+  //
+  // What the lane does need is for the list order to agree with it, because
+  // the list order is the stacking order the composer reads. arrangeLanes is
+  // the one place that settles that, and it is a function of the lanes rather
+  // than a second opinion about them.
+
   /**
-   * Moves a layer one place towards the front or the back, past its nearest
-   * neighbour of the same type.
+   * The list put in lane order.
    *
-   * Same type, because stepping over an audio row would put a video layer below
-   * the audio block and break the row grouping, and because "Video 2 goes above
-   * Video 1" is what the arrows mean. A negative delta is towards the front.
+   *   video before audio, as it always was
+   *   then by lane, so Video 1's clips come first and are drawn on top
+   *   then by start, latest first, so where two clips on one lane overlap
+   *   the later one is drawn over the earlier
+   *
+   * Latest on top, because a clip put down on top of another is the one meant
+   * to be seen: a paste lands at the playhead, which is usually inside the clip
+   * already there, and with the earlier clip on top the pasted one would
+   * vanish under it. It is also the user's transition, "the right track fading
+   * in", and it puts the ramp that does the work on the clip drawn on top.
+   *
+   * The list is the stacking order and nothing else. The order a person reads
+   * the timeline in, left to right, is readingOrder's, and that is what the
+   * group markers are numbered by.
+   *
+   * A layer with no lane, which is every layer in a project written before
+   * v2.9, takes the next lane after the highest one in use, in list order.
+   * When none of them has one, that is exactly the layout those projects
+   * always had: one layer to a row, in the order they were in.
+   *
+   * V2.9.1. Lanes are not closed up. A lane whose last clip is deleted or
+   * dragged away stays where it is, empty, which the user asked for: "When a
+   * track gets deleted and the layer is empty now, do not auto-delete it." A
+   * row goes when its own delete button is pressed, and removeLane is what
+   * closes the gap then.
+   *
+   * Hands back the list it was given when nothing changes, so a caller that
+   * compares identities is not told about a change that did not happen.
    */
-  function reorderLayer(layers, id, delta) {
-    const from = indexOfLayer(layers, id);
-    if (from < 0 || !delta) return layers;
-    const step = delta < 0 ? -1 : 1;
-    let to = -1;
-    for (let i = from + step; i >= 0 && i < layers.length; i += step) {
-      if (layers[i].type === layers[from].type) { to = i; break; }
+  function arrangeLanes(layers) {
+    const keyed = layers.map((layer, index) => ({ layer, index, key: 0 }));
+    for (const type of ['video', 'audio']) {
+      const mine = keyed.filter((k) => k.layer.type === type);
+      let used = -1;
+      for (const k of mine) {
+        const lane = laneValue(k.layer.lane);
+        if (lane !== null) used = Math.max(used, lane);
+      }
+      for (const k of mine) {
+        const lane = laneValue(k.layer.lane);
+        k.key = lane === null ? (used += 1) : lane;
+      }
     }
-    if (to < 0) return layers;
-    const next = layers.slice();
-    next.splice(to, 0, next.splice(from, 1)[0]);
+    keyed.sort((a, b) => {
+      const ta = a.layer.type === 'audio' ? 1 : 0;
+      const tb = b.layer.type === 'audio' ? 1 : 0;
+      return (ta - tb) || (a.key - b.key)
+        || (b.layer.start - a.layer.start) || (a.index - b.index);
+    });
+    let changed = false;
+    const next = keyed.map((k, at) => {
+      if (k.index !== at) changed = true;
+      if (k.layer.lane === k.key) return k.layer;
+      changed = true;
+      return { ...k.layer, lane: k.key };
+    });
+    return changed ? next : layers;
+  }
+
+  function laneCount(layers, type) {
+    let most = -1;
+    for (const l of layers) {
+      if (l.type === type && Number.isInteger(l.lane)) most = Math.max(most, l.lane);
+    }
+    return most + 1;
+  }
+
+  /**
+   * The list in the order a person reads the timeline: by kind, by lane, and
+   * left to right along each lane. Not the stacking order, which on a lane is
+   * the other way round.
+   *
+   * Group markers are numbered by first appearance in this, so a split leaves
+   * the old group ahead of the new one and keeps the old one's marker: "the old
+   * one (earlier on the timeline) and the new one with a new shape and color".
+   * On a lane holding one clip, which is every lane of a project written before
+   * lanes, it is the list order exactly.
+   */
+  function readingOrder(layers) {
+    const settled = arrangeLanes(layers);
+    return settled
+      .map((layer, index) => ({ layer, index }))
+      .sort((a, b) => {
+        const ta = a.layer.type === 'audio' ? 1 : 0;
+        const tb = b.layer.type === 'audio' ? 1 : 0;
+        return (ta - tb) || (a.layer.lane - b.layer.lane)
+          || (a.layer.start - b.layer.start) || (a.index - b.index);
+      })
+      .map((k) => k.layer);
+  }
+
+  /**
+   * Each lane of one kind, top first, as the layers on it left to right. A lane
+   * with nothing on it is a hole in the array, not an empty list, so a loop by
+   * index is what sees it.
+   */
+  function lanesOf(layers, type) {
+    const lanes = [];
+    for (const l of readingOrder(layers)) {
+      if (l.type !== type) continue;
+      (lanes[l.lane] || (lanes[l.lane] = [])).push(l);
+    }
+    return lanes;
+  }
+
+  // ---- transitions ----
+  //
+  // V2.9 item 2: "Tracks on the same layer should be able to overlap. Now that
+  // fade-in/out is possible, this can be handeled by a transition having the
+  // left track on the timeline fading out and the right track fading in where
+  // they overlap."
+  //
+  // For a picture only the one on top may fade, which is the later one. Fading
+  // both dips in the middle: the overlay blends out = a * top + (1 - a) * under,
+  // so with the one underneath at 1 - t as well the middle comes to
+  // t * right + (1 - t)^2 * left, three quarters of the light. With the one
+  // underneath held opaque it is t * right + (1 - t) * left, exactly.
+  //
+  // Sound is the other way: a mix adds rather than covers, so both sides fade.
+  //
+  // The fades are written onto the layers rather than worked out whenever they
+  // are read, so the preview, the export and the clip's own drawing all read
+  // one number, and so a fade dragged by hand afterwards stays where it was put.
+
+  /**
+   * Every pair of neighbours on a lane that overlap, as "earlier|later" to the
+   * length of the overlap. A clip lying wholly inside another is not a
+   * transition, it is a clip put on top of one, and is left out.
+   */
+  function overlapsOf(layers) {
+    const out = new Map();
+    for (const type of ['video', 'audio']) {
+      for (const lane of lanesOf(layers, type)) {
+        if (!lane) continue;
+        for (let i = 0; i + 1 < lane.length; i += 1) {
+          const a = lane[i];
+          const b = lane[i + 1];
+          const o = round(endOf(a) - b.start);
+          if (o > 0 && endOf(b) > endOf(a)) out.set(a.id + '|' + b.id, o);
+        }
+      }
+    }
+    return out;
+  }
+
+  /**
+   * The transitions brought up to date with what changed between two lists.
+   *
+   * Only an overlap that is new, or whose length changed, is written, so a pair
+   * that did not move keeps whatever its fades were set to by hand. An overlap
+   * that went away takes back what it wrote, but only where the fade still
+   * holds the number it wrote: a fade dragged by hand since is somebody's, not
+   * the transition's, and is left alone.
+   */
+  function crossfade(before, after) {
+    const was = overlapsOf(before);
+    const now = overlapsOf(after);
+    let next = after;
+    const fadeIs = (id, key, value) => {
+      const l = layerById(next, id);
+      return !!l && round(l[key] || 0) === value;
+    };
+    for (const [pair, o] of was) {
+      if (now.get(pair) === o) continue;
+      const [a, b] = pair.split('|');
+      if (fadeIs(b, 'fadeIn', o)) next = setFade(next, b, 'in', 0);
+      const left = layerById(next, a);
+      if (left && left.type === 'audio' && fadeIs(a, 'fadeOut', o)) next = setFade(next, a, 'out', 0);
+    }
+    for (const [pair, o] of now) {
+      if (was.get(pair) === o) continue;
+      const [a, b] = pair.split('|');
+      const left = layerById(next, a);
+      next = setFade(next, b, 'in', o);
+      next = setFade(next, a, 'out', left && left.type === 'audio' ? o : 0);
+    }
     return next;
+  }
+
+  /**
+   * One lane one place towards the front or the back, with everything on it.
+   *
+   * Within its own kind, because stepping over an audio row would put a video
+   * layer below the audio block, and because "Video 2 goes above Video 1" is
+   * what the arrows mean. A negative delta is towards the front.
+   */
+  //
+  // `rows` is how many rows of this kind the window is showing, which since
+  // V2.9.1 can be more than the lanes anything is on: an empty row at the
+  // bottom is a place to move to as well.
+  function reorderLane(layers, type, lane, delta, rows) {
+    // Nowhere to go hands back the list it was given, arranged or not, so the
+    // caller can tell that nothing happened.
+    const settled = arrangeLanes(layers);
+    if (!delta) return layers;
+    const to = lane + (delta < 0 ? -1 : 1);
+    const limit = Math.max(laneCount(settled, type), Number(rows) || 0);
+    if (lane < 0 || to < 0 || to >= limit) return layers;
+    return arrangeLanes(settled.map((l) => {
+      if (l.type !== type) return l;
+      if (l.lane === lane) return { ...l, lane: to };
+      if (l.lane === to) return { ...l, lane };
+      return l;
+    }));
+  }
+
+  /** The lane a layer is on, moved. What the arrows did before lanes existed. */
+  function reorderLayer(layers, id, delta) {
+    const settled = arrangeLanes(layers);
+    const layer = layerById(settled, id);
+    if (!layer || !delta) return layers;
+    const next = reorderLane(settled, layer.type, layer.lane, delta);
+    return next === settled ? layers : next;
+  }
+
+  /**
+   * A whole row gone, and the rows under it close up. The one place lanes are
+   * renumbered, because it is the one place a row is asked to go.
+   */
+  function removeLane(layers, type, lane) {
+    const settled = arrangeLanes(layers);
+    return arrangeLanes(settled
+      .filter((l) => !(l.type === type && l.lane === lane))
+      .map((l) => (l.type === type && l.lane > lane ? { ...l, lane: l.lane - 1 } : l)));
+  }
+
+  /**
+   * The same props written onto every layer of one lane. The row's head acts on
+   * the whole row, which the user settled on 2026-09-24: Enabled and Volume
+   * mean the row, not whichever of its clips was last clicked.
+   */
+  function setLane(layers, type, lane, props) {
+    const settled = arrangeLanes(layers);
+    return settled.map((l) => (l.type === type && l.lane === lane ? { ...l, ...props } : l));
   }
 
   /**
@@ -638,6 +897,156 @@ const timelineModel = (() => {
     return layers.map((l) => (wanted.has(l.id) ? { ...l, groupId: id } : l));
   }
 
+  // ---- splitting ----
+  //
+  // V2.9 item 3: "Pressing S will split the current selected track into 2 with
+  // the cut happening at the current position slider's position." And from the
+  // right click menu, at the second the click landed on, which is why this
+  // takes a time rather than reading a playhead it has never heard of.
+
+  /** Whether a cut at this second leaves two halves that are both clips. */
+  function canSplitAt(layer, at) {
+    return at - layer.start >= MIN_LAYER_SPAN && endOf(layer) - at >= MIN_LAYER_SPAN;
+  }
+
+  /**
+   * The two halves of one layer. Everything the picture is carries over to both:
+   * crop, placement, anchor, alpha, volume, lane, name and source. What does not
+   * is what belongs to an end: the fade in stays with the left half and the
+   * fade out with the right, and the cut ends carry neither, since a cut is not
+   * a fade.
+   *
+   * A fade that ran past the cut is shortened to the half it is on. That changes
+   * the slope of the ramp, which a cut through the middle of a fade can only
+   * avoid by inventing a partial alpha at the cut, and nothing else in the
+   * model has one to give.
+   *
+   * The right half's source moves on by what the left half kept, so the two
+   * together show exactly what the one did. A still has no clock to move along,
+   * and keeps its sourceIn as it was.
+   */
+  function halves(layer, at, groupId) {
+    const kept = round(at - layer.start);
+    const rest = round(endOf(layer) - at);
+    const left = {
+      ...layer,
+      duration: kept,
+      fadeIn: round(Math.min(layer.fadeIn || 0, kept)),
+      fadeOut: 0,
+    };
+    const right = {
+      ...layer,
+      id: newId(),
+      start: round(at),
+      duration: rest,
+      sourceIn: layer.kind === 'image' ? layer.sourceIn : round(layer.sourceIn + kept),
+      fadeIn: 0,
+      fadeOut: round(Math.min(layer.fadeOut || 0, rest)),
+      groupId,
+    };
+    return [left, right];
+  }
+
+  /**
+   * One layer cut in two at a second of the timeline, and its whole group with
+   * it.
+   *
+   * The user's rule for a group, 2026-09-25: "Splitting a grouped tracks splits
+   * its video and audio into 2 groups instead, the old one (earlier on the
+   * timeline) and the new one with a new shape and color (more right on the
+   * timeline)." So the left halves keep the id they had, the right halves share
+   * one new one, and each half is then a picture and its sound that move
+   * together and apart from the other half. The new marker is groupMarker's
+   * business and comes with the new id.
+   *
+   * A member of the group that the cut does not pass through, a sound trimmed
+   * shorter than its picture for instance, goes with whichever side most of it
+   * is on. One that ends up alone is a group of one, which is what deleting one
+   * of a pair has always left and which moves like any single layer.
+   *
+   * Refused, by handing back the list it was given, when the cut would leave
+   * the layer that was asked for with a half shorter than a clip can be.
+   */
+  function splitLayer(layers, id, at) {
+    const target = layerById(layers, id);
+    const cut = round(Number(at));
+    if (!target || !Number.isFinite(cut) || !canSplitAt(target, cut)) return layers;
+    const members = groupOf(layers, id);
+    const fresh = target.groupId ? newGroupId() : null;
+    const next = [];
+    for (const l of layers) {
+      if (!members.includes(l)) {
+        next.push(l);
+      } else if (canSplitAt(l, cut)) {
+        next.push(...halves(l, cut, fresh));
+      } else if (l.start + l.duration / 2 >= cut) {
+        next.push({ ...l, groupId: fresh });
+      } else {
+        next.push(l);
+      }
+    }
+    return arrangeLanes(next);
+  }
+
+  // ---- the clipboard ----
+  //
+  // V2.9. "Copy does the same thing as Crtl+C, copying the selected track and
+  // Crtl+V or Paste will paste the copied track." The app's own clipboard, not
+  // the system's: what it holds is a layer's fields, which no other program
+  // has a use for, and the system clipboard is where a URL for the box at the
+  // top comes from.
+
+  /**
+   * What Copy puts on the clipboard: the layer and the rest of its group, as
+   * plain copies, so nothing done to the timeline afterwards can reach them.
+   *
+   * The group comes too, for the reason a split takes the whole group: a
+   * picture copied without its sound would paste silent where a split leaves
+   * both halves speaking, and the same gesture meaning two different things on
+   * two different menu items is a thing nobody can learn.
+   */
+  function copyOf(layers, id) {
+    const target = layerById(layers, id);
+    if (!target) return null;
+    return { primary: target.id, items: groupOf(layers, id).map((l) => ({ ...l })) };
+  }
+
+  /**
+   * A copy put back on the timeline with new ids, the copied layer starting at
+   * `at` and the rest of its group keeping the distance it had from it.
+   *
+   * The copied layer goes on `lane` when one is given, and on a new one below
+   * the others of its kind otherwise, which is the user's rule for Ctrl+V with
+   * nothing selected: "paste the copied source into a newly created layer if
+   * needed". The rest of the group goes back on the lane it was copied from.
+   *
+   * A paste onto time that is already taken is an overlap like any other. The
+   * clipboard does not refuse it, because what an overlap on one lane means is
+   * the transition's business rather than this.
+   */
+  function pasteInto(layers, clip, at, lane) {
+    if (!clip || !Array.isArray(clip.items) || !clip.items.length) return layers;
+    const primary = clip.items.find((l) => l.id === clip.primary) || clip.items[0];
+    const when = round(Math.max(0, Number(at) || 0));
+    const groupId = clip.items.length > 1 ? newGroupId() : null;
+    let next = arrangeLanes(layers);
+    // The copied layer first, so its lane is settled before anything else of
+    // its kind asks for a new one.
+    const order = [primary, ...clip.items.filter((l) => l !== primary)];
+    for (const item of order) {
+      const want = item === primary ? laneValue(lane) : laneValue(item.lane);
+      const onto = want !== null ? want : laneCount(next, item.type);
+      next = arrangeLanes([...next, {
+        ...item,
+        id: newId(),
+        start: round(Math.max(0, when + (item.start - primary.start))),
+        lane: onto,
+        groupId,
+      }]);
+    }
+    return next;
+  }
+
   /** Breaks the link. The layers stay exactly where they are. */
   function ungroup(layers, groupId) {
     if (!groupId) return layers;
@@ -736,6 +1145,15 @@ const timelineModel = (() => {
     addLayer,
     removeLayer,
     reorderLayer,
+    arrangeLanes,
+    readingOrder,
+    lanesOf,
+    overlapsOf,
+    crossfade,
+    laneCount,
+    reorderLane,
+    removeLane,
+    setLane,
     moveLayer,
     trimLayer,
     setLayer,
@@ -748,6 +1166,10 @@ const timelineModel = (() => {
     group,
     ungroup,
     moveGroup,
+    canSplitAt,
+    splitLayer,
+    copyOf,
+    pasteInto,
     trimRange,
     trimGroup,
   };

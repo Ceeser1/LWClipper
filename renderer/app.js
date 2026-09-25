@@ -1284,7 +1284,7 @@ function setDropHover(zone) {
   mainDrop.dataset.dropHover = String(zone === mainDrop && mainDropTakesFiles());
   audioSection.dataset.dropHover = String(zone === audioSection && audioDropAllowed());
   // Every zone that carries the attribute, which since V2.8 is the empty rows
-  // and the Add a new Track block. The class is the empty row's name for it and
+  // and the Add a new Layer block. The class is the empty row's name for it and
   // the block borrows it rather than having a second one that means the same.
   for (const track of document.querySelectorAll('[data-empty-type]')) {
     track.classList.toggle('layer-track--dropping', track === zone);
@@ -1342,7 +1342,7 @@ document.addEventListener('drop', (evt) => {
   setDropActive(false);
   if (!zone || !zone.dataset.emptyType || busy) return;
   const filePath = droppedPath(evt);
-  if (filePath) openIntoLayer(zone.dataset.emptyType, filePath, zone.dataset.emptyRow);
+  if (filePath) openIntoLayer(zone.dataset.emptyType, filePath, zone.dataset.lane);
 });
 
 // A drag that ends abnormally, Escape being the usual way, need not leave a
@@ -3095,7 +3095,10 @@ const GROUP_COLOURS = ['#78c88c', '#78a8dc', '#dcc878', '#dc8c78', '#b48cdc'];
  */
 function groupMarker(groupId) {
   if (!groupId) return null;
-  const index = timelineModel.groupIds(layers).indexOf(groupId);
+  // V2.9. In reading order rather than list order: on a lane the list puts the
+  // later clip first, and a split would otherwise hand the old group's marker
+  // to the new one.
+  const index = timelineModel.groupIds(timelineModel.readingOrder(layers)).indexOf(groupId);
   if (index < 0) return null;
   return {
     shape: GROUP_SHAPES[index % GROUP_SHAPES.length],
@@ -3107,7 +3110,11 @@ function layersOfType(type) {
   return layers.filter((l) => l.type === type);
 }
 
+// V2.9. The row a layer is on, counted from 1. Its lane once arrangeLanes has
+// seen it, which setLayers makes sure of; the old count among its own kind for
+// the moment in between.
 function layerOrdinal(layer) {
+  if (Number.isInteger(layer.lane)) return layer.lane + 1;
   return layersOfType(layer.type).indexOf(layer) + 1;
 }
 
@@ -3124,8 +3131,14 @@ function layerLabel(type, ordinal) {
  * selected the row and did not switch the layer off.
  */
 function paintLayerSelection() {
-  for (const row of timelineStack.querySelectorAll('.layer-row[data-layer-id]')) {
-    row.classList.toggle('layer-row--selected', row.dataset.layerId === selectedLayerId);
+  // V2.9. The row lights when the selected clip is on it, and the clip itself
+  // says which of the row's clips that is.
+  for (const clip of timelineStack.querySelectorAll('.layer-clip[data-layer-id]')) {
+    clip.classList.toggle('layer-clip--selected', clip.dataset.layerId === selectedLayerId);
+  }
+  for (const row of timelineStack.querySelectorAll('.layer-row[data-lane]')) {
+    row.classList.toggle('layer-row--selected',
+      !!row.querySelector('.layer-clip--selected'));
   }
 }
 
@@ -3142,8 +3155,22 @@ function selectLayer(id) {
  * Replace the document. Every change goes through here, so there is one place
  * that redraws and one place an undo commit will hook into at Step 12.
  */
-function setLayers(next) {
-  layers = next;
+// V2.9. The list as the last setLayers left it. Drags write straight into
+// `layers` while they run, so this, not `layers`, is what the document looked
+// like before the gesture that is now being committed.
+let settledLayers = [];
+
+function setLayers(next, restoring) {
+  // V2.9. In lane order, whoever built the list. The composer reads the list
+  // order as the stacking order and the rows are drawn from the lanes, so this
+  // is the one place the two are made to agree.
+  const arranged = timelineModel.arrangeLanes(next);
+  // And the transitions brought up to date with whatever the gesture did to the
+  // overlaps on each lane. Not on a restore, undo or a project opening, whose
+  // fades are exactly what was saved and are put back as they were rather than
+  // worked out again.
+  layers = restoring ? arranged : timelineModel.crossfade(settledLayers, arranged);
+  settledLayers = layers;
   if (selectedLayerId && !timelineModel.layerById(layers, selectedLayerId)) {
     selectedLayerId = null;
   }
@@ -3190,7 +3217,7 @@ function setLayers(next) {
  * "take the sound and leave the picture", and answering it with a picture as
  * well would be ignoring what was asked.
  */
-function addLayerFromMedia(type, data) {
+function addLayerFromMedia(type, data, lane) {
   const duration = Math.max(0, data.duration || 0);
   if (!duration) return;
   // V2.3. A still goes in as a video layer with kind 'image' beside its type,
@@ -3216,6 +3243,9 @@ function addLayerFromMedia(type, data) {
     // export is written at the project's rate.
     sourceFps: data.fps,
     groupId,
+    // V2.9.1. The row it was dropped or opened into, when there was one. None
+    // is a new row below the others, which is also where its sound goes.
+    lane,
   });
   let next = timelineModel.addLayer(layers, layer);
   if (paired) {
@@ -3245,7 +3275,7 @@ function addLayerFromMedia(type, data) {
  * into an audio row keeps only its sound, which costs nothing here because the
  * layer records the type it was made as and the encoder reads that.
  */
-async function openIntoLayer(type, filePath, rowId) {
+async function openIntoLayer(type, filePath, lane) {
   if (busy) return;
   const result = filePath
     ? await window.lwclipper.describeMedia(filePath)
@@ -3262,7 +3292,7 @@ async function openIntoLayer(type, filePath, rowId) {
     reportFailure(result);
     return;
   }
-  // V2.8. 'auto' is the Add a new Track block, which has no kind of its own and
+  // V2.8. 'auto' is the Add a new Layer block, which has no kind of its own and
   // takes whatever the file is. Resolved once, here, so everything below sees a
   // real type.
   const want = type === 'auto'
@@ -3276,10 +3306,10 @@ async function openIntoLayer(type, filePath, rowId) {
     reportFailure({ error: t('An image has no sound to put on an audio track.') });
     return;
   }
-  addLayerFromMedia(want, result.data);
-  // The row it went into is a row no longer: it has a layer in it now, and that
-  // layer is drawn by the real row above.
-  removeEmptyRow(rowId);
+  // Into the row it was aimed at, which since V2.9.1 is a lane like any other.
+  // The block at the bottom has none, and the file takes a new row.
+  const onto = lane === undefined || lane === null || lane === '' ? undefined : Number(lane);
+  addLayerFromMedia(want, result.data, onto);
 }
 
 /**
@@ -3316,12 +3346,23 @@ function makeButton(className, label, title, onClick) {
 }
 
 /** One row per layer, then the trailing empty row for that type. */
-function buildLayerRow(layer) {
+/**
+ * One row of the timeline: a head, and a track holding every clip on the lane.
+ *
+ * V2.9. A row used to be one layer. It is a lane now, which can hold any number
+ * of them, and the head is the row's: Enabled, Volume, the arrows and the
+ * delete button act on every clip on it, which the user settled on 2026-09-24.
+ * "A control that means something different depending on what was last
+ * clicked is a control nobody can read." Everything about one picture stays on
+ * the clip, where it is drawn.
+ */
+function buildLaneRow(type, lane, members) {
   const row = document.createElement('div');
-  row.className = 'layer-row layer-row--' + layer.type;
-  row.dataset.layerId = layer.id;
-  if (!layer.enabled) row.classList.add('layer-row--off');
-  if (layer.id === selectedLayerId) row.classList.add('layer-row--selected');
+  row.className = 'layer-row layer-row--' + type;
+  row.dataset.type = type;
+  row.dataset.lane = String(lane);
+  if (members.every((l) => !l.enabled)) row.classList.add('layer-row--off');
+  if (members.some((l) => l.id === selectedLayerId)) row.classList.add('layer-row--selected');
 
   const head = document.createElement('div');
   head.className = 'layer-head';
@@ -3332,38 +3373,35 @@ function buildLayerRow(layer) {
   // name, and between them and the arrows the name had about six characters of
   // room. Both now ride the end of the clip instead, where the thing they are
   // about actually is. The head keeps the name and the two things that are not
-  // about one clip: where the layer sits in the stack, and whether it stays.
-  const marker = groupMarker(layer.groupId);
-
+  // about one clip: where the row sits in the stack, and whether it stays.
   const name = document.createElement('div');
   name.className = 'layer-name';
-  name.textContent = layerLabel(layer.type, layerOrdinal(layer));
-  name.title = layer.name || '';
+  name.textContent = layerLabel(type, lane + 1);
+  name.title = members.map((l) => l.name).filter(Boolean).join(', ');
   top.appendChild(name);
 
   // Up and down only on video: a mix does not care what order it sums in, so
-  // there is nothing for the arrows to mean on an audio layer.
-  if (layer.type === 'video') {
-    const siblings = layersOfType('video');
-    const at = siblings.indexOf(layer);
+  // there is nothing for the arrows to mean on an audio row.
+  if (type === 'video') {
+    const count = rowsOf('video');
     const reorder = (delta) => {
-      setLayers(timelineModel.reorderLayer(layers, layer.id, delta));
+      setLayers(timelineModel.reorderLane(layers, type, lane, delta, count));
       commitHistory();
     };
     const up = makeButton('layer-btn', '▲', t('Move layer up'), () => reorder(-1));
     const down = makeButton('layer-btn', '▼', t('Move layer down'), () => reorder(1));
-    up.disabled = at === 0;
-    down.disabled = at === siblings.length - 1;
+    up.disabled = lane === 0;
+    down.disabled = lane === count - 1;
     top.appendChild(up);
     top.appendChild(down);
   }
 
   top.appendChild(makeButton('layer-btn layer-btn--delete', '✕', t('Delete layer'), () => {
-    // The design's rule: only the clicked layer goes, the pair is unlinked by
-    // its going, and the survivor keeps the marker so it is visible which one
-    // it was. removeLayer does all of that by doing nothing clever.
-    setLayers(timelineModel.removeLayer(layers, layer.id));
-    commitHistory();
+    // The whole row. A clip grouped with something on another row loses its
+    // partner by this and the partner keeps its marker, so it is visible which
+    // one it was: the design's rule since Step 14, which removeLane keeps by
+    // doing nothing clever, the way removeLayer did.
+    deleteRow(type, lane);
   }));
   head.appendChild(top);
 
@@ -3373,24 +3411,33 @@ function buildLayerRow(layer) {
   enabledLabel.className = 'layer-enabled';
   const enabled = document.createElement('input');
   enabled.type = 'checkbox';
-  enabled.checked = layer.enabled;
+  // Ticked while anything on the row is on, and half ticked when only some of
+  // it is, which a clip dragged in from another row can bring about. Ticking it
+  // then switches the whole row on, which is what a half ticked box is for.
+  const on = members.filter((l) => l.enabled).length;
+  enabled.checked = on > 0;
+  enabled.indeterminate = on > 0 && on < members.length;
   enabled.addEventListener('click', (evt) => evt.stopPropagation());
   enabled.addEventListener('change', () => {
-    setLayers(timelineModel.setLayer(layers, layer.id, { enabled: enabled.checked }));
+    setLayers(timelineModel.setLane(layers, type, lane, { enabled: enabled.checked }));
   });
   enabledLabel.appendChild(enabled);
   enabledLabel.appendChild(document.createTextNode(t('Enabled')));
   controls.appendChild(enabledLabel);
 
-  // Per-layer volume, which is what replaces the single global slider.
-  if (layer.type === 'audio') {
+  // Per-row volume, which is what replaces the single global slider.
+  if (type === 'audio') {
+    // Showing the selected clip's level when it is on this row, since that is
+    // the one being looked at, and the first clip's otherwise. Moving it sets
+    // every clip on the row to the same level.
+    const shown = members.find((l) => l.id === selectedLayerId) || members[0];
     const vol = document.createElement('input');
     vol.type = 'range';
     vol.className = 'layer-volume';
     vol.min = '0';
     vol.max = '200';
     vol.step = '5';
-    vol.value = String(Math.round(layer.volume * 100));
+    vol.value = String(Math.round(shown.volume * 100));
     const readout = document.createElement('span');
     readout.className = 'layer-volume__value';
     readout.textContent = vol.value + '%';
@@ -3400,12 +3447,14 @@ function buildLayerRow(layer) {
     // out from under the pointer.
     vol.addEventListener('input', () => {
       readout.textContent = vol.value + '%';
-      layers = timelineModel.setLayer(layers, layer.id, { volume: Number(vol.value) / 100 });
+      layers = timelineModel.setLane(layers, type, lane, { volume: Number(vol.value) / 100 });
       // Live, because the slider is how a level gets found and finding it means
       // hearing it move. Read back out of the model rather than trusting the
       // value in hand, so what is heard is what was written.
-      const updated = timelineModel.layerById(layers, layer.id);
-      if (updated) applyPlayerGain(updated);
+      for (const member of members) {
+        const updated = timelineModel.layerById(layers, member.id);
+        if (updated) applyPlayerGain(updated);
+      }
       // Written straight into the list, so nothing else is going to notice.
       updateProjectUi();
     });
@@ -3416,9 +3465,36 @@ function buildLayerRow(layer) {
 
   const track = document.createElement('div');
   track.className = 'layer-track';
-  track.dataset.layerId = layer.id;
+  track.dataset.type = type;
+  track.dataset.lane = String(lane);
+  for (const layer of members) buildLayerClip(track, layer);
+
+  row.appendChild(head);
+  row.appendChild(track);
+  // A press anywhere on the row keeps a selection already on it, and otherwise
+  // selects its first clip. On a row of one clip that is exactly what pressing
+  // a row always did. A press on a clip selects that clip itself, and stops
+  // there, so it never reaches this.
+  row.addEventListener('pointerdown', () => {
+    if (members.some((l) => l.id === selectedLayerId)) return;
+    selectLayer(members[0].id);
+  });
+  return row;
+}
+
+/**
+ * One clip on a lane's track: the clip itself, and beside it in the track the
+ * alpha line and its bar, which V2.5 moved out of the clip so the bar could
+ * straddle its edges. All three carry the layer's id, because a track holds
+ * several of each now and that id is how each finds its own.
+ */
+function buildLayerClip(track, layer) {
+  const marker = groupMarker(layer.groupId);
   const clip = document.createElement('div');
   clip.className = 'layer-clip';
+  clip.dataset.layerId = layer.id;
+  if (!layer.enabled) clip.classList.add('layer-clip--off');
+  if (layer.id === selectedLayerId) clip.classList.add('layer-clip--selected');
   // Step 17. The file's own name with its extension. This was layer.src, the
   // whole path, which is longer than a tooltip usefully is; layer.name is not
   // it either, because a download's title arrives there instead of a filename.
@@ -3532,18 +3608,15 @@ function buildLayerRow(layer) {
   if (layer.type === 'video') {
     const line = document.createElement('div');
     line.className = 'clip-alpha-line';
+    line.dataset.layerId = layer.id;
     track.appendChild(line);
 
     const grip = document.createElement('div');
     grip.className = 'clip-alpha-grip';
+    grip.dataset.layerId = layer.id;
     track.appendChild(grip);
     bindAlphaDrag(grip, layer.id);
   }
-
-  row.appendChild(head);
-  row.appendChild(track);
-  row.addEventListener('pointerdown', () => selectLayer(layer.id));
-  return row;
 }
 
 // ---- moving and trimming a clip ----
@@ -3563,6 +3636,168 @@ function buildLayerRow(layer) {
 // How wide an edge grip is at most. Seven pixels is about the least a hand
 // reliably lands on, and it is what the timeline's trim markers already use.
 const CLIP_EDGE_GRAB = 7;
+
+/**
+ * V2.9 item 1. The row of the clip's own kind under the pointer, when it is not
+ * the row the clip is on: "if there are 2 video tracks and i click to drag on
+ * video 2 but move the mouse upwards to video 1, show a green box like drag
+ * and drop area on video 1 layer".
+ *
+ * An empty row that was asked for is a target too, and is how a clip is moved
+ * onto a row of its own: add one, then drag the clip into it. Rows of the other
+ * kind are not, since a picture has nowhere to be drawn on an audio row.
+ */
+function laneTargetAt(type, fromLane, clientY) {
+  for (const row of timelineStack.querySelectorAll('.layer-row--' + type + '[data-lane]')) {
+    const b = row.getBoundingClientRect();
+    if (clientY < b.top || clientY >= b.bottom) continue;
+    const track = row.querySelector('.layer-track');
+    if (!track) return null;
+    const lane = Number(row.dataset.lane);
+    return lane === fromLane ? null : { lane, track };
+  }
+  return null;
+}
+
+/**
+ * The green box on the target row, the length of the clip, at the start the
+ * horizontal half of the drag has already worked out. That is where the
+ * user's "same distance from track-start to mouse click" comes from without
+ * any sum of its own: the drag has carried the second the press landed on
+ * since Step 9, not the pointer's position, so the box lands under the
+ * pointer exactly where the clip would.
+ *
+ * Open ended because the track clips it: "let it open-end if it goes beyond
+ * current timeline scale to the right". The clip being moved is dimmed while
+ * the box is shown, so there is one place it looks as if it is going.
+ */
+function placeLaneGhost(drag, clip, layer) {
+  const target = drag.target;
+  if (!target) {
+    if (drag.ghost) drag.ghost.remove();
+    drag.ghost = null;
+    clip.classList.remove('layer-clip--leaving');
+    return;
+  }
+  if (!drag.ghost || drag.ghost.parentElement !== target.track) {
+    if (drag.ghost) drag.ghost.remove();
+    drag.ghost = document.createElement('div');
+    drag.ghost.className = 'layer-drop-ghost';
+    target.track.appendChild(drag.ghost);
+  }
+  const x0 = timelineView.timeToX(tlView, layer.start);
+  const x1 = timelineView.timeToX(tlView, timelineModel.endOf(layer));
+  drag.ghost.style.left = x0 + 'px';
+  drag.ghost.style.width = Math.max(2, x1 - x0) + 'px';
+  clip.classList.add('layer-clip--leaving');
+}
+
+// V2.9.1 item 4. How near a clip's end has to be drawn to a neighbour's before
+// the two meet: "Let the end/start of tracks on the same layer snap together
+// perfectly if they are only a few pixel apart when dragged". The same reach as
+// FADE_SNAP_PX, and in pixels for the same reason: it is the gap on screen
+// being aimed at. A number of its own rather than that name, which is declared
+// further down the file and is not there yet when this line runs.
+const CLIP_SNAP_PX = 5;
+
+/**
+ * Every line a dragged fade or trimmed edge can land on: the playhead, and the
+ * start, the end and the two fade lines of every other clip on any row. Its
+ * own group is left out, its sound starting, ending and fading where the
+ * picture does, so its lines are the clip's own.
+ *
+ * V2.9.1, and the additions sent after it: "while trimming/extending a track
+ * make it snap to fade in/out and start/end of other layers tracks", and "Let
+ * fade sliders also snap to other layers tracks fade sliders". A fade line is
+ * only offered while there is a fade, since a fade of nothing stands on the
+ * clip's own edge, which is offered already.
+ */
+function snapLines(layer) {
+  const own = new Set(timelineModel.groupOf(layers, layer.id).map((l) => l.id));
+  const lines = [{ at: compositeAt, layerId: null, part: 'playhead' }];
+  for (const l of layers) {
+    if (own.has(l.id)) continue;
+    const end = timelineModel.endOf(l);
+    const fades = timelineModel.fadesOf(l);
+    lines.push({ at: l.start, layerId: l.id, part: 'start' });
+    lines.push({ at: end, layerId: l.id, part: 'end' });
+    if (fades.in > 0) lines.push({ at: l.start + fades.in, layerId: l.id, part: 'in' });
+    if (fades.out > 0) lines.push({ at: end - fades.out, layerId: l.id, part: 'out' });
+  }
+  return lines;
+}
+
+/** The element on screen that stands for a snap line. */
+function snapLineElement(line) {
+  if (!line) return null;
+  if (line.part === 'playhead') return timelinePlayhead;
+  const clip = timelineStack.querySelector('.layer-clip[data-layer-id="' + line.layerId + '"]');
+  if (!clip) return null;
+  return line.part === 'start' || line.part === 'end'
+    ? clip.querySelector('.layer-clip__edge--' + line.part)
+    : clip.querySelector('.clip-fade-line--' + line.part);
+}
+
+// "When fade or trim sliders snap by the few pixels, highlight the current
+// dragged fade/trim slider and the one of the track it snapped to in green
+// until it gets moved further or let go." A class on the two elements rather
+// than anything drawn, so it goes with them and asks nothing of the canvas.
+// Taken off and put back on each move, which is what makes it end the moment
+// the pull is broken.
+let snapLit = [];
+
+function lightSnap(elements) {
+  const next = elements.filter(Boolean);
+  for (const e of snapLit) if (!next.includes(e)) e.classList.remove('snap-lit');
+  for (const e of next) e.classList.add('snap-lit');
+  snapLit = next;
+}
+
+/**
+ * The value a clip drag is asking for, pulled onto a neighbour's edge when one
+ * of the clip's own is within reach of it.
+ *
+ * The neighbours are the clips on the row the clip is on, or on the row it is
+ * being carried to, since that is where it will land. A move carries both of
+ * the clip's ends, so either can meet something; a trim carries the one edge.
+ * Its own group is left out: those are on another row by kind anyway, and the
+ * one thing they must never do is pull the clip onto itself.
+ */
+//
+// Hands back the value, the line it landed on or null for none, and which of
+// the clip's own ends met it.
+//
+// Both reach every row since the additions after V2.9.1. A trimmed or extended
+// edge lands on any of snapLines', the playhead included: "Same as for fade
+// in/out". A moved clip lands either of its ends on the other clips' starts,
+// ends and fade lines: "When moving tracks across the timeline, let it snap to
+// other layers tracks start/end and fade in/out sliders with highlights as
+// well". Not on the playhead, which that did not ask for. `lane` is no longer
+// needed to find the neighbours, since every row is searched, and is kept so
+// the caller reads the same as before.
+function snapClipValue(layer, edge, value, lane) {
+  const lines = edge
+    ? snapLines(layer)
+    : snapLines(layer).filter((line) => line.part !== 'playhead');
+  const offsets = edge ? [0] : [0, layer.duration];
+  let best = null;
+  let hit = null;
+  let side = null;
+  for (const line of lines) {
+    for (const off of offsets) {
+      const gap = line.at - (value + off);
+      if (Math.abs(gap) * tlView.scale > CLIP_SNAP_PX) continue;
+      if (best === null || Math.abs(gap) < Math.abs(best)) {
+        best = gap;
+        hit = line;
+        side = edge || (off === 0 ? 'start' : 'end');
+      }
+    }
+  }
+  return best === null
+    ? { value, line: null, side: null }
+    : { value: value + best, line: hit, side };
+}
 
 function bindClipDrag(clip, layerId) {
   clip.addEventListener('pointerdown', (evt) => {
@@ -3590,9 +3825,14 @@ function bindClipDrag(clip, layerId) {
     tlFitted = false;
     const drag = {
       anchorX: evt.clientX,
+      anchorY: evt.clientY,
       anchorValue: valueOf(layer),
       factor: modifierFactor(evt),
       moved: false,
+      // V2.9. The row a move is aimed at, and the box drawn on it. A trim
+      // never has one: an edge belongs to the row its clip is on.
+      target: null,
+      ghost: null,
     };
     clip.classList.add('layer-clip--dragging');
     document.body.classList.add(edge ? 'layer-trimming' : 'layer-dragging');
@@ -3615,7 +3855,10 @@ function bindClipDrag(clip, layerId) {
 
     const onMove = (ev) => {
       if (!drag.moved) {
-        if (Math.abs(ev.clientX - drag.anchorX) < TIMELINE_DRAG_SLOP) return;
+        // Either way counts now that a clip can be carried up or down as well.
+        const far = Math.max(Math.abs(ev.clientX - drag.anchorX),
+          edge ? 0 : Math.abs(ev.clientY - drag.anchorY));
+        if (far < TIMELINE_DRAG_SLOP) return;
         drag.moved = true;
       }
       const factor = modifierFactor(ev);
@@ -3633,7 +3876,24 @@ function bindClipDrag(clip, layerId) {
       // Seconds per pixel is the zoom, so a clip travels with the cursor at
       // whatever the view is showing rather than at some fixed rate.
       const delta = ((ev.clientX - drag.anchorX) / tlView.scale) * drag.factor;
-      apply(drag.anchorValue + delta);
+      const here = timelineModel.layerById(layers, layerId);
+      if (!here) return;
+      // The row first, because the neighbours to snap to are the ones on the row
+      // the clip will land on.
+      if (!edge) drag.target = laneTargetAt(here.type, here.lane, ev.clientY);
+      const lane = drag.target ? drag.target.lane : here.lane;
+      const snap = snapClipValue(here, edge, drag.anchorValue + delta, lane);
+      apply(snap.value);
+      // Green on the end that met something and on what it met, while it is
+      // held: the grip being dragged for a trim, and for a move whichever of
+      // the clip's two ends it was.
+      lightSnap(snap.line
+        ? [clip.querySelector('.layer-clip__edge--' + snap.side), snapLineElement(snap.line)]
+        : []);
+      if (!edge) {
+        const now = timelineModel.layerById(layers, layerId);
+        if (now) placeLaneGhost(drag, clip, now);
+      }
     };
     const onUp = (ev) => {
       if (clip.hasPointerCapture(ev.pointerId)) clip.releasePointerCapture(ev.pointerId);
@@ -3642,8 +3902,21 @@ function bindClipDrag(clip, layerId) {
       clip.removeEventListener('pointercancel', onUp);
       clip.classList.remove('layer-clip--dragging');
       document.body.classList.remove('layer-dragging', 'layer-trimming');
+      lightSnap([]);
       setDragHint(1.0);
       noteTimelineFit(rect.width);
+      // V2.9. The row and the start in one commit, so one undo takes back the
+      // whole move. Only this clip changes row: its group went with it in time
+      // and stays where it is in rows, which the user settled on 2026-09-25 and
+      // asked for again in V2.9.1: "the sound should not follow into Audio 1
+      // but stay on Audio 2". The row it leaves stays, empty if it was the only
+      // clip there, for the reason a deleted clip's row does.
+      const target = drag.target;
+      drag.target = null;
+      placeLaneGhost(drag, clip, null);
+      if (drag.moved && target) {
+        layers = timelineModel.setLayer(layers, layerId, { lane: target.lane });
+      }
       // The commit point, and so Step 12's undo snapshot. A press that never
       // moved changed nothing and does not rebuild the rows, let alone take a
       // step.
@@ -3683,11 +3956,25 @@ const FADE_SNAP_PX = 5;
  * is where that rule lives and where it should stay.
  */
 function snapFadeToPlayhead(layer, which, want) {
-  const span = which === 'in'
-    ? compositeAt - layer.start
-    : timelineModel.endOf(layer) - compositeAt;
-  if (Math.abs(span - want) * tlView.scale > FADE_SNAP_PX) return want;
-  return span;
+  // V2.9.1 item 6: "When dragging a fade in/out slider, make it snap to the
+  // start/end of tracks in other layers if its only a few pixel away", and the
+  // addition after it, to their fade lines too. So the playhead is one of
+  // several lines the fade's inner end can land on, all of them snapLines',
+  // and the nearest within reach wins. Hands back the length and the line it
+  // landed on, or null for none, so the two can be lit.
+  let best = want;
+  let hit = null;
+  let gap = FADE_SNAP_PX;
+  for (const line of snapLines(layer)) {
+    const span = which === 'in' ? line.at - layer.start : timelineModel.endOf(layer) - line.at;
+    const off = Math.abs(span - want) * tlView.scale;
+    if (off <= gap) {
+      gap = off;
+      best = span;
+      hit = line;
+    }
+  }
+  return { value: best, line: hit };
 }
 
 /**
@@ -3736,8 +4023,14 @@ function bindFadeDrag(node, layerId, which, fromZero) {
       // Seconds per pixel is the zoom, so the line travels with the cursor at
       // whatever the view is showing. The model clamps it to the clip.
       const want = drag.from + ((ev.clientX - drag.x) / tlView.scale) * sign;
-      layers = timelineModel.fadeGroup(layers, layerId, which,
-        snapFadeToPlayhead(layer, which, want));
+      const snap = snapFadeToPlayhead(layer, which, want);
+      layers = timelineModel.fadeGroup(layers, layerId, which, snap.value);
+      // The fade's own line is what stands at its end, whichever of the handle
+      // or the line is being dragged, so that is the one lit.
+      const mine = node.closest('.layer-clip');
+      lightSnap(snap.line
+        ? [mine && mine.querySelector('.clip-fade-line--' + which), snapLineElement(snap.line)]
+        : []);
       drawTimeline();
       // The picture at the playhead is what the fade is for, so it is redrawn
       // as the ramp changes rather than only once the drag is over.
@@ -3749,6 +4042,7 @@ function bindFadeDrag(node, layerId, which, fromZero) {
       node.removeEventListener('pointerup', onUp);
       node.removeEventListener('pointercancel', onUp);
       document.body.classList.remove('layer-fading');
+      lightSnap([]);
       noteTimelineFit(rect.width);
       if (drag.moved) {
         setLayers(layers);
@@ -3794,7 +4088,7 @@ function bindAlphaDrag(node, layerId) {
     // less one, which is alphaRow's, read backwards: the rectangle has that
     // many rows between its first and its last.
     const track = node.closest('.layer-track');
-    const clip = track && track.querySelector('.layer-clip');
+    const clip = track && track.querySelector('.layer-clip[data-layer-id="' + layerId + '"]');
     const span = Math.max(1, clip ? clip.offsetHeight - 1 : 1);
     const rect = timelineLane.getBoundingClientRect();
     const drag = { y: evt.clientY, from: timelineModel.alphaOf(layer), moved: false };
@@ -3840,31 +4134,52 @@ function bindAlphaDrag(node, layerId) {
 // simply put an 'Add a new Track' as title after the active/used layers".
 //
 // An empty row is therefore something asked for, which means it is state. It is
-// deliberately **not** in `layers` and not in history: an empty track has
-// nothing to save, nothing to undo and nothing to export, and putting it in
-// that list would mean teaching every reader of it to skip a thing that is not
-// a layer. It does not survive a project being opened either, which is right,
-// because it was a thing somebody was in the middle of doing.
-let emptyRows = [];
-let emptyRowSeq = 0;
+// deliberately **not** in `layers` and not in history: an empty row has nothing
+// to save, nothing to undo and nothing to export.
+//
+// V2.9.1. The state is now how many rows of each kind are shown, rather than a
+// list of empty ones kept after the full ones. Two things asked for at once
+// made the change: "When a track gets deleted and the layer is empty now, do
+// not auto-delete it", which means an empty row can sit between two full ones,
+// and "Make empty layers right-clickable" and every other way into a row,
+// which is simplest when an empty row is a lane like any other that happens to
+// have nothing on it. So every row is lane 0 to rowsOf(type) - 1, full or not,
+// and the count only ever grows by itself: renderLayerRows writes back what it
+// drew, so a row that loses its last clip is still counted. It shrinks when a
+// row's delete button is pressed, and it starts again from what the layers
+// need when a project is opened or a step is undone.
+let laneRows = { video: 0, audio: 0 };
+
+// At least one of each kind, which is the user's amendment to V2.8 item 5:
+// "Video 1 and Audio 1 should be default".
+function rowsOf(type) {
+  return Math.max(1, laneRows[type] || 0, timelineModel.laneCount(layers, type));
+}
+
+function resetLaneRows() {
+  laneRows = { video: 0, audio: 0 };
+}
 
 function addEmptyRow(type) {
-  emptyRowSeq += 1;
-  emptyRows.push({ id: 'empty' + emptyRowSeq, type });
+  laneRows[type] = rowsOf(type) + 1;
   renderLayerRows();
 }
 
-function removeEmptyRow(id) {
-  if (!id) return;
-  const before = emptyRows.length;
-  emptyRows = emptyRows.filter((r) => r.id !== id);
-  if (emptyRows.length !== before) renderLayerRows();
+/**
+ * A row's delete button, full or empty. The rows under it move up, which is the
+ * one time lanes are renumbered.
+ */
+function deleteRow(type, lane) {
+  laneRows[type] = rowsOf(type) - 1;
+  setLayers(timelineModel.removeLane(layers, type, lane));
+  commitHistory();
 }
 
-function buildEmptyRow(entry, ordinal) {
-  const type = entry.type;
+function buildEmptyRow(type, lane, removable) {
   const row = document.createElement('div');
   row.className = 'layer-row layer-row--' + type + ' layer-row--empty';
+  row.dataset.type = type;
+  row.dataset.lane = String(lane);
 
   const head = document.createElement('div');
   head.className = 'layer-head';
@@ -3872,32 +4187,33 @@ function buildEmptyRow(entry, ordinal) {
   top.className = 'layer-head__top';
   const name = document.createElement('div');
   name.className = 'layer-name';
-  name.textContent = layerLabel(type, ordinal);
+  name.textContent = layerLabel(type, lane + 1);
   top.appendChild(name);
   // A row that was asked for has to be refusable as well, or one added by
   // mistake stays for the rest of the session with nothing to do about it. The
   // same button the real rows carry, doing the only thing there is to do to a
   // track with nothing in it.
   //
-  // The standing row of each kind has no id and no button: it is derived from
-  // there being nothing of that kind, so there is nothing to take back and a
-  // button would only put it straight back on the next draw.
-  if (entry.id) {
+  // The last row of a kind has no button: one of each always stands ready, so
+  // there is nothing to take back and a button would only put it straight
+  // back on the next draw.
+  if (removable) {
     top.appendChild(makeButton('layer-btn layer-btn--delete', '✕', t('Delete layer'),
-      () => removeEmptyRow(entry.id)));
+      () => deleteRow(type, lane)));
   }
   head.appendChild(top);
 
   const track = document.createElement('div');
   track.className = 'layer-track';
   track.dataset.emptyType = type;
-  if (entry.id) track.dataset.emptyRow = entry.id;
+  track.dataset.type = type;
+  track.dataset.lane = String(lane);
   const empty = document.createElement('div');
   empty.className = 'layer-empty';
   const text = document.createElement('span');
   text.textContent = type === 'audio' ? t('No Audio track') : t('No Video track');
   empty.appendChild(makeButton('', t('Open File'), '',
-    () => openIntoLayer(type, null, entry.id)));
+    () => openIntoLayer(type, null, lane)));
   empty.appendChild(text);
   track.appendChild(empty);
 
@@ -3926,15 +4242,15 @@ function buildAddRow() {
 
   const head = document.createElement('div');
   head.className = 'layer-add__head';
-  head.textContent = t('Add a new Track');
+  head.textContent = t('Add a new Layer');
   row.appendChild(head);
 
   const body = document.createElement('div');
   body.className = 'layer-add__body';
   body.dataset.emptyType = 'auto';
-  body.appendChild(makeButton('layer-add__btn', t('New Video Track'), '',
+  body.appendChild(makeButton('layer-add__btn', t('New Video Layer'), '',
     () => addEmptyRow('video')));
-  body.appendChild(makeButton('layer-add__btn', t('New Audio Track'), '',
+  body.appendChild(makeButton('layer-add__btn', t('New Audio Layer'), '',
     () => addEmptyRow('audio')));
   body.appendChild(makeButton('layer-add__btn', t('Open File'), '',
     () => openIntoLayer('auto', null, null)));
@@ -3953,20 +4269,21 @@ function renderLayerRows() {
   // audio block stay whole, and the numbering carries on from the layers that
   // are already there.
   for (const type of ['video', 'audio']) {
-    const real = layersOfType(type);
-    for (const layer of real) stack.appendChild(buildLayerRow(layer));
-    const asked = emptyRows.filter((r) => r.type === type);
-    // One row of each kind stands ready while there is nothing of that kind at
-    // all, which is the user's amendment to item 5 on 2026-09-24: "Video 1 and
-    // Audio 1 should be default, but no auto-adding Video 2 if Video 1 gets
-    // track loaded in it". So the old always-there row survives exactly as far
-    // as the first file, and the Add a new Track block is what comes after.
-    if (!real.length && !asked.length) {
-      stack.appendChild(buildEmptyRow({ type, id: null }, 1));
+    // V2.9. A row per lane, holding every clip on it. V2.9.1: and a row for
+    // every lane with nothing on it, wherever it is, down to the number of rows
+    // this kind has been showing. One row of each kind stands ready while there
+    // is nothing of that kind at all, which is the user's amendment to V2.8
+    // item 5: "Video 1 and Audio 1 should be default, but no auto-adding Video
+    // 2 if Video 1 gets track loaded in it".
+    const lanes = timelineModel.lanesOf(layers, type);
+    const shown = rowsOf(type);
+    for (let lane = 0; lane < shown; lane += 1) {
+      const members = lanes[lane];
+      stack.appendChild(members && members.length
+        ? buildLaneRow(type, lane, members)
+        : buildEmptyRow(type, lane, shown > 1));
     }
-    asked.forEach((entry, i) => {
-      stack.appendChild(buildEmptyRow(entry, real.length + 1 + i));
-    });
+    laneRows[type] = shown;
   }
   stack.appendChild(buildAddRow());
   positionLayerClips();
@@ -3975,10 +4292,11 @@ function renderLayerRows() {
 /** Every clip placed against the same view the ruler is drawn against. */
 function positionLayerClips() {
   const trackW = timelineLane.clientWidth;
-  for (const track of timelineStack.querySelectorAll('.layer-track[data-layer-id]')) {
-    const layer = timelineModel.layerById(layers, track.dataset.layerId);
-    const clip = track.querySelector('.layer-clip');
-    if (!layer || !clip) continue;
+  // V2.9. Clip by clip rather than track by track, since a track holds several.
+  for (const clip of timelineStack.querySelectorAll('.layer-clip[data-layer-id]')) {
+    const layer = timelineModel.layerById(layers, clip.dataset.layerId);
+    const track = clip.parentElement;
+    if (!layer || !track) continue;
     const x0 = timelineView.timeToX(tlView, layer.start);
     const x1 = timelineView.timeToX(tlView, timelineModel.endOf(layer));
     const width = Math.max(2, x1 - x0);
@@ -4108,7 +4426,9 @@ function placeClipMarks(clip, width, from, visible, gripW) {
  * here starts from the clip's own offset within it.
  */
 function placeAlphaLine(track, clip, layer, x0, from, visible, gripW) {
-  const line = track.querySelector('.clip-alpha-line');
+  // By id, because the track holds a line and a bar for every video clip on it.
+  const mine = '[data-layer-id="' + layer.id + '"]';
+  const line = track.querySelector('.clip-alpha-line' + mine);
   if (!line) return;
   const alpha = timelineModel.alphaOf(layer);
   const row = clip.offsetTop + layerGeometry.alphaRow(clip.offsetHeight, alpha);
@@ -4135,7 +4455,7 @@ function placeAlphaLine(track, clip, layer, x0, from, visible, gripW) {
   line.style.left = Math.round(lo) + 'px';
   line.style.width = Math.max(0, Math.round(span)) + 'px';
 
-  const grip = track.querySelector('.clip-alpha-grip');
+  const grip = track.querySelector('.clip-alpha-grip' + mine);
   if (!grip) return;
   // Room between the two trim grips and the two fade handles, or it goes: the
   // rule the marks already follow, because a control the width of its own row
@@ -4389,6 +4709,23 @@ function drawClipArt(layer, canvas, leftX, width, height) {
  * element that drags it, so that what is on the screen and what takes the
  * pointer are one thing rather than two kept level by hand.
  */
+// V2.9.1 item 5. Which clip each transition's later clip covers, and by how
+// much, worked out once per list rather than once per clip per frame: this is
+// read from drawClipFades, which runs for every clip on every pan and zoom.
+let transitionCache = { of: null, into: new Map() };
+
+function transitionInto(layer) {
+  if (transitionCache.of !== layers) {
+    const into = new Map();
+    for (const [pair, o] of timelineModel.overlapsOf(layers)) {
+      const [a, b] = pair.split('|');
+      into.set(b, { from: a, overlap: o });
+    }
+    transitionCache = { of: layers, into };
+  }
+  return transitionCache.into.get(layer.id) || null;
+}
+
 function drawClipFades(layer, ctx, leftX, width, height) {
   const fades = timelineModel.fadesOf(layer);
   if (!fades.in && !fades.out) return;
@@ -4412,6 +4749,26 @@ function drawClipFades(layer, ctx, leftX, width, height) {
     const end = timelineModel.endOf(layer);
     ctx.moveTo(xAt(end - fades.out), top);
     ctx.lineTo(xAt(end), height);
+  }
+  // V2.9.1 item 5. Where this clip is the later of two overlapping on a lane,
+  // the earlier one's way out is drawn across the overlap too, so the two
+  // ramps cross: "When Tracks overlap one should fade out while the other fades
+  // in". On screen that is exactly what happens, and the sum is why only one of
+  // them carries a fade: the clip on top covering the one under it by t is
+  // what takes the one under it down by t, so out = t * right + (1 - t) * left.
+  // Giving the one underneath a fade of its own as well would take it down
+  // twice and leave the middle at three quarters of the light. The earlier
+  // clip is under this one here and cannot show its own ramp, so this one
+  // draws it. Only while the fade is still the one the overlap wrote: a fade
+  // changed by hand since is somebody's own and is drawn as just that.
+  const cross = transitionInto(layer);
+  if (cross && Math.abs(fades.in - cross.overlap) < 1e-6) {
+    const under = timelineModel.layerById(layers, cross.from);
+    const underTop = under
+      ? layerGeometry.alphaRow(height + 2 * CLIP_BORDER, timelineModel.alphaOf(under)) - CLIP_BORDER
+      : top;
+    ctx.moveTo(xAt(layer.start), underTop);
+    ctx.lineTo(xAt(layer.start + cross.overlap), height);
   }
   ctx.stroke();
   ctx.restore();
@@ -5700,6 +6057,208 @@ document.addEventListener('keydown', (evt) => {
   stepFrame(back ? -1 : 1);
 }, true);
 
+/**
+ * V2.9. The selected clip cut in two at a second of the timeline, and its group
+ * with it. S cuts at the playhead; the right click menu cuts where it was
+ * opened. Hands back whether anything was cut, since a cut too close to an end
+ * is refused and the caller may want to say so.
+ */
+function splitSelected(at) {
+  if (!timelineDriving() || busy || !selectedLayerId) return false;
+  const next = timelineModel.splitLayer(layers, selectedLayerId, at);
+  if (next === layers) return false;
+  setLayers(next);
+  commitHistory();
+  return true;
+}
+
+/**
+ * Whether a letter pressed now is being typed into something. Narrower than
+ * KEEPS_ARROWS on purpose: a focused checkbox or slider takes the arrows,
+ * which is how it is set from the keyboard, but has no use for a letter, and
+ * pressing Enabled leaves the focus on it.
+ */
+const TAKES_NO_LETTERS = ['checkbox', 'radio', 'range', 'button', 'submit', 'color', 'file'];
+function typingInto(node) {
+  if (!node) return false;
+  if (node.isContentEditable) return true;
+  if (node.tagName === 'TEXTAREA' || node.tagName === 'SELECT') return true;
+  return node.tagName === 'INPUT' && !TAKES_NO_LETTERS.includes(node.type);
+}
+
+// S splits, not while something is being typed and not while a popup has the
+// window. No modifiers, because Ctrl+S is save and is handled on its own.
+document.addEventListener('keydown', (evt) => {
+  if (String(evt.key).toLowerCase() !== 's') return;
+  if (evt.ctrlKey || evt.metaKey || evt.altKey || evt.repeat) return;
+  if (modalOpen() || typingInto(document.activeElement)) return;
+  if (!timelineDriving()) return;
+  evt.preventDefault();
+  splitSelected(compositeAt);
+});
+
+// ---- the clipboard, Delete, and the right click menu ----
+//
+// V2.9. Asked for on 2026-09-24: "pressing del or backspace on the keyboard
+// deletes the selected track. Additionally add a little pop-up right click
+// menu. So rightclicking anywhere on the track opens it, selecting an option or
+// clicking anywhere outside of it closes it. Options of the right click menu:
+// Split here, Copy, Paste, Delete for now."
+//
+// Every item is a thing a key already does, so the menu is a second way to
+// reach four functions rather than four functions of its own. What the menu
+// adds is a place: Split here and Paste act where it was opened, not at the
+// playhead.
+
+// The app's own clipboard. See timelineModel.copyOf for why not the system's.
+let layerClipboard = null;
+
+function copySelected() {
+  if (!timelineDriving() || !selectedLayerId) return false;
+  const clip = timelineModel.copyOf(layers, selectedLayerId);
+  if (!clip) return false;
+  layerClipboard = clip;
+  return true;
+}
+
+/**
+ * The clipboard put back at a second of the timeline, on a lane of the given
+ * kind when that is the kind being pasted, and on a new lane otherwise. The
+ * copied layer becomes the selection, so a second Ctrl+V pastes after it
+ * rather than over the original, and so the Crop button acts on what was just
+ * pasted.
+ */
+function pasteAt(at, type, lane) {
+  if (!timelineDriving() || busy || !layerClipboard) return false;
+  const primary = layerClipboard.items.find((l) => l.id === layerClipboard.primary)
+    || layerClipboard.items[0];
+  const onto = type === primary.type ? lane : null;
+  const had = new Set(layers.map((l) => l.id));
+  const next = timelineModel.pasteInto(layers, layerClipboard, at, onto);
+  if (next === layers) return false;
+  const pasted = next.find((l) => !had.has(l.id) && l.type === primary.type);
+  if (pasted) selectedLayerId = pasted.id;
+  setLayers(next);
+  commitHistory();
+  return true;
+}
+
+/**
+ * The selected clip, and only it. A clip grouped with a sound leaves the sound
+ * behind, still marked, which is the rule the row's delete button has kept
+ * since Step 14: only what was pointed at goes.
+ */
+function deleteSelected() {
+  if (!timelineDriving() || busy || !selectedLayerId) return false;
+  const next = timelineModel.removeLayer(layers, selectedLayerId);
+  if (next.length === layers.length) return false;
+  setLayers(next);
+  commitHistory();
+  return true;
+}
+
+// Ctrl+C and Ctrl+V on the timeline, and Del and Backspace. Each leaves the key
+// alone while something is being typed, where copy, paste and delete already
+// mean something, and each only takes the key when it has something to do with
+// it, so the browser's own answer is not swallowed for nothing.
+document.addEventListener('keydown', (evt) => {
+  if (modalOpen() || typingInto(document.activeElement)) return;
+  if (!timelineDriving()) return;
+  const key = String(evt.key).toLowerCase();
+  const ctrl = evt.ctrlKey || evt.metaKey;
+  let done = false;
+  if (ctrl && !evt.altKey && !evt.shiftKey && key === 'c') {
+    done = copySelected();
+  } else if (ctrl && !evt.altKey && !evt.shiftKey && key === 'v') {
+    // At the playhead, on the selected clip's lane: "If there is no click
+    // behind it, Crtl+V pastes behind the playhead. If no layer got selected,
+    // paste the copied source into a newly created layer if needed."
+    const sel = selectedLayerId && timelineModel.layerById(layers, selectedLayerId);
+    done = pasteAt(compositeAt, sel ? sel.type : null, sel ? sel.lane : null);
+  } else if (!ctrl && !evt.altKey && (key === 'delete' || key === 'backspace')) {
+    done = deleteSelected();
+  }
+  if (done) {
+    evt.preventDefault();
+    closeClipMenu();
+  }
+});
+
+let clipMenu = null;
+
+function closeClipMenu() {
+  if (!clipMenu) return;
+  clipMenu.remove();
+  clipMenu = null;
+}
+
+/**
+ * The menu, at the pointer. On a clip it offers all four; on the empty part of
+ * a row only Paste has anything to act on, and the other three are there and
+ * greyed rather than missing, so the menu is the same shape wherever it opens.
+ */
+function openClipMenu(evt, track) {
+  closeClipMenu();
+  const rect = timelineLane.getBoundingClientRect();
+  const at = Math.max(0, timelineView.xToTime(tlView, evt.clientX - rect.left));
+  const type = track.dataset.type;
+  const lane = Number(track.dataset.lane);
+  const clipEl = evt.target.closest('.layer-clip[data-layer-id]');
+  const layer = clipEl && timelineModel.layerById(layers, clipEl.dataset.layerId);
+  if (layer) selectLayer(layer.id);
+
+  const menu = document.createElement('div');
+  menu.className = 'clip-menu';
+  menu.setAttribute('role', 'menu');
+  const item = (label, enabled, act) => {
+    const b = document.createElement('button');
+    b.className = 'clip-menu__item';
+    b.setAttribute('role', 'menuitem');
+    b.textContent = label;
+    b.disabled = !enabled;
+    b.addEventListener('click', () => {
+      closeClipMenu();
+      act();
+    });
+    menu.appendChild(b);
+  };
+  item(t('Split here'), !!layer && timelineModel.canSplitAt(layer, at),
+    () => splitSelected(at));
+  item(t('Copy'), !!layer, () => copySelected());
+  item(t('Paste'), !!layerClipboard, () => pasteAt(at, type, lane));
+  item(t('Delete'), !!layer, () => deleteSelected());
+  document.body.appendChild(menu);
+
+  // At the pointer, and pulled back inside the window when it would run off
+  // the right or the bottom, which a click near the end of the timeline does.
+  const w = menu.offsetWidth;
+  const h = menu.offsetHeight;
+  menu.style.left = Math.max(4, Math.min(evt.clientX, window.innerWidth - w - 4)) + 'px';
+  menu.style.top = Math.max(4, Math.min(evt.clientY, window.innerHeight - h - 4)) + 'px';
+  clipMenu = menu;
+}
+
+timelineStack.addEventListener('contextmenu', (evt) => {
+  const track = evt.target.closest && evt.target.closest('.layer-track[data-lane]');
+  if (!track || busy || !timelineDriving()) return;
+  evt.preventDefault();
+  openClipMenu(evt, track);
+});
+
+// "clicking anywhere outside of it closes it". Capture, so a press that goes on
+// to start a drag or a scrub closes the menu first rather than being stopped
+// on the way by whatever it landed on.
+document.addEventListener('pointerdown', (evt) => {
+  if (clipMenu && !clipMenu.contains(evt.target)) closeClipMenu();
+}, true);
+document.addEventListener('keydown', (evt) => {
+  if (evt.key === 'Escape') closeClipMenu();
+});
+// And anything that moves what it was pointing at out from under it.
+window.addEventListener('blur', closeClipMenu);
+window.addEventListener('resize', closeClipMenu);
+timelineStage.addEventListener('wheel', closeClipMenu, { passive: true });
+
 playSelectionBtn.addEventListener('click', () => {
   // Step 17. This did nothing at all in advanced editing, because it opened on
   // a guard for media that is null there and then drove transport, the preview
@@ -6097,7 +6656,8 @@ async function adoptProject(result) {
     : null;
   sizeCompositeCanvas();
 
-  setLayers(keep);
+  resetLaneRows();
+  setLayers(keep, true);
   // After setLayers, the same ordering applyHistory needs: syncProjectTrim in
   // there follows the project's new length and would move the very markers
   // being restored.
@@ -6272,7 +6832,8 @@ function applyHistory(next) {
       sizeCompositeCanvas();
     }
   }
-  setLayers(state.layers);
+  resetLaneRows();
+  setLayers(state.layers, true);
   // After setLayers and not before. syncProjectTrim in there follows a project
   // that just got longer or shorter, and it would move the very markers being
   // restored.
@@ -6709,6 +7270,9 @@ function previewFit() {
     spare: Math.max(0, Math.round(
       previewSection.getBoundingClientRect().bottom - pad
       - controls.getBoundingClientRect().bottom - mb)),
+    // The frame's 16:9 height and the height it has, for previewFloor.
+    ideal,
+    height: Math.round(stage.height),
   };
 }
 
@@ -6875,10 +7439,26 @@ window.lwclipper.windowMaximized().then((maxed) => setWindowMaxed(!!maxed));
  * next call, with the section no longer crushed, reads the real one. Over would
  * be a floor that fought the drag it was measured during.
  */
+// V2.9.1. How far down the handle may press the frames, as a share of their
+// 16:9 height: "Let the preview-timeline divider shrink down the preview frame
+// until the frames are only 10% of their max width to height ratio so that the
+// timeline can get much more expanded up if needed". It was the whole 16:9
+// until then.
+const PREVIEW_LEAST_SHARE = 0.1;
+
+/** The least height a frame may be pressed to, in pixels, or null for audio. */
+function frameLeast(fit) {
+  return fit ? Math.max(1, Math.round(fit.ideal * PREVIEW_LEAST_SHARE)) : null;
+}
+
 function previewFloor() {
   const now = previewSection.getBoundingClientRect().height;
   const fit = previewFit();
-  if (fit) return now - fit.spare + fit.short;
+  // What the section can give up is whatever it has spare, and then the frame
+  // down to its least. The frame's own minimum in the stylesheet is held at the
+  // same number by applySplit, or the frame would stop at 60px while this sum
+  // went on believing it could shrink.
+  if (fit) return now - fit.spare - fit.height + frameLeast(fit);
   const stage = previewStage.getBoundingClientRect().height;
   const least = parseFloat(getComputedStyle(previewStage).minHeight) || 0;
   return now - stage + least;
@@ -6906,6 +7486,11 @@ function applySplit() {
     noteNormalSplit(timelineStack.getBoundingClientRect().height, room);
     return;
   }
+  // The frames' own minimum first, so the floor below is measured against a
+  // frame that is allowed to get that small.
+  const least = frameLeast(previewFit());
+  if (least === null) document.documentElement.style.removeProperty('--frame-least');
+  else document.documentElement.style.setProperty('--frame-least', least + 'px');
   const held = layerGeometry.splitHeight(want, room, SPLIT_STACK_FLOOR, previewFloor());
   document.documentElement.style.setProperty('--split-stack', held + 'px');
   noteNormalSplit(held, room);
@@ -7152,9 +7737,66 @@ function endGutterDrag(evt) {
 layersSplitter.addEventListener('pointerup', endGutterDrag);
 layersSplitter.addEventListener('pointercancel', endGutterDrag);
 
+// V2.9.1. How near the middle frame's whole 16:9 a drag of this handle has to
+// come before it takes it, the side handles' reach. See splitEqualStack.
+const SPLIT_SNAP = 8;
+
+/**
+ * The stack height at which the middle Preview frame is exactly 16:9: the last
+ * height it is still whole at, before the handle starts to flatten it.
+ *
+ * The user's own description, 2026-09-25: "Make the timeline-preview divider
+ * snap to the position where the center Preview matches 16:9 aspect. If its
+ * large its snaps lower on the window, if its small (or all 3 preview frames
+ * are equal) it snaps higher on the window." A wide middle is a tall frame at
+ * 16:9 and so a snap low down; a narrow one is short and snaps high. The side
+ * frames follow wherever that leaves them.
+ *
+ * Found by trying heights rather than by adding them up, because the columns
+ * do not give up height evenly: a narrow column's buttons wrap onto a second
+ * line, and a sum that treated the three alike put the snap a long way from
+ * where the frame really stops being whole. So the stack is set, the frame is
+ * read, and a search closes in on the last height it is whole at, a dozen
+ * layouts at the press and none while the handle moves.
+ *
+ * Null for an audio project, which has no frame, and when there is no such
+ * height in reach: a window too short for the frame to be whole at all, or one
+ * so tall the stack never presses it.
+ */
+function splitEqualStack() {
+  if (previewSection.dataset.audio === 'true') return null;
+  const width = previewStage.getBoundingClientRect().width;
+  if (!width) return null;
+  const whole = (width * 9) / 16 - 0.5;
+  const root = document.documentElement.style;
+  const saved = root.getPropertyValue('--split-stack');
+  const wholeAt = (stack) => {
+    root.setProperty('--split-stack', stack + 'px');
+    return previewStage.getBoundingClientRect().height >= whole;
+  };
+  let lo = 0;
+  let hi = Math.max(0, splitRoom());
+  let found = null;
+  if (wholeAt(lo) && !wholeAt(hi)) {
+    while (hi - lo > 0.5) {
+      const mid = (lo + hi) / 2;
+      if (wholeAt(mid)) lo = mid;
+      else hi = mid;
+    }
+    found = Math.floor(lo);
+  }
+  if (saved) root.setProperty('--split-stack', saved);
+  else root.removeProperty('--split-stack');
+  return found;
+}
+
 editSplitter.addEventListener('pointerdown', (evt) => {
   if (evt.button !== 0) return;
-  splitFrom = { y: evt.clientY, stack: timelineStack.getBoundingClientRect().height };
+  splitFrom = {
+    y: evt.clientY,
+    stack: timelineStack.getBoundingClientRect().height,
+    equalAt: splitEqualStack(),
+  };
   // So the drag survives the pointer leaving a 10px strip, which it does
   // immediately and for the whole of the gesture.
   editSplitter.setPointerCapture(evt.pointerId);
@@ -7172,7 +7814,11 @@ editSplitter.addEventListener('pointermove', (evt) => {
   // boundary down, which is the preview above it growing and the timeline
   // below it giving the room up. This was a plus until 2026-09-23 and the
   // whole thing ran backwards.
-  const wish = splitFrom.stack - (evt.clientY - splitFrom.y);
+  let wish = splitFrom.stack - (evt.clientY - splitFrom.y);
+  // Within a few pixels of the middle frame being exactly 16:9, exactly.
+  if (splitFrom.equalAt !== null && Math.abs(wish - splitFrom.equalAt) <= SPLIT_SNAP) {
+    wish = splitFrom.equalAt;
+  }
   if (windowMaxed) {
     // Written into the maximized share, so a drag made up there does not follow
     // the window back down, and is still there on the next maximize.
