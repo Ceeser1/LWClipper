@@ -70,7 +70,9 @@ icon or the wording ever change.
 - `main.js` owns every `ipcMain` route: downloads, encoding, dialogs, settings.
 - `preload.js` exposes `window.lwclipper` across the context bridge. The
   renderer runs sandboxed with no Node.
-- `renderer/` is the window. `app.js` is the bulk of it.
+- `renderer/` is the window. Its code is `renderer/app/`, one plain script per
+  part of it, loaded in the order `index.html` lists them; generated media
+  (text, bars) has its own folder, `renderer/app/gen/`.
 - `src/` is the work: `ytdlp.js` fetches, `trimmer.js` builds the ffmpeg argv,
   `backend.js` holds the format table every encoder decision reads from,
   `waveform.js` renders the audio peaks, `toolPaths.js` locates everything.

@@ -386,6 +386,16 @@ const genDraw = (() => {
     return result;
   }
 
+  // How each form is drawn. A new form, a shape say, adds its drawing here,
+  // beside its settings in timeline.js's genOf and its entry in the window's
+  // GEN_KINDS.
+  const DRAWERS = {
+    text: (ctx, gen, width, height, surface) => {
+      if (gen.text) drawText(ctx, gen, width, height, surface);
+    },
+    bar: (ctx, gen, width, height) => drawBar(ctx, gen, width, height),
+  };
+
   /**
    * A generated layer onto a cleared canvas of the frame's size. `surface`,
    * for the tests, is what the shadow's mask is drawn on: (w, h) to a 2D
@@ -393,9 +403,8 @@ const genDraw = (() => {
    */
   function drawGen(ctx, gen, width, height, surface) {
     ctx.clearRect(0, 0, width, height);
-    if (!gen) return;
-    if (gen.form === 'bar') drawBar(ctx, gen, width, height);
-    else if (gen.text) drawText(ctx, gen, width, height, surface);
+    const draw = gen && DRAWERS[gen.form];
+    if (draw) draw(ctx, gen, width, height, surface);
   }
 
   /**

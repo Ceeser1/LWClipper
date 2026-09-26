@@ -35,7 +35,10 @@
       },
       {
         "from": "locales",
-        "to": "locales"
+        "to": "locales",
+        "filter": [
+          "*.json"
+        ]
       },
       {
         "from": "icon.ico",

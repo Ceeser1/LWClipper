@@ -863,7 +863,7 @@
     </div>
   </div>
 
-  <!-- Before app.js, which reads the bindings these declare. The renderer is
+  <!-- Before the window's own files, which read the bindings these declare. The renderer is
        sandboxed and cannot require() anything, so code it shares with the main
        process has to arrive as a plain script. timeline.js is the same file
        main requires, which is the point: one layer model, not two that have to
@@ -877,6 +877,28 @@
   <script src="../src/project.js"></script>
   <script src="../src/claim.js"></script>
   <script src="timelineView.js"></script>
-  <script src="app.js"></script>
+  <!-- The window itself, in the order it loads. Plain scripts sharing one
+       scope: a file may use anything from the files above it while the page
+       loads, and anything from any of them once it is running. Anything that
+       calls back from the main process is subscribed in startup.js, last. -->
+  <script src="app/core.js"></script>
+  <script src="app/shell.js"></script>
+  <script src="app/media.js"></script>
+  <script src="app/timeline.js"></script>
+  <script src="app/clips.js"></script>
+  <script src="app/compositor.js"></script>
+  <script src="app/editing.js"></script>
+  <script src="app/layout.js"></script>
+  <script src="app/crop.js"></script>
+  <script src="app/placement.js"></script>
+  <script src="app/renderFrame.js"></script>
+  <script src="app/gen/kinds.js"></script>
+  <script src="app/gen/colorPicker.js"></script>
+  <script src="app/gen/preview.js"></script>
+  <script src="app/gen/bar.js"></script>
+  <script src="app/gen/text.js"></script>
+  <script src="app/gen/effects.js"></script>
+  <script src="app/export.js"></script>
+  <script src="app/startup.js"></script>
 </body>
 </html>

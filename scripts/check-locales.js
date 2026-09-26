@@ -18,10 +18,18 @@ const html = fs.readFileSync(path.join(ROOT, 'renderer', 'index.html'), 'utf8');
 // Both sides that translate: the window, and the main process for its dialogs.
 // Only what either one wraps in t() counts, which is why the literals main.js
 // hands to ffmpeg or writes to a log do not turn up here.
+// The window's code is every script under renderer/app/.
+function scriptsIn(dir) {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) return scriptsIn(full);
+    return e.name.endsWith('.js') ? [full] : [];
+  });
+}
 const js = [
-  fs.readFileSync(path.join(ROOT, 'renderer', 'app.js'), 'utf8'),
-  fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8'),
-].join('\n');
+  ...scriptsIn(path.join(ROOT, 'renderer', 'app')),
+  path.join(ROOT, 'main.js'),
+].map((f) => fs.readFileSync(f, 'utf8')).join('\n');
 
 const decode = (s) => s
   .replace(/&amp;/g, '&')
