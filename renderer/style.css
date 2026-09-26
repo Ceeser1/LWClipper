@@ -2023,6 +2023,13 @@ body.layer-alpha * {
   font-size: 12px;
 }
 
+/* V3. The Settings cogwheel, on a generated layer's clip. */
+.clip-mark__icon {
+  width: 11px;
+  height: 11px;
+  pointer-events: none;
+}
+
 /* A square with one corner filled, which is what placing a layer in a corner of
    the frame looks like. Sized with the group marker rather than with the crop
    glyph beside it, which is drawn heavier at the same point size. */
@@ -2280,6 +2287,33 @@ body.layer-alpha * {
 .clip-menu__item:disabled {
   color: #66666f;
   cursor: default;
+}
+
+/* V3. The entry that opens a submenu, with the arrow the user asked for. */
+.clip-menu__sub {
+  display: flex;
+  flex-direction: column;
+}
+
+.clip-menu__item--more {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.clip-menu__item--more::after {
+  content: '\25B8';
+}
+
+/* Placed by script beside its entry, in the window's coordinates, so it is
+   fixed like the menu it came from. */
+.clip-menu--sub {
+  z-index: 21;
+  min-width: 90px;
+}
+
+.clip-menu--sub[hidden] {
+  display: none;
 }
 
 /* Fixed rather than absolute, so it covers the window regardless of scroll or
@@ -3208,4 +3242,531 @@ button.crop-remove-btn:hover:not(:disabled) {
 .render-frame-res {
   justify-content: center;
   margin-top: 10px;
+}
+
+/* ---- V3: generated media settings and the colour picker ---- */
+
+/* The picker opens over the modal that asked for it. Later in the page would
+   be enough on its own, but the Edit Text modal of 30f comes after it in the
+   markup, so the order is said rather than left to where the markup sits. */
+.modal--over {
+  z-index: 11;
+}
+
+/* The same checkerboard the bar clip draws on the timeline, so transparency
+   looks the same wherever it shows. */
+.color-swatch,
+.color-bar--alpha,
+.gen-stage[data-checker="true"] .gen-canvas {
+  background: repeating-conic-gradient(#9a9aa2 0 25%, #6a6a72 0 50%) 0 0 / 12px 12px;
+}
+
+/* A colour as a button: the fill over the checkerboard, so a colour with alpha
+   below 255 shows as see-through before the picker is opened. */
+.color-swatch {
+  width: 64px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid #505058;
+  overflow: hidden;
+}
+
+.color-swatch__fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+button.color-swatch:hover:not(:disabled) {
+  background: repeating-conic-gradient(#9a9aa2 0 25%, #6a6a72 0 50%) 0 0 / 12px 12px;
+  border-color: #ebebf0;
+}
+
+.color-panel {
+  text-align: center;
+}
+
+/* Three columns: the wheel, Brightness and Alpha. The boxes run under the
+   first two, and A sits alone under the Alpha bar. */
+.color-body {
+  display: grid;
+  grid-template-columns: 200px 24px 24px;
+  grid-template-rows: 200px auto;
+  column-gap: 16px;
+  row-gap: 12px;
+  justify-content: center;
+  user-select: none;
+  touch-action: none;
+}
+
+.color-wheel {
+  position: relative;
+  width: 200px;
+  height: 200px;
+  cursor: crosshair;
+}
+
+.color-wheel__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* A ring rather than a dot, so the colour it sits on shows through it. White
+   with a dark ring either side, the same way the place rings stay visible over
+   a white picture. */
+.color-wheel__dot {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  border: 2px solid #ffffff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7), inset 0 0 0 1px rgba(0, 0, 0, 0.7);
+  pointer-events: none;
+}
+
+.color-bar {
+  position: relative;
+  width: 24px;
+  height: 200px;
+  border: 1px solid #505058;
+  border-radius: 3px;
+  cursor: ns-resize;
+}
+
+.color-bar__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* The draggable bar: across the whole bar and a little past either side of it,
+   so it can be seen where it crosses a colour of its own shade. */
+.color-bar__mark {
+  position: absolute;
+  left: -5px;
+  right: -5px;
+  height: 6px;
+  margin-top: -3px;
+  border: 2px solid #ffffff;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7), inset 0 0 0 1px rgba(0, 0, 0, 0.7);
+  pointer-events: none;
+}
+
+.color-boxes {
+  grid-column: 1 / 3;
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.color-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  color: #b8b8c0;
+  font-size: 12px;
+}
+
+.color-box input {
+  width: 42px;
+  padding: 3px 4px;
+  text-align: center;
+  font-size: 12px;
+}
+
+.color-box--hex input {
+  width: 76px;
+}
+
+/* Centred under the Alpha bar, which is narrower than the box: the box hangs
+   out an equal amount either side of the column rather than pushing it wider. */
+.color-box--alpha {
+  grid-column: 3;
+  justify-self: center;
+  width: 42px;
+}
+
+/* The settings over the preview, two by two. */
+.gen-grid {
+  display: grid;
+  grid-template-columns: repeat(2, max-content);
+  justify-content: center;
+  gap: 10px 36px;
+  margin-bottom: 12px;
+}
+
+.gen-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.gen-field__caption {
+  min-width: 72px;
+  text-align: right;
+  color: #b8b8c0;
+}
+
+.gen-field__slider {
+  width: 180px;
+}
+
+.gen-field__unit {
+  width: 16px;
+  text-align: left;
+  color: #b8b8c0;
+}
+
+.gen-choice {
+  display: flex;
+  gap: 4px;
+}
+
+.gen-choice button {
+  min-width: 58px;
+}
+
+.gen-num {
+  width: 52px;
+  padding: 2px 4px;
+  font-size: 12px;
+  font-weight: bold;
+  text-align: center;
+}
+
+/* 16:9 whatever the project's shape, the rule the crop stage follows, with the
+   frame letterboxed inside it by the script. */
+.gen-stage {
+  position: relative;
+  margin: 0 auto;
+  background: #1b1b20;
+  overflow: hidden;
+}
+
+.gen-canvas {
+  position: absolute;
+  display: block;
+}
+
+.gen-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  color: #b8b8c0;
+  cursor: pointer;
+}
+
+/* ---- V3, 30f: Edit Text ---- */
+
+/* One row of tools over the frame, wrapping on a narrow window. Groups that
+   belong together keep together. */
+.text-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 14px;
+  margin-bottom: 10px;
+}
+
+.text-tools {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.text-tool {
+  width: 30px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  font-family: Georgia, "Times New Roman", serif;
+}
+
+.text-tool svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+}
+
+.text-tool svg rect {
+  fill: currentColor;
+  stroke: none;
+}
+
+/* The letters every editor uses, drawn by the stylesheet so translateDom does
+   not take the B for the colour picker's blue. */
+.text-tool--bold::before {
+  content: 'B';
+  font-weight: bold;
+}
+
+.text-tool--italic::before {
+  content: 'I';
+  font-style: italic;
+}
+
+.text-tool--underline::before {
+  content: 'U';
+  text-decoration: underline;
+}
+
+.text-tool--strike::before {
+  content: 'S';
+  text-decoration: line-through;
+}
+
+.color-swatch--tool {
+  width: 44px;
+  height: 28px;
+}
+
+/* A box with an arrow, and the list the arrow opens under it. */
+.combo {
+  position: relative;
+  display: flex;
+}
+
+/* Two classes, to outweigh the plain text input rule's radius. */
+.combo .combo__box {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.combo--font .combo__box {
+  width: 190px;
+}
+
+.combo--size .combo__box {
+  width: 48px;
+  text-align: center;
+}
+
+.combo__arrow {
+  width: 22px;
+  padding: 0;
+  border-left: none;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  position: relative;
+}
+
+.combo__arrow::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  margin: -2px 0 0 -4px;
+  border: 4px solid transparent;
+  border-top: 5px solid currentColor;
+  border-bottom: none;
+}
+
+.combo__list {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 5;
+  min-width: 100%;
+  max-height: 280px;
+  margin-top: 2px;
+  overflow-y: auto;
+  background: #17171a;
+  border: 1px solid #505058;
+  border-radius: 4px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  text-align: left;
+}
+
+.combo__list[hidden] {
+  display: none;
+}
+
+.combo--font .combo__list {
+  width: 280px;
+}
+
+.combo__item {
+  padding: 4px 10px;
+  font-size: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #dcdce2;
+  cursor: pointer;
+}
+
+.combo--size .combo__item {
+  font-size: 13px;
+  text-align: center;
+}
+
+.combo__item:hover {
+  background: #2e2e36;
+}
+
+.combo__item--lit,
+.combo__item--lit:hover {
+  background: #3d5a45;
+}
+
+.text-modes {
+  justify-content: center;
+  margin-bottom: 8px;
+}
+
+/* The words stand over the frame in Edit mode, placed by the script where the
+   canvas is. Scrolls when they run past the frame, without a scrollbar, which
+   would take width and wrap the lines differently from the render. */
+.text-frame {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  justify-content: safe center;
+  overflow: auto;
+  scrollbar-width: none;
+  cursor: text;
+}
+
+.text-frame[hidden] {
+  display: none;
+}
+
+.text-frame[data-v="top"] {
+  justify-content: flex-start;
+}
+
+.text-frame[data-v="bottom"] {
+  justify-content: safe flex-end;
+}
+
+.text-edit {
+  width: 100%;
+  min-height: 1em;
+  outline: none;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  paint-order: stroke fill;
+  -webkit-text-stroke: 0 transparent;
+  text-align: center;
+}
+
+/* ---- V3, 31a: the text box ---- */
+
+/* The grips sit astride the box's lines, and a box on the frame's edge puts
+   them half off the frame, so the stage lets them show past its own edge. */
+#textStage {
+  overflow: visible;
+}
+
+.text-frame[data-boxed="true"] {
+  outline: 1px dashed rgba(235, 235, 240, 0.45);
+}
+
+/* A frame line a drag has snapped to: the green the timeline lights a snap in. */
+.text-guide {
+  position: absolute;
+  background: #78c88c;
+  pointer-events: none;
+}
+
+.text-guide[hidden] {
+  display: none;
+}
+
+.text-guide--x {
+  width: 1px;
+  margin-left: -0.5px;
+}
+
+.text-guide--y {
+  height: 1px;
+  margin-top: -0.5px;
+}
+
+.text-box[hidden] {
+  display: none;
+}
+
+/* ---- V3, 30g: Outline and Shadow ---- */
+
+/* Over the Edit Text modal and a little narrower than it, so its edges show
+   round this one and it reads as opened from there. */
+.modal__panel--fx {
+  min-width: 64vw;
+}
+
+/* A settings grid wider than the panel's share of the window widens the panel
+   rather than spilling out of it: centred, it spilled out of both sides, and
+   the left side, which cannot be scrolled to, took the captions with it. The
+   Shadow grid is 678px, and at the smallest window, 820, a modal has 780. */
+.modal__panel--fx,
+#barModal .modal__panel {
+  width: max-content;
+}
+
+#barModal .modal__panel {
+  min-width: 80vw;
+}
+
+/* The picker opens over these two as well, so it is one step higher again. */
+.modal--top {
+  z-index: 12;
+}
+
+.gen-field__unit--deg::before {
+  content: "\00B0";
+}
+
+/* Where the shadow falls, turned by the script to the Position slider's
+   angle: 0 to the right, positive clockwise, the way the slider counts. */
+.fx-arrow {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  fill: none;
+  stroke: #b8b8c0;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.fx-arrow circle {
+  stroke: #505058;
+}
+
+/* ---- V3, 31b: rotation ---- */
+
+/* The corner circles of the text box turn it rather than size it, so they get
+   a turning cursor of their own in place of the crop's diagonal ones: a
+   circular arrow, white on a dark edge so it shows on any picture. */
+.text-rotor {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M18.5 9.5A7 7 0 1 0 19 14' stroke='%23000' stroke-width='4'/%3E%3Cpath d='M19.5 4.5v5h-5' stroke='%23000' stroke-width='4'/%3E%3Cpath d='M18.5 9.5A7 7 0 1 0 19 14' stroke='%23fff' stroke-width='2'/%3E%3Cpath d='M19.5 4.5v5h-5' stroke='%23fff' stroke-width='2'/%3E%3C/g%3E%3C/svg%3E") 12 12, grab;
+}
+
+/* The angle while a corner is dragged, beside the box's centre. */
+.text-angle {
+  position: absolute;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(20, 20, 24, 0.85);
+  color: #ebebf0;
+  font-size: 12px;
+  font-weight: bold;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+
+.text-angle[hidden] {
+  display: none;
 }

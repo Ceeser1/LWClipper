@@ -903,3 +903,145 @@ test('a percentage from outside the range is held inside it', () => {
   assert.equal(G.scaleFromSlider(null), G.PLACE_SCALE_MIN);
   assert.equal(G.sliderFromScale(''), G.PLACE_SCALE_MIN);
 });
+
+// ---- V3, 31a. The text box ----
+
+const BOX = { x: 100, y: 100, w: 400, h: 200 };
+
+test('textBoxEdge moves one side and leaves the others', () => {
+  assert.deepEqual(G.textBoxEdge(BOX, 'right', 50.4, false, SMALL).box, { x: 100, y: 100, w: 450, h: 200 });
+  assert.deepEqual(G.textBoxEdge(BOX, 'left', -30, false, SMALL).box, { x: 70, y: 100, w: 430, h: 200 });
+  assert.deepEqual(G.textBoxEdge(BOX, 'top', 20, false, SMALL).box, { x: 100, y: 120, w: 400, h: 180 });
+  assert.deepEqual(G.textBoxEdge(BOX, 'bottom', -20, false, SMALL).box, { x: 100, y: 100, w: 400, h: 180 });
+});
+
+test('textBoxEdge holds to the frame and to the least size', () => {
+  assert.equal(G.textBoxEdge(BOX, 'left', -500, false, SMALL).box.x, 0);
+  assert.equal(G.textBoxEdge(BOX, 'right', 5000, false, SMALL).box.w, 1280 - 100);
+  const shut = G.textBoxEdge(BOX, 'right', -1000, false, SMALL).box;
+  assert.equal(shut.w, G.TEXT_BOX_MIN);
+  assert.equal(shut.x, 100);
+  assert.equal(G.textBoxEdge(BOX, 'top', 1000, false, SMALL).box.h, G.TEXT_BOX_MIN);
+});
+
+test('textBoxEdge mirrored keeps the centre, whole pixels, and stops at the nearer edge', () => {
+  const r = G.textBoxEdge(BOX, 'right', 30, true, SMALL).box;
+  assert.deepEqual(r, { x: 70, y: 100, w: 460, h: 200 });
+  const l = G.textBoxEdge(BOX, 'left', 10, true, SMALL).box;
+  assert.deepEqual(l, { x: 110, y: 100, w: 380, h: 200 });
+  // Centre 300 is 300 from the left edge, so the pair stops there.
+  assert.deepEqual(G.textBoxEdge(BOX, 'right', 900, true, SMALL).box, { x: 0, y: 100, w: 600, h: 200 });
+  const tight = G.textBoxEdge(BOX, 'right', -900, true, SMALL).box;
+  assert.equal(tight.w, G.TEXT_BOX_MIN);
+  assert.equal(tight.x + tight.w / 2, 300);
+  // An odd sum stays about its half pixel centre.
+  const odd = G.textBoxEdge({ x: 101, y: 0, w: 400, h: 50 }, 'right', 7.3, true, SMALL).box;
+  assert.equal(odd.x + odd.x + odd.w, 101 + 501);
+  assert.ok(Number.isInteger(odd.x) && Number.isInteger(odd.w));
+});
+
+test('textBoxEdge snaps a side onto the frame edges and middle within reach', () => {
+  const mid = G.textBoxEdge(BOX, 'right', 136, false, SMALL, 8);
+  assert.equal(mid.box.x + mid.box.w, 640);
+  assert.equal(mid.snap, 640);
+  const edge = G.textBoxEdge(BOX, 'left', -95, false, SMALL, 8);
+  assert.equal(edge.box.x, 0);
+  assert.equal(edge.snap, 0);
+  const none = G.textBoxEdge(BOX, 'right', 120, false, SMALL, 8);
+  assert.equal(none.box.x + none.box.w, 620);
+  assert.equal(none.snap, null);
+  assert.equal(G.textBoxEdge(BOX, 'right', 136, false, SMALL, 0).snap, null);
+});
+
+test('textBoxMove moves, holds to the frame, and snaps edges and centre', () => {
+  assert.deepEqual(G.textBoxMove(BOX, 10.4, -20, SMALL).box, { x: 110, y: 80, w: 400, h: 200 });
+  assert.deepEqual(G.textBoxMove(BOX, -900, 900, SMALL).box, { x: 0, y: 520, w: 400, h: 200 });
+  // Centre 300 + 336 = 636, four off the middle: it lands on 640.
+  const c = G.textBoxMove(BOX, 336, 0, SMALL, 8);
+  assert.equal(c.box.x + c.box.w / 2, 640);
+  assert.equal(c.snapX, 640);
+  assert.equal(c.snapY, null);
+  const top = G.textBoxMove(BOX, 0, -94, SMALL, 8);
+  assert.equal(top.box.y, 0);
+  assert.equal(top.snapY, 0);
+  const bottom = G.textBoxMove(BOX, 0, 415, SMALL, 8);
+  assert.equal(bottom.box.y + bottom.box.h, 720);
+  assert.equal(bottom.snapY, 720);
+  // A box wider than the frame could never be held inside it; it sits at 0.
+  assert.equal(G.textBoxMove({ x: 0, y: 0, w: 2000, h: 10 }, 50, 0, SMALL).box.x, 0);
+});
+
+test('isWholeBox: none, or the frame to the pixel', () => {
+  assert.equal(G.isWholeBox(null, SMALL), true);
+  assert.equal(G.isWholeBox({ x: 0, y: 0, w: 1280, h: 720 }, SMALL), true);
+  assert.equal(G.isWholeBox({ x: 0.2, y: 0, w: 1279.9, h: 720 }, SMALL), true);
+  assert.equal(G.isWholeBox({ x: 0, y: 0, w: 1279, h: 720 }, SMALL), false);
+});
+
+// ---- 31b, rotation ----
+
+test('textTurn: whole degrees in (-180, 180], on a quarter turn within 2', () => {
+  // The user's figures.
+  assert.equal(G.textTurn(88), 90);
+  assert.equal(G.textTurn(92), 90);
+  assert.equal(G.textTurn(87), 87);
+  assert.equal(G.textTurn(93), 93);
+  assert.equal(G.textTurn(1.6), 0);
+  assert.equal(G.textTurn(-2), 0);
+  assert.equal(G.textTurn(-3), -3);
+  assert.equal(G.textTurn(-89), -90);
+  // Round the back: -180 is 180, and so is anything within 2 of it.
+  assert.equal(G.textTurn(-180), 180);
+  assert.equal(G.textTurn(-178.6), 180);
+  assert.equal(G.textTurn(181), 180);
+  assert.equal(G.textTurn(185), -175);
+  assert.equal(G.textTurn(450), 90);
+  assert.equal(G.textTurn(44.4), 44);
+  assert.ok(Object.is(G.textTurn(-0.4), 0));
+});
+
+test('textTurnDrag: how far the pointer went round the centre, clockwise positive', () => {
+  // From the right to straight down is a quarter turn clockwise on a screen.
+  assert.equal(G.textTurnDrag(0, [10, 0], [0, 10]), 90);
+  assert.equal(G.textTurnDrag(30, [10, 0], [0, -10]), -60);
+  // Across the back, where atan2 jumps.
+  assert.equal(G.textTurnDrag(170, [-10, 1], [-10, -1]), 180);
+  assert.equal(G.textTurnDrag(0, [-10, 1], [-10, -3]), 22);
+  // Near a quarter turn it lands on it.
+  const a = Math.atan2(10, Math.tan(Math.PI / 180 * 1.5) * 10);
+  assert.equal(G.textTurnDrag(0, [10, 0], [Math.cos(a), Math.sin(a)]), 90);
+});
+
+test('textBoxEdgeTurned: the opposite side stays put on the screen', () => {
+  const box = { x: 100, y: 100, w: 400, h: 200 };
+  const frame = { width: 1280, height: 720 };
+  // Not turned it is the plain resize.
+  assert.deepEqual(G.textBoxEdgeTurned(box, 'right', 50, false, 0, frame).box, { x: 100, y: 100, w: 450, h: 200 });
+  assert.deepEqual(G.textBoxEdgeTurned(box, 'left', -50, false, 0, frame).box, { x: 50, y: 100, w: 450, h: 200 });
+  // A quarter turn clockwise: the box's right side faces down, so growing it
+  // moves the centre down and leaves the left side (now the top) where it was.
+  const r = G.textBoxEdgeTurned(box, 'right', 100, false, 90, frame).box;
+  assert.deepEqual(r, { x: 50, y: 150, w: 500, h: 200 });
+  const top = (b) => b.y + b.h / 2 - b.w / 2;
+  assert.equal(top(r), top(box));
+  // And the top side, turned, faces right: growing it outwards (a negative delta)
+  // moves the centre left.
+  assert.deepEqual(G.textBoxEdgeTurned(box, 'top', -40, false, 90, frame).box, { x: 120, y: 80, w: 400, h: 240 });
+  // Mirrored, the centre holds.
+  const m = G.textBoxEdgeTurned(box, 'right', 30, true, 37, frame).box;
+  assert.deepEqual([m.x + m.w / 2, m.y + m.h / 2, m.w], [300, 200, 460]);
+  // Never below the least size.
+  assert.equal(G.textBoxEdgeTurned(box, 'right', -1000, false, 45, frame).box.w, G.TEXT_BOX_MIN);
+});
+
+test('textBoxMoveTurned: the centre snaps and stays in the frame', () => {
+  const frame = { width: 1280, height: 720 };
+  const box = { x: 100, y: 100, w: 400, h: 200 };
+  const r = G.textBoxMoveTurned(box, 337, 157, frame, 5);
+  assert.deepEqual(r.box, { x: 440, y: 260, w: 400, h: 200 });
+  assert.deepEqual([r.snapX, r.snapY], [640, 360]);
+  // The centre held on the frame's edge, the box half off it.
+  const off = G.textBoxMoveTurned(box, -900, 0, frame, 0);
+  assert.equal(off.box.x + off.box.w / 2, 0);
+  assert.equal(off.snapX, null);
+});

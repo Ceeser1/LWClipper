@@ -510,6 +510,19 @@ test('a still is looped for its own length rather than seeked into', () => {
   assert.ok(!flags.includes('-ss'), flags.join(' '));
 });
 
+test('a generated layer goes in as the PNG it was drawn into, whole frame at 0:0', () => {
+  // What the window hands over: the layer with its picture's path and the
+  // project's size filled in.
+  const T = require('../src/timeline');
+  const gen = { ...T.createLayer({ kind: 'gen', gen: { form: 'bar' } }), src: 'g.png',
+    sourceWidth: 1920, sourceHeight: 1080 };
+  const args = buildComposeArgs({ layers: [gen], project: HD, output: 'out.mp4' });
+  assert.deepEqual(inputFor(args, 'g.png'), ['-loop', '1', '-framerate', '30', '-t', '10.0']);
+  const graph = args[args.indexOf('-filter_complex') + 1];
+  assert.ok(!/scale=/.test(graph), graph);
+  assert.match(graph, /overlay=0:0:/);
+});
+
 test('a still loops at the project rate, not at the demuxer default', () => {
   const args = buildComposeArgs({
     layers: [still({ id: 's', duration: 2 })],

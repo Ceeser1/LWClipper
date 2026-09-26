@@ -221,6 +221,11 @@ function translateDom(root = document.body, wasShowing = {}) {
     acceptNode(node) {
       const tag = node.parentElement && node.parentElement.tagName;
       if (tag === 'SCRIPT' || tag === 'STYLE') return NodeFilter.FILTER_REJECT;
+      // V3. What the user typed and the names of their fonts are not the app's
+      // words, even when one of them happens to be spelt like a key.
+      if (node.parentElement && node.parentElement.closest('[data-no-translate]')) {
+        return NodeFilter.FILTER_REJECT;
+      }
       return node.nodeValue.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
     },
   });
@@ -815,7 +820,8 @@ function outputIsAudio() {
     // announcing it as audio would put an equalizer where a user has not yet
     // put anything at all.
     if (!layers.length) return false;
-    return !layers.some((l) => l.type === 'video' && l.enabled && l.src);
+    // V3. A generated layer is a picture with no file behind it.
+    return !layers.some((l) => l.type === 'video' && l.enabled && (l.src || l.kind === 'gen'));
   }
   if (!media) return false;
   return !!media.isAudio || !videoEnabledToggle.checked;
@@ -3499,6 +3505,9 @@ function buildLayerClip(track, layer) {
   // whole path, which is longer than a tooltip usefully is; layer.name is not
   // it either, because a download's title arrives there instead of a filename.
   clip.title = (layer.src || '').split(/[\\/]/).pop();
+  // V3. A generated layer has no file to be named after, so it is named after
+  // what it shows.
+  if (layer.kind === 'gen') clip.title = genLabel(layer);
   // The thumbnails or the waveform, on a canvas only as wide as the part of the
   // clip that is actually on screen. Sizing it to the whole clip would ask for
   // a 260000px canvas at full zoom on a ten minute layer.
@@ -3538,8 +3547,23 @@ function buildLayerClip(track, layer) {
     mark.style.color = marker.colour;
     marks.appendChild(mark);
   }
-  // Video only: there is nothing to crop out of a waveform.
-  if (layer.type === 'video') {
+  // V3. A generated layer has the cogwheel instead, the one from Settings,
+  // since there is nothing in it to crop: its picture is the frame. The user,
+  // for text: "a cogwheel button on the right, use the one from settings".
+  if (layer.kind === 'gen') {
+    const cog = makeClipMark('clip-mark--gen', '',
+      layer.gen.form === 'bar' ? t('Bar Settings') : t('Edit Text'), () => {
+        selectLayer(layer.id);
+        openGenSettings(layer.id, false);
+      });
+    const icon = document.createElement('img');
+    icon.className = 'clip-mark__icon';
+    icon.src = '../images/settings.png';
+    icon.alt = '';
+    cog.appendChild(icon);
+    marks.appendChild(cog);
+  } else if (layer.type === 'video') {
+    // Video only: there is nothing to crop out of a waveform.
     const crop = makeClipMark('clip-mark--crop', '⛶', t('Crop layer'), () => {
       selectLayer(layer.id);
       openCrop(layer.id);
@@ -4667,7 +4691,7 @@ async function ensurePeaks(layer, want) {
  * pixel into a time and then into a position in the source.
  */
 function drawClipArt(layer, canvas, leftX, width, height) {
-  if (!(width > 0) || !(height > 0) || !layer.src) return;
+  if (!(width > 0) || !(height > 0) || (!layer.src && layer.kind !== 'gen')) return;
   const dpr = window.devicePixelRatio || 1;
   const wantW = Math.max(1, Math.round(width * dpr));
   const wantH = Math.max(1, Math.round(height * dpr));
@@ -4680,6 +4704,7 @@ function drawClipArt(layer, canvas, leftX, width, height) {
   ctx.clearRect(0, 0, width, height);
 
   if (layer.type === 'audio') drawClipWaveform(layer, ctx, leftX, width, height);
+  else if (layer.kind === 'gen') drawClipGen(layer, ctx, leftX, width, height);
   else if (layer.kind === 'image') drawClipStill(layer, ctx, leftX, width, height);
   else drawClipFilmstrip(layer, ctx, leftX, width, height);
   drawClipFades(layer, ctx, leftX, width, height);
@@ -4825,6 +4850,47 @@ function drawClipStill(layer, ctx, leftX, width, height) {
       entry.width * win.x, entry.height * win.y, sw, sh,
       x, 0, drawW, height);
   }
+}
+
+/**
+ * V3. What a generated clip looks like on the timeline: a bar is its colour,
+ * over a checkerboard so its alpha shows, and a text is its own words in its
+ * own font, held at the left of whatever part of the clip is on screen so a
+ * long clip scrolled halfway still says what it is.
+ *
+ * Not the picture, which is what an image clip shows: a frame of mostly
+ * nothing with a line of text in the middle is unreadable at clip height.
+ */
+function drawClipGen(layer, ctx, leftX, width, height) {
+  const gen = layer.gen;
+  if (!gen) return;
+  if (gen.form === 'bar') {
+    const cell = Math.max(3, Math.round(height / 4));
+    const clipX = timelineView.timeToX(tlView, layer.start);
+    const shift = ((((leftX - clipX) % (cell * 2)) + cell * 2) % (cell * 2));
+    ctx.fillStyle = '#9a9aa2';
+    ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = '#6a6a72';
+    for (let y = 0, row = 0; y < height; y += cell, row += 1) {
+      for (let x = -shift + (row % 2) * cell; x < width; x += cell * 2) {
+        ctx.fillRect(x, y, cell, cell);
+      }
+    }
+    ctx.fillStyle = gen.bar.color;
+    ctx.fillRect(0, 0, width, height);
+    return;
+  }
+  const text = gen.text.runs.map((r) => r.text).join('').replace(/\s+/g, ' ').trim();
+  if (!text) return;
+  const style = gen.text.style;
+  // The clip's own left edge while it is on screen, and the screen's left edge
+  // once it has scrolled off to the left.
+  const clipX = timelineView.timeToX(tlView, layer.start);
+  const x = Math.max(0, clipX - leftX) + 6;
+  ctx.font = textLayout.fontString({ ...style, size: Math.max(8, height * 0.5) });
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#e8e8ee';
+  ctx.fillText(text, x, height / 2);
 }
 
 function drawClipFilmstrip(layer, ctx, leftX, width, height) {
@@ -5026,7 +5092,9 @@ function sizeCompositeCanvas() {
 function noteSourceSize() {
   if (compositeFrame) return;
   for (const l of layers) {
-    if (l.type !== 'video') continue;
+    // V3. A generated layer is drawn at the project's size, so taking the size
+    // from one would be the project taking its size from itself.
+    if (l.type !== 'video' || l.kind === 'gen') continue;
     const source = layerSource(l);
     if (!source) continue;
     // The rate travels with the size for the same reason the size is kept once
@@ -5046,6 +5114,13 @@ function noteSourceSize() {
 // The same dance as dropPreviewSources, and for the same reason: on Windows one
 // remaining handle on a file is enough to make a cache clear silently fail.
 function releaseDecoder(entry) {
+  if (entry.gen) {
+    // A canvas holds no file. Shrinking it is what gives its memory back, which
+    // at 4K is 33 MB a layer.
+    entry.el.width = 0;
+    entry.el.height = 0;
+    return;
+  }
   if (entry.still) {
     // An <img> holds no handle on the file once its src is gone, and there is
     // no load() on one to call.
@@ -5106,7 +5181,107 @@ function addStillDecoder(layer) {
   });
 }
 
+/**
+ * V3. A generated layer's decoder: a canvas the app draws the layer into, at
+ * the project's size, shaped like the image entry above so that everything
+ * that draws a layer draws this one without asking what it is. It is a still
+ * in every sense that flag means.
+ *
+ * Drawn when it is made and again whenever what it depends on changes, which
+ * paintGen finds out for itself from the key, so an edit, an undo and a new
+ * project size all reach it without any of them having to know it is there.
+ */
+function addGenDecoder(layer) {
+  const canvas = document.createElement('canvas');
+  const entry = { el: canvas, width: 0, height: 0, still: true, gen: true, key: null };
+  decoders.set(layer.id, entry);
+  paintGen(layer, entry);
+  loadGenFonts(layer.gen).then((loaded) => {
+    if (!loaded || decoders.get(layer.id) !== entry) return;
+    // A font that was still loading when the first picture was drawn was drawn
+    // in the fallback, so draw it again now that it is here.
+    entry.key = null;
+    drawComposite();
+    drawTimeline();
+  });
+}
+
+/**
+ * The layer drawn into its canvas, unless the canvas already holds exactly
+ * that. Cheap to ask every frame: the key is one JSON string of a small object.
+ */
+function paintGen(layer, entry) {
+  const frame = projectFrame();
+  const key = genDraw.keyOf(layer.gen, frame.width, frame.height);
+  if (entry.key === key) return;
+  const canvas = entry.el;
+  if (canvas.width !== frame.width) canvas.width = frame.width;
+  if (canvas.height !== frame.height) canvas.height = frame.height;
+  genDraw.drawGen(canvas.getContext('2d'), layer.gen, frame.width, frame.height);
+  entry.width = frame.width;
+  entry.height = frame.height;
+  entry.key = key;
+  warnMissingFonts(layer.gen);
+}
+
+// Fonts the page has had to load before drawing with them. System fonts need
+// nothing and come back as an empty list at once; a font only half loaded when
+// the first picture is drawn would put the fallback into it silently.
+async function loadGenFonts(gen) {
+  let loaded = false;
+  for (const font of genDraw.fontsOf(gen)) {
+    try {
+      const faces = await document.fonts.load(font);
+      if (faces.length) loaded = true;
+    } catch {
+      // A font string the browser cannot parse draws in the fallback anyway.
+    }
+  }
+  return loaded;
+}
+
+/**
+ * Whether a font family is installed, by the one test that works for the
+ * fonts of the system: text set in it measures differently from text set in
+ * the fallback alone. Three generic fallbacks, because a font can happen to
+ * be exactly one of them, and Arial measured against a sans-serif that is
+ * Arial proves nothing.
+ */
+const fontChecks = new Map();
+let fontProbe = null;
+function fontInstalled(family) {
+  if (fontChecks.has(family)) return fontChecks.get(family);
+  if (!fontProbe) fontProbe = document.createElement('canvas').getContext('2d');
+  const sample = 'mmmmmmmmmmlli WQ@#0123456789';
+  let installed = false;
+  for (const generic of ['monospace', 'serif', 'sans-serif']) {
+    fontProbe.font = '72px ' + generic;
+    const plain = fontProbe.measureText(sample).width;
+    fontProbe.font = '72px "' + family.replace(/["\\]/g, '') + '", ' + generic;
+    if (fontProbe.measureText(sample).width !== plain) {
+      installed = true;
+      break;
+    }
+  }
+  fontChecks.set(family, installed);
+  return installed;
+}
+
+// Said once a family and session, when a project names a font this PC does
+// not have. The picture is still drawn, in the fallback, and the setting is
+// kept as it was, so the project comes back right on the PC that has it.
+const fontsWarned = new Set();
+function warnMissingFonts(gen) {
+  for (const family of genDraw.familiesOf(gen)) {
+    if (fontsWarned.has(family) || fontInstalled(family)) continue;
+    fontsWarned.add(family);
+    setStatus('The font {font} is not installed on this PC, a fallback font is used instead.',
+      { font: family });
+  }
+}
+
 function addDecoder(layer) {
+  if (layer.kind === 'gen') return addGenDecoder(layer);
   if (layer.kind === 'image') return addStillDecoder(layer);
   const v = document.createElement('video');
   v.muted = true;
@@ -5157,7 +5332,7 @@ function addDecoder(layer) {
 function syncDecoders() {
   const wanted = new Set();
   for (const l of layers) {
-    if (l.type !== 'video' || !l.src) continue;
+    if (l.type !== 'video' || (!l.src && l.kind !== 'gen')) continue;
     wanted.add(l.id);
     if (!decoders.has(l.id)) addDecoder(l);
   }
@@ -5191,6 +5366,7 @@ function syncDecoders() {
  */
 function drawLayerInto(ctx, canvas, layer, crop = layer.crop, render = layer.render) {
   const entry = decoders.get(layer.id);
+  if (entry && entry.gen) paintGen(layer, entry);
   if (!entry || !entry.width) return;
   const source = layerSource(layer);
   if (!source) return;
@@ -5940,7 +6116,8 @@ const KEEPS_SPACE = ['INPUT', 'TEXTAREA', 'SELECT'];
  * the preview behind an open missing-files panel.
  */
 function modalOpen() {
-  return !settingsModal.hidden || !cropModal.hidden || !choiceModal.hidden;
+  return !settingsModal.hidden || !cropModal.hidden || !choiceModal.hidden
+    || !barModal.hidden || !textModal.hidden || !colorModal.hidden || fxKind !== null;
 }
 // The same list for Ctrl+Z, and separate on purpose: these two guards are
 // about different keys and there is no reason they should have to move
@@ -6186,6 +6363,115 @@ document.addEventListener('keydown', (evt) => {
 
 let clipMenu = null;
 
+/**
+ * V3. "Add Media" and the submenu it opens, the user's A1: "Only usable on a
+ * video layer, greyed out on audio. Hovering it reveals the next menu". Shapes
+ * are not in it until they exist.
+ *
+ * The submenu opens beside the entry, on the right, and on the left when the
+ * right would run it off the window. It lives inside the menu's element even
+ * though it is placed outside its box, so the one outside-click test the menu
+ * already has covers it, and so moving the pointer from the entry into it
+ * never counts as leaving. It closes a moment after the pointer leaves, which
+ * is what lets a pointer cut the corner on the way to Bar.
+ */
+function addMediaEntry(menu, enabled, at) {
+  const wrap = document.createElement('div');
+  wrap.className = 'clip-menu__sub';
+  const entry = document.createElement('button');
+  entry.className = 'clip-menu__item clip-menu__item--more';
+  entry.setAttribute('role', 'menuitem');
+  entry.setAttribute('aria-haspopup', 'menu');
+  entry.textContent = t('Add Media');
+  entry.disabled = !enabled;
+  wrap.appendChild(entry);
+
+  const sub = document.createElement('div');
+  sub.className = 'clip-menu clip-menu--sub';
+  sub.setAttribute('role', 'menu');
+  sub.hidden = true;
+  for (const [form, label] of [['text', t('Text')], ['bar', t('Bar')]]) {
+    const b = document.createElement('button');
+    b.className = 'clip-menu__item';
+    b.setAttribute('role', 'menuitem');
+    b.textContent = label;
+    b.addEventListener('click', () => {
+      closeClipMenu();
+      addGenMedia(form, at);
+    });
+    sub.appendChild(b);
+  }
+  wrap.appendChild(sub);
+  menu.appendChild(wrap);
+  if (!enabled) return;
+
+  let closing = null;
+  const show = () => {
+    clearTimeout(closing);
+    if (!sub.hidden) return;
+    sub.hidden = false;
+    const r = entry.getBoundingClientRect();
+    const w = sub.offsetWidth;
+    const h = sub.offsetHeight;
+    // Level with the entry, less the submenu's own padding, so its first item
+    // sits beside the entry that opened it.
+    const left = r.right + w + 4 <= window.innerWidth ? r.right : r.left - w;
+    sub.style.left = Math.max(4, left) + 'px';
+    sub.style.top = Math.max(4, Math.min(r.top - 4, window.innerHeight - h - 4)) + 'px';
+  };
+  const hide = () => {
+    clearTimeout(closing);
+    closing = setTimeout(() => {
+      sub.hidden = true;
+    }, 250);
+  };
+  wrap.addEventListener('pointerenter', show);
+  wrap.addEventListener('pointerleave', hide);
+  entry.addEventListener('click', show);
+}
+
+/**
+ * V3. A new text or bar at `at`, on the row the user's rule gives it: the
+ * topmost empty video row, or a new one on top. Ten seconds, like an image.
+ * Its settings open straight away, and until they are accepted the new layer
+ * is not a step of its own: adding it and the first Accept are one undo step,
+ * and Cancel on that first opening takes it off again.
+ */
+function addGenMedia(form, at) {
+  if (!timelineDriving() || busy) return;
+  const gen = form === 'bar'
+    ? { form: 'bar' }
+    : { form: 'text', text: { runs: [{ text: t('Text'), style: {} }] } };
+  const rows = rowsOf('video');
+  genAddBefore = { layers, rows: laneRows.video, selected: selectedLayerId };
+  const added = timelineModel.addGen(layers, gen, at, rows);
+  if (added.inserted) laneRows.video = rows + 1;
+  selectedLayerId = added.layer.id;
+  setLayers(added.layers);
+  openGenSettings(added.layer.id, true);
+}
+
+/**
+ * V3. A generated layer's settings: the Bar Settings modal for a bar and the
+ * Edit Text modal for a text.
+ *
+ * `first` is the opening that follows adding it, where Cancel removes the
+ * layer and Accept commits the add and the settings as one step.
+ */
+function openGenSettings(id, first) {
+  const layer = timelineModel.layerById(layers, id);
+  if (!layer || layer.kind !== 'gen') return;
+  if (layer.gen.form === 'bar') openBarSettings(layer, first);
+  else openTextSettings(layer, first);
+}
+
+/** What a generated layer is called where it has to be named: its words, or Bar. */
+function genLabel(layer) {
+  if (!layer.gen || layer.gen.form === 'bar') return t('Bar');
+  const text = layer.gen.text.runs.map((r) => r.text).join('').replace(/\s+/g, ' ').trim();
+  return text.length > 60 ? text.slice(0, 59) + '...' : text || t('Text');
+}
+
 function closeClipMenu() {
   if (!clipMenu) return;
   clipMenu.remove();
@@ -6222,6 +6508,7 @@ function openClipMenu(evt, track) {
     });
     menu.appendChild(b);
   };
+  addMediaEntry(menu, type === 'video', at);
   item(t('Split here'), !!layer && timelineModel.canSplitAt(layer, at),
     () => splitSelected(at));
   item(t('Copy'), !!layer, () => copySelected());
@@ -9406,7 +9693,8 @@ function openCrop(layerId) {
     // Opened on a named row, or on whichever one is selected. Fixed here for
     // the life of the popup, which is what cropTargetLayer then reads.
     const target = (layerId && timelineModel.layerById(layers, layerId)) || cropTargetLayer();
-    if (!target || target.type !== 'video') return;
+    // V3. Nothing to crop out of a generated layer, whose picture is the frame.
+    if (!target || target.type !== 'video' || target.kind === 'gen') return;
     cropLayerId = target.id;
   } else {
     cropLayerId = null;
@@ -10109,7 +10397,9 @@ function openRenderCrop() {
   // hand back exactly the bars this window exists to get rid of.
   renderPins = new Map();
   for (const l of layers) {
-    if (l.type !== 'video') continue;
+    // V3. A generated layer is drawn at whatever size the frame becomes, so it
+    // has no pin. Accept carries it through reframeGen instead.
+    if (l.type !== 'video' || l.kind === 'gen') continue;
     const pin = renderPinOf(l);
     if (pin) renderPins.set(l.id, pin);
   }
@@ -10153,9 +10443,18 @@ renderAcceptBtn.addEventListener('click', () => {
   // The frame first, because everything that redraws below is a picture of it.
   compositeFrame = { ...from, width: out.width, height: out.height };
   sizeCompositeCanvas();
+  // Where the old frame went, which is where the base went: its origin in the
+  // new frame and its scale, the same move every pin made.
+  const base = renderBase;
+  const k = base.width / from.width;
   // Then every layer, pinned. One subtraction, which is all the reframe is once
   // the pins are carried in the same space as the frame.
   setLayers(layers.map((l) => {
+    // V3, 31a. A generated layer has no pin, but its sizes follow the picture
+    // and a text box moves with it. See timelineModel.reframeGen.
+    if (l.kind === 'gen') {
+      return { ...l, gen: timelineModel.reframeGen(l.gen, from.height, out.height, k, base.x - dx, base.y - dy) };
+    }
     const pin = pins.get(l.id);
     if (!pin) return l;
     return {
@@ -10194,6 +10493,1553 @@ for (const dot of renderBox.querySelectorAll('.crop-corner')) bindCorner(dot, re
 // outside the popup, so it can change while the popup is open.
 accurateToggle.addEventListener('change', () => {
   if (!cropModal.hidden && cropDraft) updateCropNote();
+});
+
+// ---- V3, 30d. The colour picker ----
+//
+// Ours rather than <input type=color>, which in Electron 33 has no alpha, and
+// the outline and shadow colours need one. One picker for every colour the
+// generated media settings have: pickColor opens it over whichever modal asked
+// and settles with `#rrggbbaa` on Accept and null on Cancel. `onInput` is told
+// every change on the way, so the modal behind can show the colour live; on
+// Cancel it is that modal's job to put its own colour back.
+//
+// The arithmetic is src/colorModel.js. The state is hue, saturation, value
+// and alpha, and every box is worked out from it, so dragging the brightness
+// to black and back, or typing a grey, does not lose the hue.
+
+const colorModal = el('colorModal');
+const colorWheel = el('colorWheel');
+const colorWheelCanvas = el('colorWheelCanvas');
+const colorWheelDot = el('colorWheelDot');
+const colorValueBar = el('colorValueBar');
+const colorAlphaBar = el('colorAlphaBar');
+const colorHexBox = el('colorHexBox');
+const colorByteBoxes = {
+  r: el('colorRBox'),
+  g: el('colorGBox'),
+  b: el('colorBBox'),
+  a: el('colorABox'),
+};
+const colorAcceptBtn = el('colorAcceptBtn');
+const colorCancelBtn = el('colorCancelBtn');
+
+let pickState = null;    // { h, s, v, a } while the picker is open
+let pickOnInput = null;
+let pickSettle = null;   // the open promise's resolve
+
+function pickColor(color, onInput) {
+  // One at a time: a second request settles the first as cancelled.
+  if (pickSettle) settlePick(false);
+  pickState = colorModel.stateOf(color);
+  pickOnInput = onInput || null;
+  colorModal.hidden = false;
+  drawPickWheel();
+  showPick(null);
+  return new Promise((resolve) => {
+    pickSettle = resolve;
+  });
+}
+
+function settlePick(accept) {
+  if (!pickSettle) return;
+  const resolve = pickSettle;
+  const out = accept ? colorModel.colorOf(pickState) : null;
+  pickSettle = null;
+  pickOnInput = null;
+  pickState = null;
+  colorModal.hidden = true;
+  resolve(out);
+}
+
+// The wheel at full brightness, hue round it and saturation out from the
+// middle. It does not change with the state, so it is drawn once per size
+// rather than on every move. Pixel by pixel, which at 200 across is forty
+// thousand, with the rim faded over one pixel so it is not jagged.
+function drawPickWheel() {
+  const dpr = window.devicePixelRatio || 1;
+  const size = Math.max(1, Math.round(colorWheel.clientWidth * dpr));
+  if (colorWheelCanvas.width === size && colorWheelCanvas.dataset.drawn) return;
+  colorWheelCanvas.width = size;
+  colorWheelCanvas.height = size;
+  const ctx = colorWheelCanvas.getContext('2d');
+  const img = ctx.createImageData(size, size);
+  const r = size / 2;
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const dx = x + 0.5 - r;
+      const dy = y + 0.5 - r;
+      const edge = Math.min(1, Math.max(0, r - Math.hypot(dx, dy)));
+      if (!edge) continue;
+      const hs = colorModel.wheelPick(dx, dy, r);
+      const c = colorModel.hsvToRgb(hs.h, hs.s, 1);
+      const i = (y * size + x) * 4;
+      img.data[i] = c.r;
+      img.data[i + 1] = c.g;
+      img.data[i + 2] = c.b;
+      img.data[i + 3] = Math.round(edge * 255);
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  colorWheelCanvas.dataset.drawn = '1';
+}
+
+// One vertical bar: its canvas at the screen's pixels, filled top to bottom,
+// and its mark at `frac` down from the top.
+function paintPickBar(bar, top, bottom, frac) {
+  const canvas = bar.querySelector('canvas');
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.max(1, Math.round(canvas.clientWidth * dpr));
+  const h = Math.max(1, Math.round(canvas.clientHeight * dpr));
+  if (canvas.width !== w) canvas.width = w;
+  if (canvas.height !== h) canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, w, h);
+  const grad = ctx.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, top);
+  grad.addColorStop(1, bottom);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+  bar.querySelector('.color-bar__mark').style.top = (frac * canvas.clientHeight) + 'px';
+}
+
+/**
+ * Everything the picker shows, from the state. `except` is the box being typed
+ * in, which is left as the user has it: rewriting it would move the caret and
+ * turn a half-typed "1" into whatever the colour rounds to.
+ */
+function showPick(except) {
+  const s = pickState;
+  if (!s) return;
+  const radius = colorWheel.clientWidth / 2;
+  const p = colorModel.wheelPoint(s.h, s.s, radius);
+  colorWheelDot.style.left = (radius + p.dx) + 'px';
+  colorWheelDot.style.top = (radius + p.dy) + 'px';
+  const full = colorModel.hsvToRgb(s.h, s.s, 1);
+  paintPickBar(colorValueBar, `rgb(${full.r}, ${full.g}, ${full.b})`, '#000000', 1 - s.v);
+  const c = colorModel.rgbOf(s);
+  paintPickBar(colorAlphaBar, `rgba(${c.r}, ${c.g}, ${c.b}, 1)`, `rgba(${c.r}, ${c.g}, ${c.b}, 0)`,
+    1 - s.a / 255);
+  if (except !== colorHexBox) colorHexBox.value = colorModel.hexOf(s);
+  const values = { ...c, a: s.a };
+  for (const [key, box] of Object.entries(colorByteBoxes)) {
+    if (box !== except) box.value = String(values[key]);
+  }
+}
+
+function changePick(next, except) {
+  if (!pickState || !next) return;
+  pickState = next;
+  showPick(except);
+  if (pickOnInput) pickOnInput(colorModel.colorOf(pickState));
+}
+
+// A drag on the wheel or a bar, which also acts on the press, so a click is a
+// pick. Whatever box had the caret lets go of it first, which is what writes
+// it back to the state if it was left half typed.
+function bindPickDrag(target, apply) {
+  target.addEventListener('pointerdown', (evt) => {
+    if (evt.button !== 0 || !pickState) return;
+    evt.preventDefault();
+    if (document.activeElement && colorModal.contains(document.activeElement)) {
+      document.activeElement.blur();
+    }
+    target.setPointerCapture(evt.pointerId);
+    apply(evt);
+    const move = (e) => apply(e);
+    const up = () => {
+      target.removeEventListener('pointermove', move);
+      target.removeEventListener('pointerup', up);
+      target.removeEventListener('pointercancel', up);
+    };
+    target.addEventListener('pointermove', move);
+    target.addEventListener('pointerup', up);
+    target.addEventListener('pointercancel', up);
+  });
+}
+
+// Down the bar from its top, 0 to 1, held to the bar past either end.
+function pickBarFrac(bar, evt) {
+  const r = bar.querySelector('canvas').getBoundingClientRect();
+  return Math.min(1, Math.max(0, (evt.clientY - r.top) / Math.max(1, r.height)));
+}
+
+bindPickDrag(colorWheel, (evt) => {
+  const r = colorWheelCanvas.getBoundingClientRect();
+  const hs = colorModel.wheelPick(evt.clientX - (r.left + r.width / 2),
+    evt.clientY - (r.top + r.height / 2), r.width / 2);
+  changePick({ ...pickState, h: hs.h, s: hs.s }, null);
+});
+
+bindPickDrag(colorValueBar, (evt) => {
+  changePick({ ...pickState, v: 1 - pickBarFrac(colorValueBar, evt) }, null);
+});
+
+bindPickDrag(colorAlphaBar, (evt) => {
+  changePick({ ...pickState, a: Math.round(255 * (1 - pickBarFrac(colorAlphaBar, evt))) }, null);
+});
+
+colorHexBox.addEventListener('input', () => {
+  if (!pickState) return;
+  const read = colorModel.readHex(colorHexBox.value, pickState);
+  if (read.text !== null) colorHexBox.value = read.text;
+  if (read.state) changePick(read.state, colorHexBox);
+});
+
+for (const [key, box] of Object.entries(colorByteBoxes)) {
+  box.addEventListener('input', () => {
+    if (!pickState) return;
+    const n = colorModel.readByte(box.value);
+    if (n === null) return;
+    // Past the range reads as its end, and the box says so at once rather
+    // than showing 300 against a colour that is using 255.
+    if (parseInt(box.value, 10) !== n) box.value = String(n);
+    if (key === 'a') {
+      changePick({ ...pickState, a: n }, box);
+      return;
+    }
+    const c = colorModel.rgbOf(pickState);
+    c[key] = n;
+    changePick(colorModel.withRgb(pickState, c.r, c.g, c.b), box);
+  });
+}
+
+// Leaving a box, or Enter in it, writes it back as the state has it: a half
+// typed hex, an empty R or a "007" all come back as the colour in force.
+for (const box of [colorHexBox, ...Object.values(colorByteBoxes)]) {
+  box.addEventListener('blur', () => showPick(null));
+  box.addEventListener('keydown', (evt) => {
+    if (evt.key !== 'Enter') return;
+    evt.preventDefault();
+    box.blur();
+  });
+}
+
+colorAcceptBtn.addEventListener('click', () => settlePick(true));
+colorCancelBtn.addEventListener('click', () => settlePick(false));
+
+let colorPressedBackdrop = false;
+colorModal.addEventListener('pointerdown', (evt) => {
+  colorPressedBackdrop = evt.target === colorModal;
+});
+colorModal.addEventListener('click', (evt) => {
+  if (evt.target === colorModal && colorPressedBackdrop) settlePick(false);
+});
+
+/** A colour button's face: the colour, over the checkerboard its alpha shows. */
+function paintSwatch(btn, color) {
+  btn.querySelector('.color-swatch__fill').style.background = color;
+  btn.title = color.slice(0, 7) + ', A ' + parseInt(color.slice(7, 9) || 'ff', 16);
+}
+
+// ---- V3, the render preview the generated media modals share ----
+//
+// The project frame letterboxed in a 16:9 stage, like the crop popup's, since
+// a project can be 9:16 or 1:1 and the modal must not turn tall and narrow for
+// it. What it shows is the draft being edited, drawn at the project's size by
+// the same genDraw the preview and the export use, then scaled down: over the
+// checkerboard, or with Enable Background over the real frame at the playhead,
+// in its place in the stack, so a layer above covers it as it will in the file.
+
+// Enable Background, remembered for the session and shared by the modals.
+let genBackdropOn = false;
+const genPreviewSurface = document.createElement('canvas');
+
+function sizeGenStage(stage, canvas) {
+  const panel = stage.parentElement;
+  let w = Math.round(panel.clientWidth * CROP_FRAME_SHARE);
+  let h = Math.round(w * 9 / 16);
+  const maxH = Math.round(window.innerHeight * CROP_HEIGHT_SHARE);
+  if (h > maxH) {
+    h = maxH;
+    w = Math.round(h * 16 / 9);
+  }
+  stage.style.width = w + 'px';
+  stage.style.height = h + 'px';
+  const frame = projectFrame();
+  const k = Math.min(w / frame.width, h / frame.height);
+  const cw = Math.max(1, Math.round(frame.width * k));
+  const ch = Math.max(1, Math.round(frame.height * k));
+  canvas.style.left = Math.round((w - cw) / 2) + 'px';
+  canvas.style.top = Math.round((h - ch) / 2) + 'px';
+  canvas.style.width = cw + 'px';
+  canvas.style.height = ch + 'px';
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(cw * dpr);
+  canvas.height = Math.round(ch * dpr);
+}
+
+// `quick` draws the draft at the stage's own size rather than the project's,
+// for a slider being dragged: a shadow's distance field over a 1080p frame on
+// every step of a drag is work nobody sees, since the stage shows it scaled
+// down anyway. The drag's end paints it again at full size.
+function paintGenPreview(stage, canvas, id, gen, quick) {
+  const frame = projectFrame();
+  const surface = genPreviewSurface;
+  const sw = quick ? canvas.width : frame.width;
+  const sh = quick ? canvas.height : frame.height;
+  if (surface.width !== sw) surface.width = sw;
+  if (surface.height !== sh) surface.height = sh;
+  genDraw.drawGen(surface.getContext('2d'), gen, sw, sh);
+  stage.dataset.checker = String(!genBackdropOn);
+  const ctx = canvas.getContext('2d');
+  const own = timelineModel.layerById(layers, id);
+  // The layer's own alpha ceiling but not its fade: the playhead may be
+  // anywhere, and a bar that vanished because the playhead sits on the first
+  // frame of its fade in would look like a bar that did not work.
+  const ownAlpha = own ? timelineModel.alphaOf(own) : 1;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!genBackdropOn) {
+    ctx.globalAlpha = ownAlpha;
+    ctx.drawImage(surface, 0, 0, canvas.width, canvas.height);
+    ctx.globalAlpha = 1;
+    return;
+  }
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  // Back to front, as paintLayers goes, with the layer being edited drawn from
+  // the draft wherever it stands in the list, and drawn whether or not the
+  // playhead is over it.
+  for (let i = layers.length - 1; i >= 0; i -= 1) {
+    const l = layers[i];
+    if (l.type !== 'video') continue;
+    if (l.id === id) {
+      ctx.globalAlpha = ownAlpha;
+      ctx.drawImage(surface, 0, 0, canvas.width, canvas.height);
+      ctx.globalAlpha = 1;
+      continue;
+    }
+    if (!l.enabled || !timelineModel.covers(l, compositeAt)) continue;
+    const alpha = timelineModel.layerAlphaAt(l, compositeAt);
+    if (alpha <= 0) continue;
+    ctx.globalAlpha = alpha;
+    drawLayerInto(ctx, canvas, l);
+    ctx.globalAlpha = 1;
+  }
+}
+
+// What addGenMedia had before it added, so Cancel on the first opening can put
+// it back: the list, the row count and the selection. Null once the add is
+// settled either way.
+let genAddBefore = null;
+
+// The first opening's Cancel: the add taken off again, with no step of its own
+// ever having been written, so there is nothing for undo to find either.
+function cancelGenAdd() {
+  const before = genAddBefore;
+  genAddBefore = null;
+  if (!before) return;
+  laneRows.video = before.rows;
+  selectedLayerId = before.selected;
+  setLayers(before.layers, true);
+}
+
+// ---- V3, 30e. Bar Settings ----
+//
+// The draft is in the project's own pixels, not the layer's reference pixels,
+// because that is what the thickness box shows and what the user's ceiling is
+// a quarter of. Accept writes it back with refHeight set to the project's
+// height, so the two agree; an Accept that changed nothing writes nothing, so
+// opening and closing never rounds a thickness set at another height.
+
+const barModal = el('barModal');
+const barSides = el('barSides');
+const barColorBtn = el('barColorBtn');
+const barThickSlider = el('barThickSlider');
+const barThickBox = el('barThickBox');
+const barSpanSlider = el('barSpanSlider');
+const barSpanBox = el('barSpanBox');
+const barStage = el('barStage');
+const barCanvas = el('barCanvas');
+const barBackground = el('barBackground');
+const barAcceptBtn = el('barAcceptBtn');
+const barCancelBtn = el('barCancelBtn');
+
+let barLayerId = null;
+let barFirst = false;
+let barDraft = null;     // { side, color, thickness in project pixels, span 0.01 to 1 }
+let barOpened = null;    // the draft as it opened, as JSON
+
+// The user's ceiling: a quarter of the frame across the bar, so the height
+// for a bar on the top or bottom and the width for one on a side.
+function barCeiling(side) {
+  const frame = projectFrame();
+  const across = side === 'left' || side === 'right';
+  return Math.max(1, Math.floor((across ? frame.width : frame.height) / 4));
+}
+
+function barGenOf(draft) {
+  return {
+    form: 'bar',
+    refHeight: projectFrame().height,
+    bar: { side: draft.side, color: draft.color, thickness: draft.thickness, span: draft.span },
+  };
+}
+
+function openBarSettings(layer, first) {
+  const bar = layer.gen.bar;
+  const frame = projectFrame();
+  const scale = genDraw.scaleOf(layer.gen, frame.height);
+  barLayerId = layer.id;
+  barFirst = first;
+  // The thickness the picture has now, which is the one barRect draws.
+  const thickness = Math.min(barCeiling(bar.side), Math.max(1, Math.round(bar.thickness * scale)));
+  barDraft = { side: bar.side, color: bar.color, thickness, span: bar.span };
+  barOpened = JSON.stringify(barDraft);
+  barBackground.checked = genBackdropOn;
+  barModal.hidden = false;
+  showBarDraft(null);
+  sizeGenStage(barStage, barCanvas);
+  paintBarPreview();
+}
+
+function closeBarSettings() {
+  settlePick(false);
+  barModal.hidden = true;
+  barLayerId = null;
+  barDraft = null;
+  barOpened = null;
+  barFirst = false;
+}
+
+function showBarDraft(except) {
+  const d = barDraft;
+  if (!d) return;
+  for (const b of barSides.querySelectorAll('button')) {
+    b.classList.toggle('btn--active', b.dataset.side === d.side);
+  }
+  paintSwatch(barColorBtn, d.color);
+  barThickSlider.max = String(barCeiling(d.side));
+  barThickSlider.value = String(d.thickness);
+  if (except !== barThickBox) barThickBox.value = String(d.thickness);
+  barSpanSlider.value = String(Math.round(d.span * 100));
+  if (except !== barSpanBox) barSpanBox.value = String(Math.round(d.span * 100));
+}
+
+function paintBarPreview() {
+  if (!barDraft) return;
+  paintGenPreview(barStage, barCanvas, barLayerId, barGenOf(barDraft));
+}
+
+function changeBar(props, except) {
+  if (!barDraft) return;
+  barDraft = { ...barDraft, ...props };
+  showBarDraft(except);
+  paintBarPreview();
+}
+
+for (const b of barSides.querySelectorAll('button')) {
+  b.addEventListener('click', () => {
+    if (!barDraft) return;
+    // Clamped when the side changes: a bar a quarter of a 1920 wide frame
+    // thick on the left is far past a quarter of its 1080 height on the top.
+    const side = b.dataset.side;
+    changeBar({ side, thickness: Math.min(barDraft.thickness, barCeiling(side)) }, null);
+  });
+}
+
+barThickSlider.addEventListener('input', () => {
+  changeBar({ thickness: Number(barThickSlider.value) }, null);
+});
+
+barThickBox.addEventListener('input', () => {
+  if (!barDraft || !/^\d+$/.test(barThickBox.value.trim())) return;
+  const n = Math.min(barCeiling(barDraft.side), Math.max(1, parseInt(barThickBox.value, 10)));
+  changeBar({ thickness: n }, barThickBox);
+});
+
+barSpanSlider.addEventListener('input', () => {
+  changeBar({ span: Number(barSpanSlider.value) / 100 }, null);
+});
+
+barSpanBox.addEventListener('input', () => {
+  if (!barDraft || !/^\d+$/.test(barSpanBox.value.trim())) return;
+  const n = Math.min(100, Math.max(1, parseInt(barSpanBox.value, 10)));
+  changeBar({ span: n / 100 }, barSpanBox);
+});
+
+// The same write-back the picker's boxes do: a box left empty or past its
+// range shows the value in force once it is left.
+for (const box of [barThickBox, barSpanBox]) {
+  box.addEventListener('blur', () => showBarDraft(null));
+  box.addEventListener('keydown', (evt) => {
+    if (evt.key !== 'Enter') return;
+    evt.preventDefault();
+    box.blur();
+  });
+}
+
+barColorBtn.addEventListener('click', async () => {
+  if (!barDraft) return;
+  const was = barDraft.color;
+  const id = barLayerId;
+  const picked = await pickColor(was, (color) => {
+    if (barLayerId === id) changeBar({ color }, null);
+  });
+  // The modal may have been closed under the picker, by Escape for one.
+  if (barLayerId !== id) return;
+  changeBar({ color: picked || was }, null);
+});
+
+barBackground.addEventListener('change', () => {
+  genBackdropOn = barBackground.checked;
+  paintBarPreview();
+});
+
+barAcceptBtn.addEventListener('click', () => {
+  if (!barDraft) return;
+  const id = barLayerId;
+  const changed = JSON.stringify(barDraft) !== barOpened;
+  const first = barFirst;
+  const gen = barGenOf(barDraft);
+  genAddBefore = null;
+  closeBarSettings();
+  if (!timelineModel.layerById(layers, id)) return;
+  if (changed) setLayers(timelineModel.setGen(layers, id, gen));
+  // The first opening commits even unchanged, since that Accept is what makes
+  // the add a step at all.
+  if (changed || first) commitHistory();
+});
+
+function cancelBarSettings() {
+  const first = barFirst;
+  closeBarSettings();
+  if (first) cancelGenAdd();
+}
+
+barCancelBtn.addEventListener('click', cancelBarSettings);
+
+let barPressedBackdrop = false;
+barModal.addEventListener('pointerdown', (evt) => {
+  barPressedBackdrop = evt.target === barModal;
+});
+barModal.addEventListener('click', (evt) => {
+  if (evt.target === barModal && barPressedBackdrop) cancelBarSettings();
+});
+
+// ---- V3, 30f. Edit Text ----
+//
+// The draft is the layer's text settings as they stand, at the layer's own
+// refHeight. Unlike the bar's it is not moved to the project's height on
+// Accept: the size box shows project pixels and converts on the way in and out
+// instead, because moving the reference would mean rescaling the outline and
+// the shadow alongside the size, and every rescale is a rounding.
+//
+// 3.0 edits a text as one run. A text from a later version with several is
+// shown joined, and is only written back as one run if it is changed.
+
+const textModal = el('textModal');
+const textFontCombo = el('textFontCombo');
+const textFontBox = el('textFontBox');
+const textSizeCombo = el('textSizeCombo');
+const textSizeBox = el('textSizeBox');
+const textColorBtn = el('textColorBtn');
+const textFlags = el('textFlags');
+const textAlignH = el('textAlignH');
+const textAlignV = el('textAlignV');
+const textOutlineBtn = el('textOutlineBtn');
+const textShadowBtn = el('textShadowBtn');
+const textModes = el('textModes');
+const textStage = el('textStage');
+const textCanvas = el('textCanvas');
+const textFrame = el('textFrame');
+const textEditBox = el('textEditBox');
+const textBoxEl = el('textBoxEl');
+const textGuideX = el('textGuideX');
+const textGuideY = el('textGuideY');
+const textAngle = el('textAngle');
+const textHint = el('textHint');
+const textBackground = el('textBackground');
+const textAcceptBtn = el('textAcceptBtn');
+const textCancelBtn = el('textCancelBtn');
+
+let textLayerId = null;
+let textFirst = false;
+let textDraft = null;    // { refHeight, text }, the words in text.runs
+let textOpened = null;   // textGenOf of the draft as it opened, as JSON
+let textMode = 'edit';   // or 'render'
+
+// The sizes under the size box, in project pixels, which is what the box shows.
+const TEXT_SIZES = [12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 48, 56, 64, 72, 80, 96,
+  112, 128, 144, 160, 192, 240, 288];
+
+function textGenOf(draft) {
+  return { form: 'text', refHeight: draft.refHeight, text: draft.text };
+}
+
+// Project pixels per pixel of the draft's own.
+function textScale() {
+  return projectFrame().height / textDraft.refHeight;
+}
+
+// The style the words are drawn in: the text's, with the first run's changes
+// over it, which in 3.0 are none.
+function textStyleNow() {
+  const run = textDraft.text.runs[0];
+  return textLayout.styleOf(textDraft.text.style, run && run.style);
+}
+
+function textSizeShown() {
+  return Math.max(1, Math.round(textDraft.text.style.size * textScale()));
+}
+
+// ---- the fonts on this PC ----
+//
+// queryLocalFonts, which Electron allows without asking and without a click
+// (measured: 346 faces, 127 families). Should it ever fail, a list of the
+// families Windows ships, kept to the ones that are really there.
+
+const FALLBACK_FAMILIES = ['Arial', 'Arial Black', 'Bahnschrift', 'Calibri', 'Cambria',
+  'Candara', 'Comic Sans MS', 'Consolas', 'Constantia', 'Corbel', 'Courier New',
+  'Franklin Gothic Medium', 'Gabriola', 'Georgia', 'Impact', 'Lucida Console',
+  'Palatino Linotype', 'Segoe Print', 'Segoe Script', 'Segoe UI', 'Tahoma',
+  'Times New Roman', 'Trebuchet MS', 'Verdana'];
+let fontFamilies = null;
+
+function loadFontFamilies() {
+  if (!fontFamilies) {
+    fontFamilies = (async () => {
+      try {
+        const faces = await window.queryLocalFonts();
+        const names = [...new Set(faces.map((f) => f.family).filter(Boolean))];
+        if (names.length) {
+          return names.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+        }
+      } catch {
+        // Falls through to the list below.
+      }
+      return FALLBACK_FAMILIES.filter(fontInstalled);
+    })();
+  }
+  return fontFamilies;
+}
+
+// ---- a box with a list under it ----
+//
+// The font and the size share it: type into the box, or open the list with the
+// arrow or the arrow keys and pick. The list keeps the focus in the box, so
+// typing carries on filtering while it is open. Escape closes the list and
+// only the list; a second one reaches the modal.
+function bindCombo(root, opts) {
+  const box = root.querySelector('.combo__box');
+  const arrow = root.querySelector('.combo__arrow');
+  const list = root.querySelector('.combo__list');
+  let shown = [];
+  let lit = -1;
+
+  const light = (i, where) => {
+    const items = list.querySelectorAll('.combo__item');
+    lit = shown.length ? Math.min(shown.length - 1, Math.max(0, i)) : -1;
+    items.forEach((item, n) => item.classList.toggle('combo__item--lit', n === lit));
+    if (lit >= 0) items[lit].scrollIntoView({ block: where || 'nearest' });
+  };
+
+  const api = {
+    box,
+    isOpen: () => !list.hidden,
+    open(values, at) {
+      shown = values;
+      list.replaceChildren(...values.map((v, i) => {
+        const item = document.createElement('div');
+        item.className = 'combo__item';
+        item.textContent = String(v);
+        item.dataset.index = String(i);
+        if (opts.dress) opts.dress(item, v);
+        return item;
+      }));
+      list.hidden = false;
+      light(at === undefined ? -1 : at, 'center');
+    },
+    close() {
+      list.hidden = true;
+      lit = -1;
+    },
+  };
+
+  const pick = (i) => {
+    const v = shown[i];
+    api.close();
+    if (v !== undefined) opts.pick(v);
+  };
+
+  // mousedown rather than pointerdown, since that is the event whose default
+  // moves the focus, and the box has to keep it.
+  arrow.addEventListener('mousedown', (evt) => {
+    evt.preventDefault();
+    if (api.isOpen()) {
+      api.close();
+      return;
+    }
+    box.focus();
+    opts.openAll(api);
+  });
+  list.addEventListener('mousedown', (evt) => evt.preventDefault());
+  list.addEventListener('click', (evt) => {
+    const item = evt.target.closest('.combo__item');
+    if (item) pick(Number(item.dataset.index));
+  });
+  // Everything in the box selected when it takes the focus, so typing replaces
+  // it. By the mouse that needs the release held back as well, or it puts the
+  // caret down and undoes the selection.
+  let fresh = false;
+  box.addEventListener('mousedown', () => {
+    fresh = document.activeElement !== box;
+  });
+  box.addEventListener('mouseup', (evt) => {
+    if (fresh) evt.preventDefault();
+    fresh = false;
+  });
+  box.addEventListener('focus', () => box.select());
+  box.addEventListener('input', () => opts.typed(box.value, api));
+  box.addEventListener('keydown', (evt) => {
+    if (evt.key === 'ArrowDown' || evt.key === 'ArrowUp') {
+      evt.preventDefault();
+      if (!api.isOpen()) opts.openAll(api);
+      else light(lit + (evt.key === 'ArrowDown' ? 1 : -1));
+      return;
+    }
+    if (evt.key === 'Enter') {
+      evt.preventDefault();
+      if (api.isOpen() && lit >= 0) pick(lit);
+      else box.blur();
+      return;
+    }
+    if (evt.key === 'Escape' && api.isOpen()) {
+      evt.preventDefault();
+      evt.stopPropagation();
+      api.close();
+    }
+  });
+  box.addEventListener('blur', () => {
+    api.close();
+    opts.left(box.value);
+  });
+  return api;
+}
+
+const fontCombo = bindCombo(textFontCombo, {
+  dress: (item, family) => {
+    item.style.fontFamily = '"' + family.replace(/["\\]/g, '') + '", sans-serif';
+  },
+  async openAll(api) {
+    const families = await loadFontFamilies();
+    if (!textDraft) return;
+    const at = families.findIndex((f) => f.toLowerCase() === textDraft.text.style.font.toLowerCase());
+    api.open(families, at < 0 ? undefined : at);
+  },
+  // What has been typed so far narrows the list: names that start with it
+  // first, then names that have it anywhere, the first of them lit so Enter
+  // takes it.
+  async typed(text, api) {
+    const families = await loadFontFamilies();
+    const want = text.trim().toLowerCase();
+    if (!want) {
+      api.open(families);
+      return;
+    }
+    const starts = families.filter((f) => f.toLowerCase().startsWith(want));
+    const has = families.filter((f) => !f.toLowerCase().startsWith(want) && f.toLowerCase().includes(want));
+    api.open([...starts, ...has], 0);
+  },
+  pick: (family) => changeTextStyle({ font: family }, null),
+  // A name typed out in full counts when the box is left; anything else goes
+  // back to the font in force.
+  async left(text) {
+    if (!textDraft) return;
+    const families = await loadFontFamilies();
+    const found = families.find((f) => f.toLowerCase() === text.trim().toLowerCase());
+    if (found && found !== textDraft.text.style.font) changeTextStyle({ font: found }, null);
+    else showTextDraft(null);
+  },
+});
+
+const sizeCombo = bindCombo(textSizeCombo, {
+  openAll(api) {
+    const now = textSizeShown();
+    let at = 0;
+    TEXT_SIZES.forEach((s, i) => {
+      if (Math.abs(s - now) < Math.abs(TEXT_SIZES[at] - now)) at = i;
+    });
+    api.open(TEXT_SIZES, at);
+  },
+  // Taken as it is typed, like the bar's boxes, so the frame follows.
+  typed(text) {
+    if (!textDraft || !/^\d+$/.test(text.trim())) return;
+    setTextSize(parseInt(text, 10), textSizeBox);
+  },
+  pick: (n) => setTextSize(n, null),
+  left: () => showTextDraft(null),
+});
+
+// A size in project pixels, kept in the draft's own. The same number as the
+// box shows already is no change, which matters when the two heights do not
+// divide evenly and the round trip would move the size by a fraction.
+function setTextSize(shown, except) {
+  if (!textDraft) return;
+  const scale = textScale();
+  const n = Math.min(Math.floor(timelineModel.GEN_FONT_MAX * scale), Math.max(1, shown));
+  if (n === textSizeShown()) {
+    showTextDraft(except);
+    return;
+  }
+  const size = Math.min(timelineModel.GEN_FONT_MAX, Math.max(1, Math.round(n / scale * 100) / 100));
+  changeTextStyle({ size }, except);
+}
+
+// ---- the edit box ----
+
+// The words as typed. Chromium's plaintext-only box keeps a line break as a
+// newline in the text, and holds an empty last line open with a second one:
+// Enter after "World" gives two newlines, and Backspace then leaves one, which
+// shows as no empty line at all (measured). So one newline at the end is only
+// ever the placeholder, and is dropped. A <br> or a <div> from a paste counts
+// as a break too.
+function editBoxText() {
+  let out = '';
+  const walk = (node) => {
+    for (const c of node.childNodes) {
+      if (c.nodeType === Node.TEXT_NODE) {
+        out += c.data;
+      } else if (c.nodeName === 'BR') {
+        out += '\n';
+      } else if (c.nodeType === Node.ELEMENT_NODE) {
+        if (out && !out.endsWith('\n') && getComputedStyle(c).display !== 'inline') out += '\n';
+        walk(c);
+      }
+    }
+  };
+  walk(textEditBox);
+  return out.endsWith('\n') ? out.slice(0, -1) : out;
+}
+
+// The same form the box writes itself, placeholder and all.
+function setEditBoxText(text) {
+  textEditBox.textContent = text.endsWith('\n') ? text + '\n' : text;
+}
+
+// Line height as the drawing has it: the font's own ascent and descent, which
+// is what textLayout stacks lines by. Measured at 100px and handed to CSS as a
+// ratio, so the box's lines sit where the render's do.
+let lineProbe = null;
+function lineRatio(style) {
+  if (!lineProbe) lineProbe = document.createElement('canvas').getContext('2d');
+  lineProbe.font = textLayout.fontString({ ...style, size: 100 });
+  const m = lineProbe.measureText('');
+  const r = (m.fontBoundingBoxAscent + m.fontBoundingBoxDescent) / 100;
+  return Number.isFinite(r) && r > 0 ? r : 1.15;
+}
+
+/**
+ * The edit box dressed from the draft, over the frame at the size the stage
+ * shows it. Everything genDraw draws has its CSS twin here: the outline as a
+ * stroke painted under the fill, the way genDraw strokes every line before it
+ * fills any, and the shadow as a text-shadow, which is only an approximation
+ * of the distance field 30g draws.
+ */
+function styleTextEdit() {
+  const d = textDraft;
+  if (!d) return;
+  const s = textStyleNow();
+  const left = parseFloat(textCanvas.style.left) || 0;
+  const top = parseFloat(textCanvas.style.top) || 0;
+  const k = (parseFloat(textCanvas.style.height) || 0) / d.refHeight;
+  const box = d.text.box;
+  textFrame.style.left = (left + (box ? box.x * k : 0)) + 'px';
+  textFrame.style.top = (top + (box ? box.y * k : 0)) + 'px';
+  textFrame.style.width = (box ? box.w * k : parseFloat(textCanvas.style.width) || 0) + 'px';
+  textFrame.style.height = (box ? box.h * k : parseFloat(textCanvas.style.height) || 0) + 'px';
+  // 31b. Turned with the text, about the same centre, so the words are typed
+  // where the render puts them.
+  textFrame.style.transform = d.text.rotation ? 'rotate(' + d.text.rotation + 'deg)' : '';
+  textFrame.dataset.v = d.text.align.v;
+  // 31a. A box of its own is outlined, so the width the lines wrap at shows
+  // while typing too.
+  textFrame.dataset.boxed = String(!!box);
+  const own = timelineModel.layerById(layers, textLayerId);
+  textFrame.style.opacity = String(own ? timelineModel.alphaOf(own) : 1);
+
+  const e = textEditBox.style;
+  // The shorthand first, since it resets the line height.
+  e.font = textLayout.fontString(s, k);
+  e.lineHeight = String(lineRatio(s));
+  e.color = s.color;
+  e.textAlign = d.text.align.h;
+  const lines = [s.underline && 'underline', s.strike && 'line-through'].filter(Boolean);
+  e.textDecorationLine = lines.length ? lines.join(' ') : 'none';
+  e.textDecorationThickness = textLayout.DECORATION_WIDTH + 'em';
+  e.textUnderlineOffset = textLayout.UNDERLINE_OFFSET + 'em';
+  e.webkitTextStroke = s.outline ? (s.outline.width * k * 2) + 'px ' + s.outline.color : '';
+  if (s.shadow) {
+    const a = s.shadow.angle * Math.PI / 180;
+    const dist = s.shadow.distance * k;
+    e.textShadow = (Math.cos(a) * dist) + 'px ' + (Math.sin(a) * dist) + 'px '
+      + (s.shadow.size * k) + 'px ' + s.shadow.color;
+  } else {
+    e.textShadow = 'none';
+  }
+}
+
+// ---- the modal ----
+
+// Tooltips from t() each time the modal opens, since translateDom leaves
+// attributes alone and these would otherwise stay in whatever language they
+// were first written in.
+function titleTextTools() {
+  const titles = {
+    bold: t('Bold'),
+    italic: t('Italic'),
+    underline: t('Underline'),
+    strike: t('Strikethrough'),
+    left: t('Align Left'),
+    center: t('Align Center'),
+    right: t('Align Right'),
+    top: t('Align Top'),
+    middle: t('Align Middle'),
+    bottom: t('Align Bottom'),
+  };
+  for (const b of textFlags.querySelectorAll('button')) b.title = titles[b.dataset.flag];
+  for (const b of textAlignH.querySelectorAll('button')) b.title = titles[b.dataset.h];
+  for (const b of textAlignV.querySelectorAll('button')) b.title = titles[b.dataset.v];
+  textFontBox.title = t('Font');
+  textSizeBox.title = t('Size');
+}
+
+function openTextSettings(layer, first) {
+  textLayerId = layer.id;
+  textFirst = first;
+  // A copy of its own, so nothing typed reaches the layer before Accept.
+  textDraft = { refHeight: layer.gen.refHeight, text: JSON.parse(JSON.stringify(layer.gen.text)) };
+  textOpened = JSON.stringify(textGenOf(textDraft));
+  textMode = 'edit';
+  textBackground.checked = genBackdropOn;
+  titleTextTools();
+  setEditBoxText(textDraft.text.runs.map((r) => r.text).join(''));
+  textModal.hidden = false;
+  showTextDraft(null);
+  sizeTextStage();
+  paintTextPreview();
+  loadFontFamilies();
+  // Straight into typing. A new text has its placeholder word selected so
+  // the first key replaces it; an old one has the caret at its end.
+  textEditBox.focus();
+  const range = document.createRange();
+  range.selectNodeContents(textEditBox);
+  if (!first) range.collapse(false);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+function closeTextSettings() {
+  closeFx(false);
+  settlePick(false);
+  fontCombo.close();
+  sizeCombo.close();
+  textModal.hidden = true;
+  textGuideX.hidden = true;
+  textGuideY.hidden = true;
+  textAngle.hidden = true;
+  textLayerId = null;
+  textDraft = null;
+  textOpened = null;
+  textFirst = false;
+  textEditBox.textContent = '';
+}
+
+function showTextDraft(except) {
+  const d = textDraft;
+  if (!d) return;
+  const s = d.text.style;
+  if (except !== textFontBox) textFontBox.value = s.font;
+  if (except !== textSizeBox) textSizeBox.value = String(textSizeShown());
+  paintSwatch(textColorBtn, s.color);
+  for (const b of textFlags.querySelectorAll('button')) {
+    b.classList.toggle('btn--active', !!s[b.dataset.flag]);
+  }
+  for (const b of textAlignH.querySelectorAll('button')) {
+    b.classList.toggle('btn--active', b.dataset.h === d.text.align.h);
+  }
+  for (const b of textAlignV.querySelectorAll('button')) {
+    b.classList.toggle('btn--active', b.dataset.v === d.text.align.v);
+  }
+  // Lit when the effect is on, which is the user's green.
+  textOutlineBtn.classList.toggle('btn--active', !!s.outline);
+  textShadowBtn.classList.toggle('btn--active', !!s.shadow);
+  for (const b of textModes.querySelectorAll('button')) {
+    b.classList.toggle('btn--active', b.dataset.mode === textMode);
+  }
+  textFrame.hidden = textMode !== 'edit';
+  textBoxEl.hidden = textMode !== 'render';
+  // Kept in the layout in Edit too, only unseen, or the modal would grow by
+  // a line on the switch and, being centred, move the frame under the pointer.
+  textHint.style.visibility = textMode === 'render' ? 'visible' : 'hidden';
+  styleTextEdit();
+  placeTextBox();
+}
+
+function sizeTextStage() {
+  sizeGenStage(textStage, textCanvas);
+  styleTextEdit();
+  placeTextBox();
+}
+
+// ---- 31a. The text box ----
+//
+// Stored in the draft's own pixels like every other size, and null for the
+// whole frame, which is also what a box dragged back out to the frame's edges
+// becomes: null keeps following the frame through a resolution change, where
+// a box the frame's size would not. Dragged in project pixels, which is what
+// layerGeometry's text box functions work in.
+
+// How near, in screen pixels, a side or the box's middle has to come to a frame
+// edge or the frame's middle to land on it. The timeline's snapping reach.
+const TEXT_BOX_SNAP = 5;
+
+// Screen pixels per project pixel on the stage.
+function textStageScale() {
+  return (parseFloat(textCanvas.style.height) || 1) / projectFrame().height;
+}
+
+// The box in project pixels, the whole frame when there is none.
+function textBoxNow() {
+  const frame = projectFrame();
+  const b = textDraft.text.box;
+  if (!b) return { x: 0, y: 0, w: frame.width, h: frame.height };
+  const k = textScale();
+  return { x: b.x * k, y: b.y * k, w: b.w * k, h: b.h * k };
+}
+
+function setTextBox(box) {
+  if (!textDraft) return;
+  const frame = projectFrame();
+  const k = textScale();
+  const ref = (v) => Math.round(v / k * 10000) / 10000;
+  textDraft.text = {
+    ...textDraft.text,
+    box: layerGeometry.isWholeBox(box, frame)
+      ? null
+      : { x: ref(box.x), y: ref(box.y), w: ref(box.w), h: ref(box.h) },
+  };
+  styleTextEdit();
+  placeTextBox();
+  paintTextPreview();
+}
+
+function placeTextBox() {
+  if (!textDraft) return;
+  const s = textStageScale();
+  const left = parseFloat(textCanvas.style.left) || 0;
+  const top = parseFloat(textCanvas.style.top) || 0;
+  const b = textBoxNow();
+  textBoxEl.style.left = (left + b.x * s) + 'px';
+  textBoxEl.style.top = (top + b.y * s) + 'px';
+  textBoxEl.style.width = (b.w * s) + 'px';
+  textBoxEl.style.height = (b.h * s) + 'px';
+  // 31b. CSS turns an element about its centre, which is the box's centre,
+  // the point genDraw turns the text about.
+  const turn = textDraft.text.rotation;
+  textBoxEl.style.transform = turn ? 'rotate(' + turn + 'deg)' : '';
+}
+
+// The frame line a drag has met, across the whole frame, or none.
+function showTextGuides(x, y) {
+  const s = textStageScale();
+  const left = parseFloat(textCanvas.style.left) || 0;
+  const top = parseFloat(textCanvas.style.top) || 0;
+  textGuideX.hidden = x === null;
+  textGuideY.hidden = y === null;
+  if (x !== null) {
+    textGuideX.style.left = (left + x * s) + 'px';
+    textGuideX.style.top = top + 'px';
+    textGuideX.style.height = textCanvas.style.height;
+  }
+  if (y !== null) {
+    textGuideY.style.top = (top + y * s) + 'px';
+    textGuideY.style.left = left + 'px';
+    textGuideY.style.width = textCanvas.style.width;
+  }
+}
+
+for (const grip of textBoxEl.querySelectorAll('.crop-grip')) {
+  const edge = grip.dataset.edge;
+  const vertical = edge === 'top' || edge === 'bottom';
+  grip.addEventListener('pointerdown', (evt) => {
+    if (evt.button !== 0 || !textDraft) return;
+    // Or the box underneath would take it as a move as well.
+    evt.stopPropagation();
+    const start = textBoxNow();
+    const frame = projectFrame();
+    const s = textStageScale();
+    const turn = textDraft.text.rotation;
+    const x0 = evt.clientX;
+    const y0 = evt.clientY;
+    // 31b. A turned box's side moves along the box's own axis, so the pointer's
+    // travel is taken along that: across the box for left and right, down it
+    // for top and bottom.
+    const a = turn * Math.PI / 180;
+    const ux = vertical ? -Math.sin(a) : Math.cos(a);
+    const uy = vertical ? Math.cos(a) : Math.sin(a);
+    beginDrag(grip, evt, (ev) => {
+      if (turn) {
+        const along = ((ev.clientX - x0) * ux + (ev.clientY - y0) * uy) / s;
+        setTextBox(layerGeometry.textBoxEdgeTurned(start, edge, along, ev.shiftKey, turn, frame).box);
+        return;
+      }
+      const travel = ((vertical ? ev.clientY : ev.clientX) - (vertical ? y0 : x0)) / s;
+      const r = layerGeometry.textBoxEdge(start, edge, travel, ev.shiftKey, frame, TEXT_BOX_SNAP / s);
+      showTextGuides(vertical ? null : r.snap, vertical ? r.snap : null);
+      setTextBox(r.box);
+    }, () => showTextGuides(null, null));
+  });
+}
+
+textBoxEl.addEventListener('pointerdown', (evt) => {
+  if (evt.button !== 0 || !textDraft || evt.target !== textBoxEl) return;
+  const start = textBoxNow();
+  const frame = projectFrame();
+  const s = textStageScale();
+  const x0 = evt.clientX;
+  const y0 = evt.clientY;
+  // 31b. Turned, the box's sides no longer run along the frame's, so only its
+  // centre snaps, and it is the centre that is held inside the frame.
+  const move = textDraft.text.rotation ? layerGeometry.textBoxMoveTurned : layerGeometry.textBoxMove;
+  beginDrag(textBoxEl, evt, (ev) => {
+    const r = move(start, (ev.clientX - x0) / s, (ev.clientY - y0) / s, frame, TEXT_BOX_SNAP / s);
+    showTextGuides(r.snapX, r.snapY);
+    setTextBox(r.box);
+  }, () => showTextGuides(null, null));
+});
+
+// ---- 31b. Rotation ----
+//
+// Any corner circle turns the text about the box's centre, by as far as the
+// pointer goes round that centre, in whole degrees, landing on a quarter turn
+// within two of one. The angle shows by the centre while it is dragged.
+
+function setTextRotation(deg) {
+  if (!textDraft || textDraft.text.rotation === deg) return;
+  textDraft.text = { ...textDraft.text, rotation: deg };
+  styleTextEdit();
+  placeTextBox();
+  paintTextPreview();
+}
+
+for (const rotor of textBoxEl.querySelectorAll('.text-rotor')) {
+  rotor.addEventListener('pointerdown', (evt) => {
+    if (evt.button !== 0 || !textDraft) return;
+    // Or the box underneath would take it as a move as well.
+    evt.stopPropagation();
+    const b = textBoxNow();
+    const s = textStageScale();
+    const r = textCanvas.getBoundingClientRect();
+    const cx = r.left + (b.x + b.w / 2) * s;
+    const cy = r.top + (b.y + b.h / 2) * s;
+    const start = textDraft.text.rotation;
+    const from = [evt.clientX - cx, evt.clientY - cy];
+    const stage = textStage.getBoundingClientRect();
+    textAngle.style.left = (cx - stage.left) + 'px';
+    textAngle.style.top = (cy - stage.top) + 'px';
+    textAngle.textContent = start + '°';
+    textAngle.hidden = false;
+    beginDrag(rotor, evt, (ev) => {
+      const deg = layerGeometry.textTurnDrag(start, from, [ev.clientX - cx, ev.clientY - cy]);
+      textAngle.textContent = deg + '°';
+      setTextRotation(deg);
+    }, () => {
+      textAngle.hidden = true;
+    });
+  });
+}
+
+// Edit shows the frame without this layer, over which the box stands; Render
+// Preview draws the draft itself, as the export will.
+function paintTextPreview() {
+  if (!textDraft) return;
+  paintGenPreview(textStage, textCanvas, textLayerId,
+    textMode === 'render' ? textGenOf(textDraft) : null);
+}
+
+function changeTextStyle(props, except) {
+  if (!textDraft) return;
+  textDraft.text = { ...textDraft.text, style: { ...textDraft.text.style, ...props } };
+  showTextDraft(except);
+  paintTextPreview();
+  if (props.font) {
+    const id = textLayerId;
+    loadGenFonts(textGenOf(textDraft)).then((loaded) => {
+      if (loaded && textLayerId === id) paintTextPreview();
+    });
+  }
+}
+
+function changeTextAlign(props) {
+  if (!textDraft) return;
+  textDraft.text = { ...textDraft.text, align: { ...textDraft.text.align, ...props } };
+  showTextDraft(null);
+  paintTextPreview();
+}
+
+function toggleTextFlag(flag) {
+  if (!textDraft) return;
+  changeTextStyle({ [flag]: !textDraft.text.style[flag] }, null);
+}
+
+textEditBox.addEventListener('input', () => {
+  if (!textDraft) return;
+  const run = textDraft.text.runs[0];
+  textDraft.text = { ...textDraft.text, runs: [{ text: editBoxText(), style: run ? run.style : {} }] };
+});
+
+// Ctrl+B, I and U, which is where every editor has them. The whole text,
+// since 3.0 has one style for it.
+textEditBox.addEventListener('keydown', (evt) => {
+  if (!(evt.ctrlKey || evt.metaKey) || evt.altKey || evt.shiftKey) return;
+  const flag = { b: 'bold', i: 'italic', u: 'underline' }[String(evt.key).toLowerCase()];
+  if (!flag) return;
+  evt.preventDefault();
+  toggleTextFlag(flag);
+});
+
+// A press on the frame around the words puts the caret at their end, rather
+// than doing nothing because the box is only as tall as its lines.
+textFrame.addEventListener('mousedown', (evt) => {
+  if (evt.target !== textFrame) return;
+  evt.preventDefault();
+  textEditBox.focus();
+  const range = document.createRange();
+  range.selectNodeContents(textEditBox);
+  range.collapse(false);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+});
+
+// The tools keep the caret where it was, so a word can be typed, made bold and
+// typed on from without clicking back into the box.
+for (const b of textModal.querySelectorAll('.text-tool')) {
+  b.addEventListener('mousedown', (evt) => evt.preventDefault());
+}
+
+for (const b of textFlags.querySelectorAll('button')) {
+  b.addEventListener('click', () => toggleTextFlag(b.dataset.flag));
+}
+for (const b of textAlignH.querySelectorAll('button')) {
+  b.addEventListener('click', () => changeTextAlign({ h: b.dataset.h }));
+}
+for (const b of textAlignV.querySelectorAll('button')) {
+  b.addEventListener('click', () => changeTextAlign({ v: b.dataset.v }));
+}
+
+for (const b of textModes.querySelectorAll('button')) {
+  b.addEventListener('click', () => {
+    if (!textDraft || textMode === b.dataset.mode) return;
+    textMode = b.dataset.mode;
+    showTextDraft(null);
+    paintTextPreview();
+    if (textMode === 'edit') textEditBox.focus();
+  });
+}
+
+textColorBtn.addEventListener('click', async () => {
+  if (!textDraft) return;
+  const was = textDraft.text.style.color;
+  const id = textLayerId;
+  const picked = await pickColor(was, (color) => {
+    if (textLayerId === id) changeTextStyle({ color }, null);
+  });
+  if (textLayerId !== id) return;
+  changeTextStyle({ color: picked || was }, null);
+});
+
+textBackground.addEventListener('change', () => {
+  genBackdropOn = textBackground.checked;
+  paintTextPreview();
+});
+
+textAcceptBtn.addEventListener('click', () => {
+  if (!textDraft) return;
+  const id = textLayerId;
+  const gen = textGenOf(textDraft);
+  const changed = JSON.stringify(gen) !== textOpened;
+  const first = textFirst;
+  genAddBefore = null;
+  closeTextSettings();
+  if (!timelineModel.layerById(layers, id)) return;
+  if (changed) setLayers(timelineModel.setGen(layers, id, gen));
+  // The first opening commits even unchanged, as the bar's does.
+  if (changed || first) commitHistory();
+});
+
+function cancelTextSettings() {
+  const first = textFirst;
+  closeTextSettings();
+  if (first) cancelGenAdd();
+}
+
+textCancelBtn.addEventListener('click', cancelTextSettings);
+
+let textPressedBackdrop = false;
+textModal.addEventListener('pointerdown', (evt) => {
+  textPressedBackdrop = evt.target === textModal;
+});
+textModal.addEventListener('click', (evt) => {
+  if (evt.target === textModal && textPressedBackdrop) cancelTextSettings();
+});
+
+// ---- V3, 30g. Outline and Shadow ----
+//
+// One modal for each, over Edit Text, and what they edit is that modal's draft
+// rather than the layer: Apply puts the effect into the draft and Remove takes
+// it out, and Edit Text's own Accept or Cancel decides whether any of it
+// reaches the layer. An outline applied and then cancelled in Edit Text is
+// gone again, which is what the user asked for.
+//
+// The figures show in project pixels, like the size box, and 1 to 64 as the
+// user gave them; they go into the draft at its refHeight to two decimals. An
+// Apply that changed nothing leaves the stored figures alone, so opening and
+// applying never rounds an effect set at another height.
+
+const shadowArrow = el('shadowArrow');
+
+function fxField(id, min, max, px) {
+  return { slider: el(id + 'Slider'), box: el(id + 'Box'), min, max, px };
+}
+
+const FX = {
+  outline: {
+    modal: el('outlineModal'),
+    stage: el('outlineStage'),
+    canvas: el('outlineCanvas'),
+    colorBtn: el('outlineColorBtn'),
+    background: el('outlineBackground'),
+    applyBtn: el('outlineApplyBtn'),
+    removeBtn: el('outlineRemoveBtn'),
+    cancelBtn: el('outlineCancelBtn'),
+    button: textOutlineBtn,
+    fields: {
+      width: fxField('outlineWidth', 1, timelineModel.GEN_EFFECT_MAX, true),
+    },
+  },
+  shadow: {
+    modal: el('shadowModal'),
+    stage: el('shadowStage'),
+    canvas: el('shadowCanvas'),
+    colorBtn: el('shadowColorBtn'),
+    background: el('shadowBackground'),
+    applyBtn: el('shadowApplyBtn'),
+    removeBtn: el('shadowRemoveBtn'),
+    cancelBtn: el('shadowCancelBtn'),
+    button: textShadowBtn,
+    fields: {
+      angle: fxField('shadowAngle', -180, 180, false),
+      distance: fxField('shadowDistance', 1, timelineModel.GEN_EFFECT_MAX, true),
+      size: fxField('shadowSize', 1, timelineModel.GEN_EFFECT_MAX, true),
+      // Percent in the modal, a fraction in the file, like the layer's alpha.
+      fade: fxField('shadowFade', 0, 100, false),
+    },
+  },
+};
+
+let fxKind = null;      // 'outline' or 'shadow' while one is open
+let fxDraft = null;     // the effect as the modal shows it: project pixels, fade in percent
+let fxOpened = null;    // fxDraft as it opened, as JSON
+let fxWasOn = false;    // whether the text had this effect when the modal opened
+
+// An effect as the modal shows it, from the draft's own pixels.
+function fxShownOf(kind, effect) {
+  const k = textScale();
+  const px = (v) => Math.max(1, Math.round(v * k));
+  if (kind === 'outline') return { color: effect.color, width: px(effect.width) };
+  return {
+    color: effect.color,
+    angle: Math.round(effect.angle),
+    distance: px(effect.distance),
+    size: px(effect.size),
+    fade: Math.round(effect.fade * 100),
+  };
+}
+
+// And back, into the draft's own pixels.
+function fxStoredOf(kind, shown) {
+  const k = textScale();
+  const ref = (v) => Math.round(v / k * 100) / 100;
+  if (kind === 'outline') return { color: shown.color, width: ref(shown.width) };
+  return {
+    color: shown.color,
+    angle: shown.angle,
+    distance: ref(shown.distance),
+    size: ref(shown.size),
+    fade: shown.fade / 100,
+  };
+}
+
+// The effect the text would have on Apply: the one it has, when nothing has
+// been touched, so the preview is exactly what Apply leaves.
+function fxEffect() {
+  if (fxWasOn && JSON.stringify(fxDraft) === fxOpened) return textDraft.text.style[fxKind];
+  return fxStoredOf(fxKind, fxDraft);
+}
+
+// A text's effect as the model fills one in with nothing given: an outline
+// 4 wide in black, a shadow of black at 70% falling 45 degrees, 8 off and 8
+// deep, fading out entirely.
+function fxDefaults(kind) {
+  const g = timelineModel.genOf({ form: 'text', text: { style: { [kind]: {} } } });
+  return g.text.style[kind];
+}
+
+function openFx(kind) {
+  if (!textDraft || fxKind) return;
+  const fx = FX[kind];
+  const now = textDraft.text.style[kind];
+  fxKind = kind;
+  fxWasOn = !!now;
+  // A first opening starts from the defaults in the draft's own pixels, so
+  // they are the same size on the picture whatever the project's height.
+  fxDraft = fxShownOf(kind, now || { ...fxDefaults(kind) });
+  fxOpened = JSON.stringify(fxDraft);
+  // "The first time there is nothing to remove".
+  fx.removeBtn.hidden = !fxWasOn;
+  fx.background.checked = genBackdropOn;
+  fontCombo.close();
+  sizeCombo.close();
+  fx.modal.hidden = false;
+  showFx(null);
+  sizeGenStage(fx.stage, fx.canvas);
+  paintFx(false);
+  fx.applyBtn.focus();
+}
+
+function closeFx(refocus) {
+  if (!fxKind) return;
+  settlePick(false);
+  FX[fxKind].modal.hidden = true;
+  fxKind = null;
+  fxDraft = null;
+  fxOpened = null;
+  fxWasOn = false;
+  if (refocus && !textModal.hidden && textMode === 'edit') textEditBox.focus();
+}
+
+function showFx(except) {
+  const fx = FX[fxKind];
+  paintSwatch(fx.colorBtn, fxDraft.color);
+  for (const [name, f] of Object.entries(fx.fields)) {
+    // A figure past the slider's end, from a text set at a lower height, shows
+    // in the box as it is and pins the slider at its end.
+    f.slider.value = String(fxDraft[name]);
+    if (except !== f.box) f.box.value = String(fxDraft[name]);
+  }
+  if (fxKind === 'shadow') shadowArrow.style.transform = 'rotate(' + fxDraft.angle + 'deg)';
+}
+
+function paintFx(quick) {
+  if (!fxKind || !textDraft) return;
+  const style = { ...textDraft.text.style, [fxKind]: fxEffect() };
+  const gen = textGenOf({ ...textDraft, text: { ...textDraft.text, style } });
+  paintGenPreview(FX[fxKind].stage, FX[fxKind].canvas, textLayerId, gen, quick);
+}
+
+function changeFx(props, except, quick) {
+  if (!fxKind) return;
+  fxDraft = { ...fxDraft, ...props };
+  showFx(except);
+  paintFx(quick);
+}
+
+function applyFx() {
+  if (!fxKind || !textDraft) return;
+  const kind = fxKind;
+  const effect = fxEffect();
+  closeFx(true);
+  changeTextStyle({ [kind]: effect }, null);
+}
+
+// "Remove button completely removes the selected options": the effect off,
+// not an effect of nothing.
+function removeFx() {
+  if (!fxKind || !textDraft) return;
+  const kind = fxKind;
+  closeFx(true);
+  changeTextStyle({ [kind]: null }, null);
+}
+
+for (const [kind, fx] of Object.entries(FX)) {
+  fx.button.addEventListener('click', () => openFx(kind));
+
+  for (const [name, f] of Object.entries(fx.fields)) {
+    // Drawn small while the slider moves and in full once it is let go.
+    f.slider.addEventListener('input', () => {
+      if (fxKind === kind) changeFx({ [name]: Number(f.slider.value) }, null, true);
+    });
+    f.slider.addEventListener('change', () => {
+      if (fxKind === kind) paintFx(false);
+    });
+    // Taken as it is typed, like the bar's boxes, held to the slider's range.
+    f.box.addEventListener('input', () => {
+      if (fxKind !== kind) return;
+      const text = f.box.value.trim();
+      if (!(f.min < 0 ? /^[-+]?\d+$/ : /^\d+$/).test(text)) return;
+      const n = Math.min(f.max, Math.max(f.min, parseInt(text, 10)));
+      changeFx({ [name]: n }, f.box, false);
+    });
+    f.box.addEventListener('blur', () => {
+      if (fxKind === kind) showFx(null);
+    });
+    f.box.addEventListener('keydown', (evt) => {
+      if (evt.key !== 'Enter') return;
+      evt.preventDefault();
+      f.box.blur();
+    });
+  }
+
+  fx.colorBtn.addEventListener('click', async () => {
+    if (fxKind !== kind) return;
+    const was = fxDraft.color;
+    const picked = await pickColor(was, (color) => {
+      if (fxKind === kind) changeFx({ color }, null, true);
+    });
+    // The modal may have been closed under the picker, by Escape for one.
+    if (fxKind !== kind) return;
+    changeFx({ color: picked || was }, null, false);
+  });
+
+  fx.background.addEventListener('change', () => {
+    genBackdropOn = fx.background.checked;
+    textBackground.checked = genBackdropOn;
+    paintFx(false);
+    paintTextPreview();
+  });
+
+  fx.applyBtn.addEventListener('click', applyFx);
+  fx.removeBtn.addEventListener('click', removeFx);
+  fx.cancelBtn.addEventListener('click', () => closeFx(true));
+
+  let pressedBackdrop = false;
+  fx.modal.addEventListener('pointerdown', (evt) => {
+    pressedBackdrop = evt.target === fx.modal;
+  });
+  fx.modal.addEventListener('click', (evt) => {
+    if (evt.target === fx.modal && pressedBackdrop) closeFx(true);
+  });
+}
+
+window.addEventListener('resize', () => {
+  if (!colorModal.hidden) {
+    drawPickWheel();
+    showPick(null);
+  }
+  if (fxKind) {
+    sizeGenStage(FX[fxKind].stage, FX[fxKind].canvas);
+    paintFx(false);
+  }
+  if (!textModal.hidden && textDraft) {
+    sizeTextStage();
+    paintTextPreview();
+  }
+  if (barModal.hidden || !barDraft) return;
+  sizeGenStage(barStage, barCanvas);
+  paintBarPreview();
 });
 
 // The frame size may only be known once the element has metadata, which is
@@ -10308,6 +12154,45 @@ function exportName() {
 }
 
 /**
+ * V3. The layers as the export gets them: every generated one pointed at the
+ * PNG of its picture, at the project's size, which from there on is an image
+ * layer covering the frame, and every other one as it is.
+ *
+ * The picture is the very canvas the preview draws, brought up to date first,
+ * with its fonts waited for, so the file shows what the preview did. It is only
+ * encoded when the cache does not already hold it.
+ *
+ * Answers in the shape a job does, so a picture that could not be saved is
+ * reported the way a failed encode is.
+ */
+async function exportLayers() {
+  const frame = projectFrame();
+  const out = [];
+  for (const l of layers) {
+    if (l.kind !== 'gen' || !l.enabled) {
+      out.push(l);
+      continue;
+    }
+    let entry = decoders.get(l.id);
+    if (!entry || !entry.gen) {
+      entry = { el: document.createElement('canvas'), width: 0, height: 0, gen: true, key: null };
+    }
+    if (await loadGenFonts(l.gen)) entry.key = null;
+    paintGen(l, entry);
+    const key = entry.key;
+    let saved = await window.lwclipper.genImage(key, null);
+    if (saved.ok && !saved.path) {
+      const blob = await new Promise((done) => entry.el.toBlob(done, 'image/png'));
+      if (!blob) return { ok: false, error: 'canvas toBlob gave no PNG' };
+      saved = await window.lwclipper.genImage(key, new Uint8Array(await blob.arrayBuffer()));
+    }
+    if (!saved.ok || !saved.path) return { ok: false, error: saved.error || 'no PNG path' };
+    out.push({ ...l, src: saved.path, sourceWidth: frame.width, sourceHeight: frame.height });
+  }
+  return { ok: true, layers: out };
+}
+
+/**
  * Step 15. The timeline rendered to one file.
  *
  * The composite twin of saveClipTo, and deliberately the same shape: one
@@ -10325,8 +12210,13 @@ async function exportProject() {
     exportName(), outputIsAudio(), outputFormat, true);
   if (!destination) return;
   await runJob(async () => {
+    const prepared = await exportLayers();
+    if (!prepared.ok) {
+      reportFailure(prepared);
+      return;
+    }
     const result = await window.lwclipper.compose(
-      layers, projectFrame(), { start: slider.start, end: slider.end },
+      prepared.layers, projectFrame(), { start: slider.start, end: slider.end },
       destination, compressionPercent());
     if (!result.ok) {
       reportFailure(result);
@@ -10508,6 +12398,26 @@ settingsModal.addEventListener('click', (e) => {
 
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
+  // V3. The picker first of all, since it sits over the modal that opened it,
+  // and only the picker: one Escape closes one popup.
+  if (!colorModal.hidden) {
+    settlePick(false);
+    return;
+  }
+  // Outline or Shadow next, over Edit Text: Cancel, and Edit Text stays.
+  if (fxKind) {
+    closeFx(true);
+    return;
+  }
+  if (!barModal.hidden) {
+    cancelBarSettings();
+    return;
+  }
+  // An open font or size list has already taken its own Escape by here.
+  if (!textModal.hidden) {
+    cancelTextSettings();
+    return;
+  }
   // The question first: it is the one that is blocking something.
   if (!choiceModal.hidden) settleChoice(choiceCancelId);
   if (!settingsModal.hidden) closeSettings();

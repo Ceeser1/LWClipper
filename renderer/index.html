@@ -614,12 +614,264 @@
     </div>
   </div>
 
+  <!-- V3, 30e. The bar's settings, and the render preview the Edit Text modal
+       will use too. The preview is a 16:9 stage with the project frame
+       letterboxed inside it, since a project can be 9:16 or 1:1. -->
+  <div id="barModal" class="modal" hidden>
+    <div class="modal__panel modal__panel--crop" role="dialog" aria-modal="true"
+      aria-labelledby="barTitle">
+      <div id="barTitle" class="modal__title">Bar Settings</div>
+      <div class="gen-grid">
+        <div class="gen-field">
+          <span class="gen-field__caption">Stick to:</span>
+          <div id="barSides" class="gen-choice">
+            <button data-side="top">Top</button>
+            <button data-side="right">Right</button>
+            <button data-side="bottom">Bottom</button>
+            <button data-side="left">Left</button>
+          </div>
+        </div>
+        <div class="gen-field">
+          <span class="gen-field__caption">Color:</span>
+          <button id="barColorBtn" class="color-swatch"><span class="color-swatch__fill"></span></button>
+        </div>
+        <div class="gen-field">
+          <span class="gen-field__caption">Thickness:</span>
+          <input id="barThickSlider" class="gen-field__slider" type="range" min="1" max="270" step="1" value="40" />
+          <input id="barThickBox" class="gen-num" type="text" inputmode="numeric" maxlength="4" />
+          <span class="gen-field__unit">px</span>
+        </div>
+        <div class="gen-field">
+          <span class="gen-field__caption">Span:</span>
+          <input id="barSpanSlider" class="gen-field__slider" type="range" min="1" max="100" step="1" value="100" />
+          <input id="barSpanBox" class="gen-num" type="text" inputmode="numeric" maxlength="3" />
+          <span class="gen-field__unit">%</span>
+        </div>
+      </div>
+      <div id="barStage" class="gen-stage">
+        <canvas id="barCanvas" class="gen-canvas"></canvas>
+      </div>
+      <label class="gen-check"><input id="barBackground" type="checkbox" /> Enable Background</label>
+      <div class="crop-actions">
+        <button id="barAcceptBtn" class="crop-accept-btn">Accept</button>
+        <button id="barCancelBtn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- V3, 30f. The Edit Text modal. A toolbar over the frame, and the frame in
+       one of two modes: Edit, where the words are typed into a box styled from
+       the same settings, and Render Preview, which is the picture genDraw makes
+       for the preview and the export. The box is the author's view and Render
+       Preview is the truth. Outline and Shadow open modals of their own. -->
+  <div id="textModal" class="modal" hidden>
+    <div class="modal__panel modal__panel--crop" role="dialog" aria-modal="true"
+      aria-labelledby="textTitle">
+      <div id="textTitle" class="modal__title">Edit Text</div>
+      <div class="text-toolbar">
+        <div id="textFontCombo" class="combo combo--font">
+          <input id="textFontBox" class="combo__box" type="text" spellcheck="false" autocomplete="off" />
+          <button class="combo__arrow" tabindex="-1"></button>
+          <div class="combo__list" data-no-translate hidden></div>
+        </div>
+        <div class="text-tools">
+          <div id="textSizeCombo" class="combo combo--size">
+            <input id="textSizeBox" class="combo__box" type="text" inputmode="numeric" maxlength="4" autocomplete="off" />
+            <button class="combo__arrow" tabindex="-1"></button>
+            <div class="combo__list" data-no-translate hidden></div>
+          </div>
+          <span class="gen-field__unit">px</span>
+        </div>
+        <button id="textColorBtn" class="color-swatch color-swatch--tool"><span class="color-swatch__fill"></span></button>
+        <div id="textFlags" class="text-tools">
+          <button class="text-tool text-tool--bold" data-flag="bold"></button>
+          <button class="text-tool text-tool--italic" data-flag="italic"></button>
+          <button class="text-tool text-tool--underline" data-flag="underline"></button>
+          <button class="text-tool text-tool--strike" data-flag="strike"></button>
+        </div>
+        <div id="textAlignH" class="text-tools">
+          <button class="text-tool" data-h="left"><svg viewBox="0 0 16 16"><path d="M2 3h12M2 6.5h8M2 10h12M2 13.5h8" /></svg></button>
+          <button class="text-tool" data-h="center"><svg viewBox="0 0 16 16"><path d="M2 3h12M4 6.5h8M2 10h12M4 13.5h8" /></svg></button>
+          <button class="text-tool" data-h="right"><svg viewBox="0 0 16 16"><path d="M2 3h12M6 6.5h8M2 10h12M6 13.5h8" /></svg></button>
+        </div>
+        <div id="textAlignV" class="text-tools">
+          <button class="text-tool" data-v="top"><svg viewBox="0 0 16 16"><path d="M1.5 2h13" /><rect x="5" y="4.5" width="6" height="6" /></svg></button>
+          <button class="text-tool" data-v="middle"><svg viewBox="0 0 16 16"><path d="M1.5 8h3M11.5 8h3" /><rect x="5" y="5" width="6" height="6" /></svg></button>
+          <button class="text-tool" data-v="bottom"><svg viewBox="0 0 16 16"><path d="M1.5 14h13" /><rect x="5" y="5.5" width="6" height="6" /></svg></button>
+        </div>
+        <div class="text-tools">
+          <button id="textOutlineBtn">Outline</button>
+          <button id="textShadowBtn">Shadow</button>
+        </div>
+      </div>
+      <div id="textModes" class="gen-choice text-modes">
+        <button data-mode="edit">Edit</button>
+        <button data-mode="render">Render Preview</button>
+      </div>
+      <div id="textStage" class="gen-stage">
+        <canvas id="textCanvas" class="gen-canvas"></canvas>
+        <div id="textFrame" class="text-frame">
+          <div id="textEditBox" class="text-edit" contenteditable="plaintext-only"
+            spellcheck="false" data-no-translate></div>
+        </div>
+        <!-- 31a. The text box in Render Preview: its sides are dragged, Shift
+             taking the opposite one along, and the inside moves it. The
+             guides show the frame line a drag has snapped to. 31b: the
+             corner circles turn it about its centre. -->
+        <div id="textGuideX" class="text-guide text-guide--x" hidden></div>
+        <div id="textGuideY" class="text-guide text-guide--y" hidden></div>
+        <div id="textBoxEl" class="crop-box text-box" hidden>
+          <div class="crop-grip crop-grip--left" data-edge="left"></div>
+          <div class="crop-grip crop-grip--right" data-edge="right"></div>
+          <div class="crop-grip crop-grip--top" data-edge="top"></div>
+          <div class="crop-grip crop-grip--bottom" data-edge="bottom"></div>
+          <div class="crop-corner crop-corner--tl text-rotor" data-corner="tl"></div>
+          <div class="crop-corner crop-corner--tr text-rotor" data-corner="tr"></div>
+          <div class="crop-corner crop-corner--bl text-rotor" data-corner="bl"></div>
+          <div class="crop-corner crop-corner--br text-rotor" data-corner="br"></div>
+        </div>
+        <div id="textAngle" class="text-angle" data-no-translate hidden></div>
+      </div>
+      <div id="textHint" class="hint-label crop-hint">Drag the sides to size the text box and inside it to move it, hold Shift to move opposite sides together, drag a corner to turn it</div>
+      <label class="gen-check"><input id="textBackground" type="checkbox" /> Enable Background</label>
+      <div class="crop-actions">
+        <button id="textAcceptBtn" class="crop-accept-btn">Accept</button>
+        <button id="textCancelBtn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- V3, 30g. Outline and Shadow, each over the Edit Text modal, and each
+       editing that modal's pending settings, so its Cancel still takes them
+       back. Remove is shown only when the effect is already on. -->
+  <div id="outlineModal" class="modal modal--over" hidden>
+    <div class="modal__panel modal__panel--crop modal__panel--fx" role="dialog" aria-modal="true"
+      aria-labelledby="outlineTitle">
+      <div id="outlineTitle" class="modal__title">Outline</div>
+      <div class="gen-grid">
+        <div class="gen-field">
+          <span class="gen-field__caption">Color:</span>
+          <button id="outlineColorBtn" class="color-swatch"><span class="color-swatch__fill"></span></button>
+        </div>
+        <div class="gen-field">
+          <span class="gen-field__caption">Thickness:</span>
+          <input id="outlineWidthSlider" class="gen-field__slider" type="range" min="1" max="64" step="1" />
+          <input id="outlineWidthBox" class="gen-num" type="text" inputmode="numeric" maxlength="3" />
+          <span class="gen-field__unit">px</span>
+        </div>
+      </div>
+      <div id="outlineStage" class="gen-stage">
+        <canvas id="outlineCanvas" class="gen-canvas"></canvas>
+      </div>
+      <label class="gen-check"><input id="outlineBackground" type="checkbox" /> Enable Background</label>
+      <div class="crop-actions">
+        <button id="outlineApplyBtn" class="crop-accept-btn">Apply</button>
+        <button id="outlineRemoveBtn" class="crop-remove-btn">Remove</button>
+        <button id="outlineCancelBtn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="shadowModal" class="modal modal--over" hidden>
+    <div class="modal__panel modal__panel--crop modal__panel--fx" role="dialog" aria-modal="true"
+      aria-labelledby="shadowTitle">
+      <div id="shadowTitle" class="modal__title">Shadow</div>
+      <div class="gen-grid">
+        <div class="gen-field">
+          <span class="gen-field__caption">Color:</span>
+          <button id="shadowColorBtn" class="color-swatch"><span class="color-swatch__fill"></span></button>
+        </div>
+        <div class="gen-field">
+          <span class="gen-field__caption">Position:</span>
+          <input id="shadowAngleSlider" class="gen-field__slider" type="range" min="-180" max="180" step="1" />
+          <input id="shadowAngleBox" class="gen-num" type="text" inputmode="numeric" maxlength="4" />
+          <span class="gen-field__unit gen-field__unit--deg"></span>
+          <svg id="shadowArrow" class="fx-arrow" viewBox="-12 -12 24 24">
+            <circle r="11" />
+            <path d="M-6 0h12M2.5-4L7 0l-4.5 4" />
+          </svg>
+        </div>
+        <div class="gen-field">
+          <span class="gen-field__caption">Distance:</span>
+          <input id="shadowDistanceSlider" class="gen-field__slider" type="range" min="1" max="64" step="1" />
+          <input id="shadowDistanceBox" class="gen-num" type="text" inputmode="numeric" maxlength="3" />
+          <span class="gen-field__unit">px</span>
+        </div>
+        <div class="gen-field">
+          <span class="gen-field__caption">Size:</span>
+          <input id="shadowSizeSlider" class="gen-field__slider" type="range" min="1" max="64" step="1" />
+          <input id="shadowSizeBox" class="gen-num" type="text" inputmode="numeric" maxlength="3" />
+          <span class="gen-field__unit">px</span>
+        </div>
+        <div class="gen-field">
+          <span class="gen-field__caption">Fade-out:</span>
+          <input id="shadowFadeSlider" class="gen-field__slider" type="range" min="0" max="100" step="1" />
+          <input id="shadowFadeBox" class="gen-num" type="text" inputmode="numeric" maxlength="3" />
+          <span class="gen-field__unit">%</span>
+        </div>
+      </div>
+      <div id="shadowStage" class="gen-stage">
+        <canvas id="shadowCanvas" class="gen-canvas"></canvas>
+      </div>
+      <label class="gen-check"><input id="shadowBackground" type="checkbox" /> Enable Background</label>
+      <div class="crop-actions">
+        <button id="shadowApplyBtn" class="crop-accept-btn">Apply</button>
+        <button id="shadowRemoveBtn" class="crop-remove-btn">Remove</button>
+        <button id="shadowCancelBtn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- V3, 30d. The colour picker, over whichever modal asked for it. Ours
+       rather than <input type=color>, which in Electron 33 has no alpha. The
+       user's design: the wheel, then Brightness and Alpha as two vertical bars,
+       and under them Hex, R, G and B, with A under the Alpha bar. -->
+  <div id="colorModal" class="modal modal--over modal--top" hidden>
+    <div class="modal__panel color-panel" role="dialog" aria-modal="true"
+      aria-labelledby="colorTitle">
+      <div id="colorTitle" class="modal__title">Color</div>
+      <div class="color-body">
+        <div id="colorWheel" class="color-wheel">
+          <canvas id="colorWheelCanvas" class="color-wheel__canvas"></canvas>
+          <div id="colorWheelDot" class="color-wheel__dot"></div>
+        </div>
+        <div id="colorValueBar" class="color-bar">
+          <canvas class="color-bar__canvas"></canvas>
+          <div class="color-bar__mark"></div>
+        </div>
+        <div id="colorAlphaBar" class="color-bar color-bar--alpha">
+          <canvas class="color-bar__canvas"></canvas>
+          <div class="color-bar__mark"></div>
+        </div>
+        <div class="color-boxes">
+          <label class="color-box color-box--hex"><span>Hex</span>
+            <input id="colorHexBox" type="text" spellcheck="false" /></label>
+          <label class="color-box"><span>R</span>
+            <input id="colorRBox" type="text" inputmode="numeric" maxlength="3" /></label>
+          <label class="color-box"><span>G</span>
+            <input id="colorGBox" type="text" inputmode="numeric" maxlength="3" /></label>
+          <label class="color-box"><span>B</span>
+            <input id="colorBBox" type="text" inputmode="numeric" maxlength="3" /></label>
+        </div>
+        <label class="color-box color-box--alpha"><span>A</span>
+          <input id="colorABox" type="text" inputmode="numeric" maxlength="3" /></label>
+      </div>
+      <div class="crop-actions">
+        <button id="colorAcceptBtn" class="crop-accept-btn">Accept</button>
+        <button id="colorCancelBtn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Before app.js, which reads the bindings these declare. The renderer is
        sandboxed and cannot require() anything, so code it shares with the main
        process has to arrive as a plain script. timeline.js is the same file
        main requires, which is the point: one layer model, not two that have to
        be kept agreeing. -->
   <script src="../src/timeline.js"></script>
+  <script src="../src/textLayout.js"></script>
+  <script src="../src/genDraw.js"></script>
+  <script src="../src/colorModel.js"></script>
   <script src="../src/geometry.js"></script>
   <script src="../src/history.js"></script>
   <script src="../src/project.js"></script>

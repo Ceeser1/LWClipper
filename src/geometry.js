@@ -671,7 +671,190 @@ const layerGeometry = (() => {
     return { crop, scale, overlay };
   }
 
+  // ---- V3, 31a. The text box ----
+  //
+  // A generated text's box, dragged in the Edit Text modal: its sides, one at a
+  // time or with Shift the opposite one too, and the whole box. In project
+  // pixels, whole ones, and held to the frame so every grip stays where it can
+  // be grabbed. Nothing here is the crop's resizeEdge: that one steps in even
+  // pixels for the encoder and caps a mirrored drag at a pixel per screen pixel,
+  // which on a text box would leave the side trailing behind the pointer.
+
+  // As small as a box may get, the crop's figure for the same reason: below it
+  // the grips pile onto each other.
+  const TEXT_BOX_MIN = 16;
+
+  // The lines a box snaps to on one axis: the frame's two edges and its middle.
+  function nearestLine(values, size, reach) {
+    let best = null;
+    for (const v of values) {
+      for (const line of [0, size / 2, size]) {
+        const d = line - v;
+        if (Math.abs(d) <= reach && (!best || Math.abs(d) < Math.abs(best.d))) best = { d, line };
+      }
+    }
+    return best;
+  }
+
+  /**
+   * One side of the box moved by `delta` project pixels. Mirrored, the side
+   * opposite moves the other way and the centre holds. `reach` is how near a
+   * frame edge or the frame's middle the moving side has to come to land on it,
+   * in project pixels, 0 for none. Hands back the box and the line it snapped
+   * to, or null.
+   */
+  function textBoxEdge(box, edge, delta, mirrored, frame, reach = 0) {
+    const vertical = edge === 'top' || edge === 'bottom';
+    const movesLo = edge === 'left' || edge === 'top';
+    const size = vertical ? frame.height : frame.width;
+    const least = Math.min(TEXT_BOX_MIN, size);
+    const lo0 = vertical ? box.y : box.x;
+    const hi0 = lo0 + (vertical ? box.h : box.w);
+    let v = (movesLo ? lo0 : hi0) + delta;
+    const snap = nearestLine([v], size, reach);
+    if (snap) v = snap.line;
+    let lo;
+    let hi;
+    if (mirrored) {
+      // The pair stays about the centre, lo + hi, which is a whole number, so
+      // rounding one side and taking the other from the sum keeps both whole.
+      const sum = lo0 + hi0;
+      const c = sum / 2;
+      const half = Math.min(Math.min(c, size - c), Math.max(least / 2, movesLo ? c - v : v - c));
+      lo = Math.round(c - half);
+      hi = sum - lo;
+    } else if (movesLo) {
+      lo = Math.min(hi0 - least, Math.max(0, Math.round(v)));
+      hi = hi0;
+    } else {
+      lo = lo0;
+      hi = Math.max(lo0 + least, Math.min(size, Math.round(v)));
+    }
+    const moved = movesLo ? lo : hi;
+    const out = vertical ? { ...box, y: lo, h: hi - lo } : { ...box, x: lo, w: hi - lo };
+    return { box: out, snap: snap && moved === snap.line ? snap.line : null };
+  }
+
+  /**
+   * The whole box moved, held to the frame. Its left edge, centre or right
+   * edge lands on the frame's edges or middle when it comes within `reach`,
+   * and the same up and down. Hands back the box and the line met on each
+   * axis, or null.
+   */
+  function textBoxMove(box, dx, dy, frame, reach = 0) {
+    const axis = (pos, len, delta, size) => {
+      let p = pos + delta;
+      const snap = nearestLine([p, p + len / 2, p + len], size, reach);
+      if (snap) p += snap.d;
+      const held = Math.min(Math.max(0, size - len), Math.max(0, Math.round(p)));
+      // A centre on the middle of an odd frame is half a pixel off it once
+      // rounded, and still counts as on it.
+      return { p: held, line: snap && Math.abs(held - p) <= 0.5 ? snap.line : null };
+    };
+    const x = axis(box.x, box.w, dx, frame.width);
+    const y = axis(box.y, box.h, dy, frame.height);
+    return { box: { ...box, x: x.p, y: y.p }, snapX: x.line, snapY: y.line };
+  }
+
+  // ---- 31b. Rotation ----
+
+  // How near a quarter turn an angle has to come to land on it: the user's
+  // figure, 88 and 92 land on 90, 87 and 93 stay.
+  const TEXT_TURN_SNAP = 2;
+
+  /**
+   * An angle as the text keeps it: whole degrees in (-180, 180], on a quarter
+   * turn when it is within TEXT_TURN_SNAP of one. -180 is kept as 180, the
+   * model's own reading of the same direction.
+   */
+  function textTurn(deg) {
+    let a = Math.round(Number(deg) || 0) % 360;
+    if (a <= -180) a += 360;
+    if (a > 180) a -= 360;
+    const quarter = Math.round(a / 90) * 90;
+    if (Math.abs(a - quarter) <= TEXT_TURN_SNAP) a = quarter;
+    if (a === -180) a = 180;
+    return a === 0 ? 0 : a;
+  }
+
+  /**
+   * The angle after a corner has been dragged round the box's centre: where it
+   * started, plus how far the pointer has gone round the centre since, from
+   * `from` to `to`, both [x, y] relative to the centre. Screen y runs down, so
+   * clockwise is positive, the text's own convention.
+   */
+  function textTurnDrag(start, from, to) {
+    const a0 = Math.atan2(from[1], from[0]);
+    const a1 = Math.atan2(to[1], to[0]);
+    return textTurn(start + (a1 - a0) * 180 / Math.PI);
+  }
+
+  /**
+   * One side of a turned box moved by `delta` pixels along the box's own axis,
+   * positive outwards for the right and bottom sides and inwards for the left
+   * and top, the same sense textBoxEdge's delta has. The side opposite stays
+   * where it is on the screen, so the centre moves half as far along that same
+   * turned axis; mirrored, the centre holds and both sides move.
+   *
+   * No snapping and no holding to the frame: a turned box's sides do not run
+   * along the frame's, and part of a turned title may well be meant to leave
+   * it. Only the least size holds, and a guard of a few frames across.
+   */
+  function textBoxEdgeTurned(box, edge, delta, mirrored, rotation, frame) {
+    const vertical = edge === 'top' || edge === 'bottom';
+    const movesLo = edge === 'left' || edge === 'top';
+    const len0 = vertical ? box.h : box.w;
+    const most = 4 * Math.max(frame.width, frame.height);
+    const grow = (movesLo ? -delta : delta) * (mirrored ? 2 : 1);
+    const len = Math.min(most, Math.max(TEXT_BOX_MIN, Math.round(len0 + grow)));
+    const shift = mirrored ? 0 : (len - len0) / 2 * (movesLo ? -1 : 1);
+    const a = rotation * Math.PI / 180;
+    // The box's own axis on the screen: across for left and right, down for
+    // top and bottom.
+    const ux = vertical ? -Math.sin(a) : Math.cos(a);
+    const uy = vertical ? Math.cos(a) : Math.sin(a);
+    const cx = box.x + box.w / 2 + ux * shift;
+    const cy = box.y + box.h / 2 + uy * shift;
+    const w = vertical ? box.w : len;
+    const h = vertical ? len : box.h;
+    return { box: { x: Math.round(cx - w / 2), y: Math.round(cy - h / 2), w, h }, snap: null };
+  }
+
+  /**
+   * A turned box moved. Its centre, the one point of it that means the same
+   * turned or not, lands on the frame's edges or middle within `reach`, and is
+   * held inside the frame so the box cannot be lost off it.
+   */
+  function textBoxMoveTurned(box, dx, dy, frame, reach = 0) {
+    const axis = (pos, len, delta, size) => {
+      let c = pos + len / 2 + delta;
+      const snap = nearestLine([c], size, reach);
+      if (snap) c = snap.line;
+      c = Math.min(size, Math.max(0, c));
+      const p = Math.round(c - len / 2);
+      return { p, line: snap && Math.abs(p + len / 2 - snap.line) <= 0.5 ? snap.line : null };
+    };
+    const x = axis(box.x, box.w, dx, frame.width);
+    const y = axis(box.y, box.h, dy, frame.height);
+    return { box: { ...box, x: x.p, y: y.p }, snapX: x.line, snapY: y.line };
+  }
+
+  /** Whether a box is the whole frame, which is the same as having none. */
+  function isWholeBox(box, frame) {
+    return !box || (Math.round(box.x) === 0 && Math.round(box.y) === 0
+      && Math.round(box.w) === frame.width && Math.round(box.h) === frame.height);
+  }
+
   return {
+    TEXT_BOX_MIN,
+    textBoxEdge,
+    textBoxMove,
+    isWholeBox,
+    TEXT_TURN_SNAP,
+    textTurn,
+    textTurnDrag,
+    textBoxEdgeTurned,
+    textBoxMoveTurned,
     PREVIEW_MAX_W,
     PREVIEW_MAX_H,
     sourceRect,

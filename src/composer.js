@@ -115,7 +115,10 @@ function buildComposeArgs({
     // long as it is asked, and -t is what stops it. -ss would be meaningless
     // here and -framerate is set so the loop arrives at the project's rate
     // rather than at the demuxer's own default of 25.
-    if (l.kind === 'image') {
+    //
+    // V3. A generated layer arrives here as the PNG the window drew it into,
+    // at the project's size, so it is a still like any image from this point.
+    if (timeline.isStill(l)) {
       args.push('-loop', '1', '-framerate', String(fps), '-t', fixed(l.duration), '-i', l.src);
     } else {
       args.push('-ss', fixed(l.sourceIn), '-t', fixed(l.duration), '-i', l.src);

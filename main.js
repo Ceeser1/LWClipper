@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 const { pathToFileURL } = require('url');
+const crypto = require('crypto');
 
 // Everything the app keeps for itself sits under one folder. Electron has no
 // 'localAppData' path name, and its 'appData' is Roaming, which a domain profile
@@ -958,6 +959,40 @@ ipcMain.handle('shell:openFile', async (_event, filePath) => {
 });
 
 ipcMain.handle('clipboard:readText', () => clipboard.readText());
+
+/**
+ * V3. The PNG a generated layer was drawn into, for the export.
+ *
+ * Named by a hash of everything the picture depends on, which the window hands
+ * over as `key`, so the same text at the same size is written once and found
+ * again by every export after it. Asked first without the picture: if the file
+ * is already there the window never has to encode one. The cache is in the
+ * app's own folder rather than beside the downloads, because nothing in it is
+ * anything the user put there, and it is never in a project: a project is
+ * redrawn from its settings on opening.
+ */
+function genImageDir() {
+  return path.join(appFilesDir(), 'gen');
+}
+
+ipcMain.handle('gen:image', (_event, { key, png }) => {
+  const name = crypto.createHash('sha1').update(String(key)).digest('hex').slice(0, 24) + '.png';
+  const file = path.join(genImageDir(), name);
+  if (fs.existsSync(file)) return { ok: true, path: file };
+  if (!png) return { ok: true, path: null };
+  try {
+    fs.mkdirSync(genImageDir(), { recursive: true });
+    // Written beside itself and renamed into place, so an export that dies
+    // halfway through writing can never leave a cut-off PNG under a name that
+    // every later export trusts.
+    const part = file + '.part';
+    fs.writeFileSync(part, Buffer.from(png));
+    fs.renameSync(part, file);
+    return { ok: true, path: file };
+  } catch (e) {
+    return { ok: false, error: String(e.message || e) };
+  }
+});
 
 ipcMain.handle('shell:fileUrl', (_event, filePath) => {
   // pathToFileURL escapes spaces, #, % and unicode; hand-building the string

@@ -86,12 +86,28 @@ const timelineModel = (() => {
    * working untouched.
    *
    * What `kind` says is where the pixels come from and whether there is a clock
-   * behind them. Two values today. It is deliberately not a boolean, because
-   * the V3 text layer the file already anticipates, "a layer with no source
-   * file", is a third one, and a boolean would have to be replaced to admit it.
+   * behind them. It is deliberately not a boolean, because the V3 text layer
+   * the file anticipated, "a layer with no source file", is a third one, and a
+   * boolean would have had to be replaced to admit it.
+   *
+   * V3. The third one arrived as `gen`, generated media: text and the bar,
+   * drawn by the app from settings rather than decoded from a file. Its
+   * settings are the `gen` object, see genOf below.
    */
   function kindOf(props) {
-    return props && props.kind === 'image' ? 'image' : 'media';
+    if (props && (props.kind === 'image' || props.kind === 'gen')) return props.kind;
+    return 'media';
+  }
+
+  /**
+   * V3. Whether a layer is a still: one picture held for as long as the layer
+   * lasts, with no clock behind it. An image is one, and so is everything
+   * generated, which is drawn once from its settings and then behaves exactly
+   * like an image for every rule that asks: its length, how far its edges can
+   * be dragged, and what a split does to its source.
+   */
+  function isStill(layer) {
+    return !!layer && (layer.kind === 'image' || layer.kind === 'gen');
   }
 
   /**
@@ -109,25 +125,257 @@ const timelineModel = (() => {
     return Math.max(MIN_LAYER_SPAN, n);
   }
 
+  // ---- V3. Generated media ----
+  //
+  // A generated layer has no file. What it shows is the `gen` object, and the
+  // window draws that into a frame-size picture which the preview and the
+  // export then treat as an image. Everything here is the shape of that object
+  // and the defaults and limits of each setting, so that a .lwc edited by hand,
+  // or written by a later 3.X with fields this one has never heard of, opens as
+  // something drawable rather than as an error halfway through a frame.
+  //
+  // `form` rather than `type`, because a layer's type is already video or
+  // audio and a generated layer is a video one in every sense that word has.
+
+  const GEN_FORMS = ['text', 'bar'];
+
+  // Sizes in the gen object are pixels at the project height they were set at,
+  // and that height travels with them as `refHeight`. Drawn into a frame of
+  // another height, they scale by the ratio, so a title keeps its look when
+  // the project goes from 720p to 1080p. A file without one reads as 1080p.
+  const GEN_REF_HEIGHT = 1080;
+
+  // The user's figures: outline thickness, shadow distance and shadow size are
+  // all 1 to 64 pixels. Pixels of the project, as the modals show them, which
+  // is not what is stored: a text keeps its sizes at its refHeight, and a new
+  // one is set at 1080 whatever the project, so 64 on a 720p project is 96 in
+  // the file and 1 on a 1080p project that was 720p is two thirds. The file is
+  // therefore held only to a guard, a hundredth of a pixel (what the modals
+  // store to) up to GEN_EFFECT_LIMIT, and the 1 to 64 is the modals' to keep.
+  const GEN_EFFECT_MAX = 64;
+  const GEN_EFFECT_MIN = 0.01;
+  const GEN_EFFECT_LIMIT = 1024;
+
+  // The largest font size, in pixels at refHeight. Past the frame on any
+  // project anyone makes, so it is a guard against a typo, not a design limit.
+  const GEN_FONT_MAX = 2000;
+
+  // Only for a file that names no font at all. A font that is named but not
+  // installed is kept as named, because the project may be opened on the PC
+  // that has it; falling back for the drawing is the window's business.
+  const DEFAULT_FONT = 'Arial';
+
+  const TEXT_H = ['left', 'center', 'right'];
+  const TEXT_V = ['top', 'middle', 'bottom'];
+  const BAR_SIDES = ['top', 'right', 'bottom', 'left'];
+
+  function bool(v) {
+    return v === true;
+  }
+
+  // A number held to a range, or the fallback when it is not a number at all.
+  // The clamp above would turn nonsense into the bottom of the range, which for
+  // a font size is one pixel and looks exactly like a bug.
+  function within(v, lo, hi, fallback) {
+    const n = Number(v);
+    if (v === null || v === undefined || v === '' || !Number.isFinite(n)) return fallback;
+    return Math.min(hi, Math.max(lo, n));
+  }
+
+  function oneOf(v, list, fallback) {
+    return list.includes(v) ? v : fallback;
+  }
+
+  /**
+   * A colour as `#rrggbbaa`, lowercase, which is what canvas takes as it is and
+   * what the colour picker hands back. Six digits read as fully opaque, since
+   * that is what a colour written without its alpha has always meant.
+   */
+  function colourOf(v, fallback) {
+    if (typeof v !== 'string') return fallback;
+    const m = /^#?([0-9a-f]{6})([0-9a-f]{2})?$/i.exec(v.trim());
+    if (!m) return fallback;
+    return ('#' + m[1] + (m[2] || 'ff')).toLowerCase();
+  }
+
+  // Both effects are null when they are off, which is the user's Remove: "Remove
+  // button completely removes the selected options". Off is not an outline of
+  // no width, it is no outline.
+  function outlineOf(v) {
+    if (!v || typeof v !== 'object') return null;
+    return {
+      color: colourOf(v.color, '#000000ff'),
+      width: within(v.width, GEN_EFFECT_MIN, GEN_EFFECT_LIMIT, 4),
+    };
+  }
+
+  /**
+   * The shadow. `angle` is the direction it falls in, in degrees: the user's
+   * convention, 0 to the right, positive clockwise, and -180 and +180 both to
+   * the left. `fade` is how much of the colour's alpha is gone by the far edge
+   * of `size`, 0 to 1, so 0 keeps it solid all the way out and the default of
+   * 1 fades it to nothing.
+   */
+  function shadowOf(v) {
+    if (!v || typeof v !== 'object') return null;
+    return {
+      color: colourOf(v.color, '#000000b3'),
+      angle: within(v.angle, -180, 180, 45),
+      distance: within(v.distance, GEN_EFFECT_MIN, GEN_EFFECT_LIMIT, 8),
+      size: within(v.size, GEN_EFFECT_MIN, GEN_EFFECT_LIMIT, 8),
+      fade: within(v.fade, 0, 1, 1),
+    };
+  }
+
+  /**
+   * One text style. With `partial` it is a run's own style, which holds only
+   * what that run changes from the text's style, so only the fields actually
+   * present come out. Without it every field is filled in.
+   *
+   * A partial style keeps an effect set to null, because on a run null is a
+   * statement, "no outline on these words", where an absent field says "the
+   * same as the rest".
+   */
+  function textStyleOf(v, partial) {
+    const src = v && typeof v === 'object' ? v : {};
+    const has = (k) => Object.prototype.hasOwnProperty.call(src, k) && src[k] !== undefined;
+    const out = {};
+    const field = (k, fn) => {
+      if (!partial || has(k)) out[k] = fn(src[k]);
+    };
+    field('font', (f) => (typeof f === 'string' && f.trim() ? f.trim() : DEFAULT_FONT));
+    field('size', (n) => within(n, 1, GEN_FONT_MAX, 96));
+    field('color', (c) => colourOf(c, '#ffffffff'));
+    field('bold', bool);
+    field('italic', bool);
+    field('underline', bool);
+    field('strike', bool);
+    field('outline', outlineOf);
+    field('shadow', shadowOf);
+    return out;
+  }
+
+  /**
+   * The text itself, as runs: pieces of text that each carry the style they
+   * change. 3.0 formats a text as one, so it always has exactly one run with
+   * nothing changed, but the layout already measures and draws run by run. The
+   * user asked for the ground to be laid for words formatted one by one later,
+   * and this is it: that becomes splitting runs, not changing what a text is.
+   *
+   * There is always at least one run, even for no text, so there is always a
+   * style to measure an empty line with.
+   */
+  function runsOf(v) {
+    const list = Array.isArray(v) ? v : [];
+    const runs = list
+      .filter((r) => r && typeof r === 'object')
+      .map((r) => ({
+        text: typeof r.text === 'string' ? r.text.replace(/\r\n?/g, '\n') : '',
+        style: textStyleOf(r.style, true),
+      }));
+    return runs.length ? runs : [{ text: '', style: {} }];
+  }
+
+  // 31a's box, in project pixels at refHeight. null is the whole frame, which
+  // is all 3.0 has.
+  function boxOf(v) {
+    if (!v || typeof v !== 'object') return null;
+    const x = Number(v.x);
+    const y = Number(v.y);
+    const w = Number(v.w);
+    const h = Number(v.h);
+    if (![x, y, w, h].every(Number.isFinite) || w <= 0 || h <= 0) return null;
+    return { x, y, w, h };
+  }
+
+  // 31b's rotation in degrees, kept to -180 up to and including 180 so that
+  // one angle has one number.
+  function rotationOf(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return 0;
+    const r = round(((n % 360) + 360) % 360);
+    return r > 180 ? round(r - 360) : r;
+  }
+
+  function textOf(v) {
+    const src = v && typeof v === 'object' ? v : {};
+    const align = src.align && typeof src.align === 'object' ? src.align : {};
+    return {
+      runs: runsOf(src.runs),
+      style: textStyleOf(src.style, false),
+      align: {
+        h: oneOf(align.h, TEXT_H, 'center'),
+        v: oneOf(align.v, TEXT_V, 'middle'),
+      },
+      box: boxOf(src.box),
+      rotation: rotationOf(src.rotation),
+    };
+  }
+
+  /**
+   * The bar: a strip stuck to one side of the frame. `thickness` is in pixels
+   * at refHeight, and the user's ceiling for it, a quarter of the frame's
+   * height or width depending on the side, is the drawing's to apply because
+   * only the drawing knows the frame. `span` is how much of its side it covers,
+   * 0.01 to 1, centred on the side: "Bars span from the center of the side
+   * where they are sticky to".
+   */
+  function barOf(v) {
+    const src = v && typeof v === 'object' ? v : {};
+    return {
+      side: oneOf(src.side, BAR_SIDES, 'top'),
+      color: colourOf(src.color, '#ffffffff'),
+      thickness: within(src.thickness, 1, 100000, 40),
+      span: within(src.span, 0.01, 1, 1),
+    };
+  }
+
+  /**
+   * A generated layer's settings, whole. Anything missing or broken comes out
+   * as its default, and a form this version does not know comes out as text,
+   * because a layer that opens as the wrong kind of generated media can still
+   * be looked at and deleted, where one that cannot be drawn at all cannot.
+   *
+   * Only the form's own settings are kept: a bar carries no text and a text no
+   * bar, so changing a form is a real change rather than a hidden second one.
+   */
+  function genOf(v) {
+    const src = v && typeof v === 'object' ? v : {};
+    const form = oneOf(src.form, GEN_FORMS, 'text');
+    const refHeight = Math.round(within(src.refHeight, 1, 100000, GEN_REF_HEIGHT));
+    if (form === 'bar') return { form, refHeight, bar: barOf(src.bar) };
+    return { form, refHeight, text: textOf(src.text) };
+  }
+
   function createLayer(props = {}) {
     const kind = kindOf(props);
-    const sourceDuration = Math.max(0, round(props.sourceDuration || 0));
+    const still = kind !== 'media';
+    const sourceDuration = still ? 0 : Math.max(0, round(props.sourceDuration || 0));
     const sourceIn = clamp(props.sourceIn === undefined ? 0 : props.sourceIn, 0, sourceDuration);
     // A layer defaults to showing the rest of its source from sourceIn onwards.
     const rest = sourceDuration - sourceIn;
-    const duration = kind === 'image'
+    const duration = still
       ? round(stillSpan(props))
       : (props.duration === undefined ? rest : clamp(props.duration, 0, rest));
     return {
       id: props.id || newId(),
-      type: props.type === 'audio' ? 'audio' : 'video',
+      // A generated layer is a picture, whatever it was handed.
+      type: props.type === 'audio' && kind !== 'gen' ? 'audio' : 'video',
       // V2.3. Declared here for the reason fadeIn and render are: the project
       // open path runs every layer back through createLayer, and a field this
       // does not name is a field it drops. An image whose kind vanished on
       // reopening would come back as a video layer with no frames.
       kind,
+      // V3. What a generated layer shows, and null on every other kind.
+      // Declared here for the reason kind is: a field createLayer does not name
+      // is a field the project open path drops. Always rebuilt through genOf
+      // rather than kept as handed in, so no two layers ever share one object:
+      // a paste or an undo snapshot holding the very same settings as the
+      // layer on the timeline would be a change to one reaching the other.
+      gen: kind === 'gen' ? genOf(props.gen) : null,
       name: props.name || '',
-      src: props.src || null,
+      // A generated layer has no file, so any path it was handed means nothing.
+      src: kind === 'gen' ? null : (props.src || null),
       start: round(Math.max(0, props.start || 0)),
       duration: round(duration),
       sourceIn: round(sourceIn),
@@ -150,7 +398,9 @@ const timelineModel = (() => {
       // are: a field createLayer does not name is a field it drops.
       lane: laneValue(props.lane),
       // Step 2's geometry owns what goes in here. null means the whole frame.
-      crop: props.crop || null,
+      // V3. Nothing on a generated layer: its picture is drawn at the frame's
+      // size and covers it exactly, and where its text goes is its own box.
+      crop: kind === 'gen' ? null : (props.crop || null),
       // V2.8 item 8. Which of the Render Position rings the picture was put on,
       // by name, so it can stay there when it is scaled rather than growing
       // about its own centre and coming away from the edge it was put against.
@@ -167,7 +417,7 @@ const timelineModel = (() => {
       // it does not recognise simply does nothing, which is why this checks that
       // it is a string and not which string it is. null is a picture that was
       // put somewhere by hand and sticks to nothing.
-      anchor: typeof props.anchor === 'string' && props.anchor ? props.anchor : null,
+      anchor: kind !== 'gen' && typeof props.anchor === 'string' && props.anchor ? props.anchor : null,
       // V2.1's Render Position tab owns this one: where the cropped picture is
       // placed and scaled inside the project frame, in project pixels. null
       // means centre and fit, which is what placeLayer works out for itself.
@@ -177,7 +427,7 @@ const timelineModel = (() => {
       // this line existed a layer could carry a position that createLayer threw
       // away: every undo and every project reopened would have quietly put the
       // layer back in the middle of the frame.
-      render: props.render || null,
+      render: kind === 'gen' ? null : (props.render || null),
       // V2.2's fades, in seconds in from each end of the layer. Zero is no
       // fade, which is what every layer and every project file written before
       // this existed reads as, so nothing old changes.
@@ -230,7 +480,7 @@ const timelineModel = (() => {
   // is what "no ceiling" means. round(Infinity) is Infinity, so the arithmetic
   // above it needs no special case.
   function sourceRemaining(layer) {
-    if (layer && layer.kind === 'image') return Infinity;
+    if (isStill(layer)) return Infinity;
     return round(layer.sourceDuration - layer.sourceIn);
   }
 
@@ -246,7 +496,7 @@ const timelineModel = (() => {
   // limit of its own, and the Math.max(0, ...) at the call site, which every
   // layer already goes through, is what turns that into 0.0s.
   function sourceBefore(layer) {
-    if (layer && layer.kind === 'image') return Infinity;
+    if (isStill(layer)) return Infinity;
     return round(layer.sourceIn);
   }
 
@@ -710,6 +960,69 @@ const timelineModel = (() => {
   }
 
   /**
+   * V3. An empty lane put in at `lane`, the lanes from there down moving down
+   * one. removeLane's opposite, and the other time lanes are renumbered.
+   */
+  function insertLane(layers, type, lane) {
+    const settled = arrangeLanes(layers);
+    const at = Math.max(0, Math.floor(Number(lane) || 0));
+    return arrangeLanes(settled.map((l) => (l.type === type && l.lane >= at
+      ? { ...l, lane: l.lane + 1 }
+      : l)));
+  }
+
+  /**
+   * V3. Where a new generated layer goes, by the user's rule: "a generated
+   * media first gets put into a new (or the next possible empty) video track".
+   * Whatever row the click was on, then, since putting it onto a row's clips
+   * would turn it into a crossfade with them.
+   *
+   * The topmost empty video row of the `rows` the timeline shows, but only if
+   * nothing on a row above it is showing anywhere in the new layer's time, from
+   * `at` for `length` seconds. Otherwise, and when there is no empty row, a new
+   * row at the very top. Rows stack top first, so an empty row under a full
+   * frame video is a row nobody can see: the user put a text on an empty
+   * Video 4 under two videos, where Render Preview rightly hid it, and asked
+   * on 2026-09-25 for it to go on top instead.
+   *
+   * Answers the lane, and whether it has to be inserted first.
+   */
+  function genLane(layers, rows, at = 0, length = IMAGE_SECONDS) {
+    const video = layers.filter((l) => l.type === 'video');
+    const used = new Set(video.map((l) => laneValue(l.lane)));
+    const shown = Math.max(Number(rows) || 0, laneCount(layers, 'video'));
+    const from = Math.max(0, Number(at) || 0);
+    const to = from + length;
+    for (let lane = 0; lane < shown; lane += 1) {
+      if (used.has(lane)) continue;
+      // Every row above the topmost empty one has clips; any of them showing
+      // while this one does would cover it. Disabled ones count too, since the
+      // row can be ticked back on.
+      const covered = video.some((l) => laneValue(l.lane) < lane && l.start < to && endOf(l) > from);
+      return covered ? { lane: 0, insert: true } : { lane, insert: false };
+    }
+    return { lane: 0, insert: true };
+  }
+
+  /**
+   * V3. A new generated layer on the timeline at `at`, on the lane genLane
+   * picks, with the row made first when it needs one. Its length is the ten
+   * seconds an image opens at.
+   */
+  function addGen(layers, gen, at, rows, props = {}) {
+    const where = genLane(arrangeLanes(layers), rows, at);
+    const base = where.insert ? insertLane(layers, 'video', 0) : arrangeLanes(layers);
+    const layer = createLayer({
+      ...props,
+      kind: 'gen',
+      gen,
+      start: Math.max(0, Number(at) || 0),
+      lane: where.lane,
+    });
+    return { layers: arrangeLanes([...base, layer]), layer, inserted: where.insert };
+  }
+
+  /**
    * The same props written onto every layer of one lane. The row's head acts on
    * the whole row, which the user settled on 2026-09-24: Enabled and Volume
    * mean the row, not whichever of its clips was last clicked.
@@ -792,6 +1105,45 @@ const timelineModel = (() => {
 
   function setLayer(layers, id, props) {
     return replace(layers, id, (l) => ({ ...l, ...props }));
+  }
+
+  /**
+   * V3. New settings for a generated layer, through genOf, so what a modal
+   * hands over is held to the same limits a file is. Anything that is not a
+   * generated layer is left alone.
+   */
+  function setGen(layers, id, gen) {
+    return replace(layers, id, (l) => (l.kind === 'gen' ? { ...l, gen: genOf(gen) } : l));
+  }
+
+  /**
+   * V3, 31a. A generated layer carried through a Crop Render Frame change,
+   * which pins every picture where it stands: the old frame lands in the new
+   * one at `dx, dy`, scaled by `k` (1 for a crop, the ratio of the two
+   * resolutions for a resolution button), and the new frame is `toHeight` tall.
+   *
+   * Sizes follow the picture's scale, not the frame's height, so cropping 720
+   * down to 600 leaves a title the size it was rather than shrinking it by a
+   * sixth. Only refHeight has to change for that: every size is kept at it.
+   * Where things go depends on what they are stuck to. A text with a box is
+   * pinned like a video, so the box moves with the picture. A text with no box
+   * is laid out in the whole frame and a bar sticks to its side, and both of
+   * those follow the new frame.
+   *
+   * refHeight is a whole number, so the size can be off by the rounding of
+   * that, well under a pixel; the box is worked out from the rounded height, so
+   * it lands exactly.
+   */
+  function reframeGen(gen, fromHeight, toHeight, k, dx, dy) {
+    const g = genOf(gen);
+    const oldScale = fromHeight / g.refHeight;
+    const refHeight = Math.max(1, Math.round(toHeight / (oldScale * k)));
+    if (g.form !== 'text' || !g.text.box) return genOf({ ...g, refHeight });
+    const scale = toHeight / refHeight;
+    const b = g.text.box;
+    const at = (v, off) => round((off + v * oldScale * k) / scale);
+    const box = { x: at(b.x, dx), y: at(b.y, dy), w: at(b.w, 0), h: at(b.h, 0) };
+    return genOf({ ...g, refHeight, text: { ...g.text, box } });
   }
 
   /**
@@ -939,7 +1291,7 @@ const timelineModel = (() => {
       id: newId(),
       start: round(at),
       duration: rest,
-      sourceIn: layer.kind === 'image' ? layer.sourceIn : round(layer.sourceIn + kept),
+      sourceIn: isStill(layer) ? layer.sourceIn : round(layer.sourceIn + kept),
       fadeIn: 0,
       fadeOut: round(Math.min(layer.fadeOut || 0, rest)),
       groupId,
@@ -1131,6 +1483,16 @@ const timelineModel = (() => {
     sourceBefore,
     covers,
     IMAGE_SECONDS,
+    isStill,
+    GEN_FORMS,
+    GEN_REF_HEIGHT,
+    GEN_EFFECT_MAX,
+    GEN_FONT_MAX,
+    DEFAULT_FONT,
+    colourOf,
+    genOf,
+    setGen,
+    reframeGen,
     fadesOf,
     fadeAlphaAt,
     alphaOf,
@@ -1153,6 +1515,9 @@ const timelineModel = (() => {
     laneCount,
     reorderLane,
     removeLane,
+    insertLane,
+    genLane,
+    addGen,
     setLane,
     moveLayer,
     trimLayer,
