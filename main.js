@@ -181,7 +181,86 @@ function createWindow() {
     mainWindow.webContents.send('app:closing');
   });
 
+  // V3.3. The crop popups as windows of their own, at the user's word,
+  // 2026-11-03: "separately moveable but bound to the main window. If you
+  // minimize the main window all goes down, if you close a single child only
+  // that closes". An owned window (parent) is exactly that on Windows: it
+  // stays above the main window, goes down and comes back up with it, and is
+  // closed with it.
+  //
+  // The window is opened by the page with window.open on a blank document, so
+  // it runs in the page's own process and the page moves the popup's panel
+  // into it: the crop code goes on drawing into the same canvases from the
+  // same frames, with nothing copied across. Only names the page uses for
+  // this are let through; any other window.open is refused.
+  mainWindow.webContents.setWindowOpenHandler(({ frameName }) => {
+    if (!POPOUT_NAME.test(frameName || '')) return { action: 'deny' };
+    return {
+      action: 'allow',
+      overrideBrowserWindowOptions: {
+        ...popoutBounds(frameName),
+        parent: mainWindow,
+        minimizable: false,
+        backgroundColor: '#1e1e22',
+        autoHideMenuBar: true,
+        ...(icon ? { icon } : {}),
+      },
+    };
+  });
+  mainWindow.webContents.on('did-create-window', (child, { frameName }) => {
+    child.setMenuBarVisibility(false);
+    // Where it was left, for next time, kept with the settings. Followed as it
+    // moves and is resized and written once it has closed: a window the page
+    // closes, which is Accept and Cancel, goes without a close event of its
+    // own. Only a sensible size counts, since a window hidden with a minimized
+    // main one can report nothing.
+    let last = null;
+    const follow = () => {
+      if (child.isDestroyed()) return;
+      const b = child.getNormalBounds();
+      if (b.width > 100 && b.height > 100) last = { x: b.x, y: b.y, width: b.width, height: b.height };
+    };
+    follow();
+    child.on('move', follow);
+    child.on('resize', follow);
+    child.on('closed', () => {
+      if (!last) return;
+      const spots = { ...(settings.get('popoutBounds') || {}) };
+      spots[frameName] = last;
+      settings.set({ popoutBounds: spots });
+    });
+  });
+
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+}
+
+// V3.3. The names the page may open a popped out editor under.
+const POPOUT_NAME = /^lwc-pop-[a-z]+$/;
+
+/**
+ * Where a popped out editor opens: where it was last closed, when that is
+ * still on a screen, or else a size that suits a crop, over the main window.
+ */
+function popoutBounds(name) {
+  const saved = (settings.get('popoutBounds') || {})[name];
+  if (saved && [saved.x, saved.y, saved.width, saved.height].every(Number.isFinite)) {
+    const onScreen = screen.getAllDisplays().some((d) => {
+      const a = d.workArea;
+      return saved.x + 80 > a.x && saved.x + 80 < a.x + a.width
+        && saved.y + 20 > a.y && saved.y + 20 < a.y + a.height;
+    });
+    if (onScreen) return saved;
+  }
+  const host = mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null;
+  const width = 960;
+  const height = 760;
+  if (!host) return { width, height };
+  return {
+    width,
+    height,
+    x: Math.round(host.x + (host.width - width) / 2),
+    y: Math.round(host.y + Math.max(0, (host.height - height) / 2)),
+  };
 }
 
 // Set by the renderer once it has asked about unsaved work, or when there was
@@ -846,6 +925,10 @@ function openProject(filePath) {
     name,
     doc: parsed.doc,
     meta: parsed.meta,
+    // V3.3. The editors' zoom and pan, kept beside the document.
+    views: parsed.views,
+    // V3.3. The undo stack the project was saved with.
+    history: parsed.history,
     statuses,
   };
 }

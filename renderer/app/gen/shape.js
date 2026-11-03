@@ -46,12 +46,15 @@ function openShapeSettings(layer, first) {
   shapeOpened = JSON.stringify(shapeDraft);
   shapeBackground.checked = genBackdropOn;
   shapeModal.hidden = false;
+  recallStageView(shapeStage, shapeLayerId, genKeyframeOf(shapeLayerId));
   paintSwatch(shapeColorBtn, shapeDraft.color);
   sizeShapeStage();
   paintShapePreview();
 }
 
 function closeShapeSettings() {
+  // V3.3. Kept before the modal lets the layer go, Accept or Cancel.
+  if (shapeLayerId) rememberStageView(shapeStage, shapeLayerId, genKeyframeOf(shapeLayerId));
   settlePick(false);
   shapeModal.hidden = true;
   shapeGuideX.hidden = true;
@@ -67,9 +70,9 @@ function sizeShapeStage() {
   placeShapeBox();
 }
 
-function paintShapePreview() {
+function paintShapePreview(quick) {
   if (!shapeDraft) return;
-  paintGenPreview(shapeStage, shapeCanvas, shapeLayerId, shapeGenOf(shapeDraft));
+  paintGenPreview(shapeStage, shapeCanvas, shapeLayerId, shapeGenOf(shapeDraft), quick);
 }
 
 // The box in project pixels: its own, or where the drawing puts a shape with
@@ -85,19 +88,18 @@ function shapeBoxNow() {
   return { x: Math.round((frame.width - w) / 2), y: Math.round((frame.height - h) / 2), w, h };
 }
 
-// Screen pixels per project pixel on the stage.
+// Screen pixels per project pixel on the stage, zoomed as it is.
 function shapeStageScale() {
-  return (parseFloat(shapeCanvas.style.height) || 1) / projectFrame().height;
+  return stageFrameRect(shapeStage).s;
 }
 
 function placeShapeBox() {
   if (!shapeDraft) return;
-  const s = shapeStageScale();
-  const left = parseFloat(shapeCanvas.style.left) || 0;
-  const top = parseFloat(shapeCanvas.style.top) || 0;
+  const r = stageFrameRect(shapeStage);
+  const s = r.s;
   const b = shapeBoxNow();
-  shapeBoxEl.style.left = (left + b.x * s) + 'px';
-  shapeBoxEl.style.top = (top + b.y * s) + 'px';
+  shapeBoxEl.style.left = (r.left + b.x * s) + 'px';
+  shapeBoxEl.style.top = (r.top + b.y * s) + 'px';
   shapeBoxEl.style.width = (b.w * s) + 'px';
   shapeBoxEl.style.height = (b.h * s) + 'px';
 }
@@ -111,22 +113,31 @@ function setShapeBox(box) {
 
 // The frame line a drag has met, across the whole frame, or none.
 function showShapeGuides(x, y) {
-  const s = shapeStageScale();
-  const left = parseFloat(shapeCanvas.style.left) || 0;
-  const top = parseFloat(shapeCanvas.style.top) || 0;
+  const r = stageFrameRect(shapeStage);
   shapeGuideX.hidden = x === null;
   shapeGuideY.hidden = y === null;
   if (x !== null) {
-    shapeGuideX.style.left = (left + x * s) + 'px';
-    shapeGuideX.style.top = top + 'px';
-    shapeGuideX.style.height = shapeCanvas.style.height;
+    shapeGuideX.style.left = (r.left + x * r.s) + 'px';
+    shapeGuideX.style.top = r.top + 'px';
+    shapeGuideX.style.height = r.height + 'px';
   }
   if (y !== null) {
-    shapeGuideY.style.top = (top + y * s) + 'px';
-    shapeGuideY.style.left = left + 'px';
-    shapeGuideY.style.width = shapeCanvas.style.width;
+    shapeGuideY.style.top = (r.top + y * r.s) + 'px';
+    shapeGuideY.style.left = r.left + 'px';
+    shapeGuideY.style.width = r.width + 'px';
   }
 }
+
+// V3.3. The wheel zooms and empty space pans, so a shape can be put off the
+// frame and found there again.
+bindStageView(shapeStage, {
+  open: () => !!shapeDraft && !shapeModal.hidden,
+  empty: (evt) => evt.target === shapeStage || evt.target === shapeCanvas,
+  redraw: (quick) => {
+    placeShapeBox();
+    paintShapePreview(quick);
+  },
+});
 
 // A side stretches the shape, snapping to the frame's edges and middle the way
 // the text box's does; Shift takes the opposite side along.

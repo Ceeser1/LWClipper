@@ -61,10 +61,12 @@ let cropLayerId = null;
 // draft { id, t, crop, render, anchor }, id null for one that Accept makes.
 // Null on a layer without any, which the popup edits as it always did.
 let cropKeyframe = null;
-// The zoom and pan each layer's crop was accepted at, keyed by layer id. Out of
-// the model on purpose: it is where the popup was looking from, not part of the
-// document, and the project file has no business carrying it.
-const cropViews = new Map();
+// The zoom and pan each layer's crop was accepted at is kept with every other
+// editor's view, by layer and keyframe under the scope 'crop', in
+// stageView.js. Out of the model on purpose: it is where the popup was looking
+// from, not part of the document. V3.3 writes it into the project beside the
+// document, at the user's word, so a reopened project opens the crop where it
+// was left.
 
 let cropRect = null;          // what a save will cut, in source pixels; null is the whole frame
 let cropDraft = null;         // the rectangle the popup is editing
@@ -163,8 +165,7 @@ function currentCrop() {
 function setCurrentCrop(rect, view) {
   if (timelineDriving()) {
     if (!cropLayerId) return;
-    if (view) cropViews.set(cropLayerId, view);
-    else cropViews.delete(cropLayerId);
+    rememberView('crop', cropLayerId, cropKeyframe, view);
     // Through setLayers, because a crop changes the picture: the preview and
     // both trim frames are composited through placeLayer and are now pictures
     // of the wrong rectangle.
@@ -178,7 +179,7 @@ function setCurrentCrop(rect, view) {
 function currentCropView() {
   if (!timelineDriving()) return cropView;
   const l = cropTargetLayer();
-  return l ? (cropViews.get(l.id) || null) : null;
+  return l ? recallView('crop', l.id, cropKeyframe, false) : null;
 }
 
 // ffprobe's numbers are the coded dimensions ffmpeg's crop filter works in, so
@@ -329,12 +330,15 @@ const CROP_OVERLAYS = [
 // The white box over all three frames, showing what a save will keep. Sized
 // from the picture every time rather than cached, since the frames shrink and
 // grow with the window.
-function updateCropOverlays() {
+function updateCropOverlays(draft) {
+  // V3.3. `draft`, a rectangle a popped out crop window is editing, outlined in
+  // its place so the main window shows what the crop window is doing.
+  const rect = draft || cropRect;
   // Nothing to outline in advanced editing. All three frames there are drawn
   // through placeLayer, so the crop is already composited into the picture and
   // a box saying what will be kept would be drawn around a picture that is
   // nothing but the kept part.
-  const size = (!timelineDriving() && cropRect) ? sourceSize() : null;
+  const size = (!timelineDriving() && rect) ? sourceSize() : null;
   for (const [stageOf, boxOf] of CROP_OVERLAYS) {
     const box = boxOf();
     const pic = size ? pictureBox(stageOf(), size) : null;
@@ -342,12 +346,13 @@ function updateCropOverlays() {
       box.hidden = true;
       continue;
     }
-    box.style.left = (pic.left + cropRect.x * pic.scale) + 'px';
-    box.style.top = (pic.top + cropRect.y * pic.scale) + 'px';
-    box.style.width = (cropRect.width * pic.scale) + 'px';
-    box.style.height = (cropRect.height * pic.scale) + 'px';
+    box.style.left = (pic.left + rect.x * pic.scale) + 'px';
+    box.style.top = (pic.top + rect.y * pic.scale) + 'px';
+    box.style.width = (rect.width * pic.scale) + 'px';
+    box.style.height = (rect.height * pic.scale) + 'px';
     box.hidden = false;
   }
+  if (draft) return;
   updateRenderResolution();
   fitWindow();
 }
@@ -427,14 +432,15 @@ function sizeCropStage(size) {
   // 20px beside it, and an arrow plus its gap wants a little more than that.
   // The cap is only here so a freakishly narrow popup cannot push one out past
   // the edge and raise a scrollbar; in practice it never binds.
-  const padding = parseFloat(getComputedStyle(panel).paddingLeft) || 0;
+  const padding = parseFloat(hostWindowOf(panel).getComputedStyle(panel).paddingLeft) || 0;
   const spare = Math.max(0, CROP_ARROW_SHORT + CROP_ARROW_GAP - padding + 2);
   const forArrows = frame.clientWidth - 2 * spare;
   // Always 16:9, whatever shape the picture is. A portrait clip used to make
   // the frame narrow and tall, which moved the arrows and the hint with it.
   let w = Math.min(Math.round(panel.clientWidth * CROP_FRAME_SHARE), forArrows);
   let h = Math.round(w * 9 / 16);
-  const maxH = Math.round(window.innerHeight * CROP_HEIGHT_SHARE);
+  // V3.3. In a window of its own, as tall as the rest of the panel leaves.
+  const maxH = popupStageRoom(panel, cropStage, CROP_HEIGHT_SHARE);
   if (h > maxH) {
     h = maxH;
     w = Math.round(h * 16 / 9);
@@ -771,9 +777,11 @@ for (const [key, arrowOf, dx, dy] of CROP_ARROWS) {
         else nudge();
       }, ARROW_HOLD_EVERY);
     }, ARROW_HOLD_DELAY);
-    window.addEventListener('pointerup', stopHold);
-    window.addEventListener('pointercancel', stopHold);
-    window.addEventListener('blur', stopHold);
+    // V3.3. On whichever window the arrow is in, its own when popped out.
+    const host = hostWindowOf(arrow);
+    host.addEventListener('pointerup', stopHold);
+    host.addEventListener('pointercancel', stopHold);
+    host.addEventListener('blur', stopHold);
   });
 
   arrow.addEventListener('click', () => {
@@ -795,7 +803,31 @@ for (const [key, arrowOf, dx, dy] of CROP_ARROWS) {
  * of them would be cropping the wrong thing. So it reads that layer's own
  * decoder, which is already open on the file and already parked on a frame.
  */
+// V3.3. The frame the popup crops against, held from the moment it has one.
+// The main window stays usable while the popup is out, so the decoder it was
+// painted from moves with the playhead; a held copy keeps the picture under
+// the crop still. Let go when the popup closes and when the decoder lands on
+// the frame it was sent to fetch.
+let cropFrozen = null;
+
 function cropFrameSource() {
+  if (cropFrozen) return cropFrozen;
+  const live = liveCropFrameSource();
+  const size = live && !cropModal.hidden ? sourceSize() : null;
+  if (!size) return live;
+  const copy = document.createElement('canvas');
+  copy.width = size.w;
+  copy.height = size.h;
+  try {
+    copy.getContext('2d').drawImage(live, 0, 0, size.w, size.h);
+  } catch {
+    return live;
+  }
+  cropFrozen = copy;
+  return copy;
+}
+
+function liveCropFrameSource() {
   const layer = cropTargetLayer();
   if (layer) {
     const entry = decoders.get(layer.id);
@@ -828,6 +860,7 @@ function seedCropFrame(layer) {
   if (layer.enabled && timelineModel.covers(layer, compositeAt)) return;
   const onSeeked = () => {
     entry.el.removeEventListener('seeked', onSeeked);
+    cropFrozen = null;
     if (!cropModal.hidden) paintCropFrame();
   };
   entry.el.addEventListener('seeked', onSeeked);
@@ -849,7 +882,7 @@ function paintCropFrame() {
   const cssW = shown.w * cropScale;
   const cssH = shown.h * cropScale;
   if (!cssW || !cssH) return;
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = hostWindowOf(cropCanvas).devicePixelRatio || 1;
   cropCanvas.width = Math.round(cssW * dpr);
   cropCanvas.height = Math.round(cssH * dpr);
   const ctx = cropCanvas.getContext('2d');

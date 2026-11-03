@@ -92,6 +92,12 @@ function openGenSettings(id, first) {
 // layer's id, or null when the layer has none.
 let genKeyframe = null;
 
+// V3.3. The keyframe the open modal is on, when it is this layer's: what its
+// remembered zoom and pan are kept under.
+function genKeyframeOf(layerId) {
+  return genKeyframe && genKeyframe.layerId === layerId ? genKeyframe : null;
+}
+
 /** What a generated layer is called where it has to be named. */
 function genLabel(layer) {
   return genKind(layer.gen).name(layer.gen);

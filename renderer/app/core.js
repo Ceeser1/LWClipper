@@ -197,7 +197,11 @@ function bindPopup(modal, cancel, layer = 0) {
     pressed = evt.target === modal;
   });
   modal.addEventListener('click', (evt) => {
-    if (evt.target === modal && pressed) cancel();
+    if (evt.target !== modal || !pressed) return;
+    // V3.3. A popup out in a window of its own is brought forward instead:
+    // the modal left in the main window is only its lock.
+    if (typeof focusPopOut === 'function' && focusPopOut(modal)) return;
+    cancel();
   });
 }
 
@@ -205,7 +209,10 @@ function bindPopup(modal, cancel, layer = 0) {
 function topPopup() {
   let top = null;
   for (const p of popups) {
-    if (!p.modal.hidden && (!top || p.layer > top.layer)) top = p;
+    // V3.3. A popup out in a window of its own leaves the main window free, so
+    // it is not the main window's popup on top.
+    if (p.modal.hidden || p.modal.classList.contains('modal--popped')) continue;
+    if (!top || p.layer > top.layer) top = p;
   }
   return top;
 }

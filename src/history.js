@@ -190,9 +190,106 @@ const projectHistory = (() => {
     };
   }
 
+  // ---- V3.3. The stack in the project file ----
+  //
+  // The user, 2026-11-03: a project file should save "a big history of
+  // undo-actions history". Until then the stack was session state only.
+  //
+  // Written as a pool of distinct layers and, for each step, which of them it
+  // holds in what order. A gesture changes one or two layers and leaves the
+  // rest the very same objects, so a hundred steps of eight layers come to a
+  // few dozen layers in the pool rather than eight hundred.
+
+  const finiteOr0 = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+
+  /** The stack as a project file keeps it, or null with nothing to keep. */
+  function pack(history) {
+    if (!history || !history.present) return null;
+    const steps = history.past.concat([history.present], history.future);
+    const pool = [];
+    const seen = new Map();
+    const byText = new Map();
+    const index = (layer) => {
+      if (seen.has(layer)) return seen.get(layer);
+      const text = JSON.stringify(layer);
+      let i = byText.get(text);
+      if (i === undefined) {
+        i = pool.length;
+        pool.push(layer);
+        byText.set(text, i);
+      }
+      seen.set(layer, i);
+      return i;
+    };
+    return {
+      at: history.past.length,
+      pool,
+      steps: steps.map((s) => ({
+        start: finiteOr0(s.start),
+        end: finiteOr0(s.end),
+        fps: finiteOr0(s.fps),
+        width: finiteOr0(s.width),
+        height: finiteOr0(s.height),
+        layers: (s.layers || []).map(index),
+      })),
+    };
+  }
+
+  // The file rounds the project's own numbers to a millionth, so the step it
+  // opens on is held against what opened within that rather than exactly.
+  const near = (a, b) => Math.abs(finiteOr0(a) - finiteOr0(b)) < 1e-4;
+
+  /**
+   * A stack read back from a file, standing on `present`, the state the
+   * project actually opened in. `makeLayer` puts each layer of the pool
+   * through the model, as opening does with the document's own.
+   *
+   * Anything that does not hold together, or a step it was saved on that is
+   * not the project that opened, gives a fresh stack instead: an undo that
+   * jumps to a document nobody saved would be worse than no undo at all.
+   */
+  function unpack(packed, present, makeLayer = (l) => l) {
+    const fresh = create(present);
+    if (!present || !packed || typeof packed !== 'object') return fresh;
+    const { pool, steps, at } = packed;
+    if (!Array.isArray(pool) || !Array.isArray(steps)) return fresh;
+    if (!Number.isInteger(at) || at < 0 || at >= steps.length) return fresh;
+    let layers;
+    try {
+      layers = pool.map((l) => (l && typeof l === 'object' && !Array.isArray(l) ? makeLayer(l) : null));
+    } catch {
+      return fresh;
+    }
+    const states = [];
+    for (const s of steps) {
+      if (!s || typeof s !== 'object' || !Array.isArray(s.layers)) return fresh;
+      const list = s.layers.map((i) => (Number.isInteger(i) ? layers[i] : null));
+      if (list.some((l) => !l)) return fresh;
+      states.push({
+        layers: list,
+        start: finiteOr0(s.start),
+        end: finiteOr0(s.end),
+        fps: finiteOr0(s.fps),
+        width: finiteOr0(s.width),
+        height: finiteOr0(s.height),
+      });
+    }
+    const was = states[at];
+    if (!['start', 'end', 'fps', 'width', 'height'].every((k) => near(was[k], present[k]))) return fresh;
+    if (!sameState({ ...was, start: present.start, end: present.end, fps: present.fps,
+      width: present.width, height: present.height }, present)) return fresh;
+    return {
+      past: states.slice(Math.max(0, at - LIMIT), at),
+      present,
+      future: states.slice(at + 1, at + 1 + LIMIT),
+    };
+  }
+
   return {
     LIMIT,
     LIVE_FIELDS,
+    pack,
+    unpack,
     create,
     sameState,
     commit,

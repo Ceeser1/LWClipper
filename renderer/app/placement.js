@@ -144,6 +144,7 @@ function showCropTab(which) {
   cropZoomRow.hidden = place;
   cropPresets.hidden = place;
   placeHint.hidden = !place;
+  placeZoomHint.hidden = !place;
   placeSize.hidden = !place;
   placeScaleRow.hidden = !place;
   if (!place) {
@@ -244,18 +245,20 @@ function placeDraftSize(fit) {
   };
 }
 
-/** The rings, in the stage's own pixels, as centres. */
+/**
+ * The rings, in the stage's own pixels, as centres. V3.3: on the frame where
+ * the stage's view has it, zoomed and panned, rather than on the stage.
+ */
 function placeRings() {
-  const w = placeStage.clientWidth;
-  const h = placeStage.clientHeight;
-  if (!(w > 0) || !(h > 0)) return [];
+  if (!(placeStage.clientWidth > 0) || !(placeStage.clientHeight > 0)) return [];
+  const r = stageFrameRect(placeStage);
   // What the ring occupies end to end, so that anchorCentre insets it by the
   // gap plus its own radius at 0 and at 1, and leaves it in the middle at half.
   const span = 2 * (PLACE_RING_INSET + PLACE_RING_R);
   return PLACE_ANCHORS.map((a) => ({
     ...a,
-    cx: layerGeometry.anchorCentre(a.ax, w, span),
-    cy: layerGeometry.anchorCentre(a.ay, h, span),
+    cx: r.left + layerGeometry.anchorCentre(a.ax, r.width, span),
+    cy: r.top + layerGeometry.anchorCentre(a.ay, r.height, span),
   }));
 }
 
@@ -381,14 +384,9 @@ function placeStagePointAt(evt) {
   return { x: evt.clientX - box.left, y: evt.clientY - box.top };
 }
 
-/** Where a point on the stage is in project pixels. */
+/** Where a point on the stage is in project pixels, through the stage's view. */
 function placePointAt(evt) {
-  const box = placeStageBox();
-  const frame = projectFrame();
-  return {
-    x: (evt.clientX - box.left) * frame.width / box.width,
-    y: (evt.clientY - box.top) * frame.height / box.height,
-  };
+  return stageProjectPoint(placeStage, evt);
 }
 
 const onPicture = (p) => !!placeDraft && p.x >= placeDraft.x && p.y >= placeDraft.y
@@ -398,7 +396,8 @@ const onPicture = (p) => !!placeDraft && p.x >= placeDraft.x && p.y >= placeDraf
 // on it to grab. Outside it nothing happens, so a click on the grey beside a
 // small picture does not teleport it to the pointer.
 placeStage.addEventListener('pointerdown', (evt) => {
-  if (cropTab !== 'place' || !placeDraft) return;
+  // The middle button pans, from anywhere, V3.3.
+  if (evt.button !== 0 || cropTab !== 'place' || !placeDraft) return;
   // A ring and the picture under it are both live. Pressing a ring over the
   // picture arms the snap and starts the drag, and whichever of the two the
   // pointer then does decides which one happens: hold still and it is a click,
@@ -426,24 +425,26 @@ function ringPressHolds(evt) {
 }
 
 placeStage.addEventListener('pointermove', (evt) => {
-  if (cropTab !== 'place') return;
+  if (cropTab !== 'place' || placeStage.dataset.panning === 'true') return;
   if (placeRingPress && !ringPressHolds(evt)) placeRingPress = null;
   const p = placePointAt(evt);
   if (!placeDrag) {
-    placeStage.style.cursor = onPicture(p) ? 'move' : 'default';
+    // Empty space pans, so it says so with the stylesheet's grab.
+    placeStage.style.cursor = onPicture(p) ? 'move' : '';
     return;
   }
-  placeDraft = {
-    ...placeDraft,
-    x: Math.round(p.x - placeDrag.dx),
-    y: Math.round(p.y - placeDrag.dy),
-  };
+  // V3.3. As far as wholly off the frame and 1% past it, the same reach a
+  // shape or a text box has: "it should be able to let it spawn outside".
+  const frame = projectFrame();
+  const x = layerGeometry.holdOffFrame(p.x - placeDrag.dx, placeDraft.width, frame.width);
+  const y = layerGeometry.holdOffFrame(p.y - placeDrag.dy, placeDraft.height, frame.height);
+  placeDraft = { ...placeDraft, x: Math.round(x), y: Math.round(y) };
   // The drag is what decides where the middle is from here on, so it is written
   // unrounded: the rectangle above is what is drawn, this is what it is drawn
   // from, and rounding both would be rounding twice.
   placeCentre = {
-    cx: p.x - placeDrag.dx + placeDraft.width / 2,
-    cy: p.y - placeDrag.dy + placeDraft.height / 2,
+    cx: x + placeDraft.width / 2,
+    cy: y + placeDraft.height / 2,
   };
   placeTouched = true;
   // V2.8 item 8. Dragging the picture is how it comes off the ring it was stuck
@@ -465,6 +466,14 @@ function endPlaceDrag(evt, released) {
   if (snap) snapPlaceTo(snap);
 }
 placeStage.addEventListener('pointerup', (evt) => endPlaceDrag(evt, true));
+
+// V3.3. The wheel zooms and empty space pans, so a picture put off the frame
+// can be seen and grabbed there. Empty is neither the picture nor a ring.
+bindStageView(placeStage, {
+  open: () => !cropModal.hidden && cropTab === 'place' && !!placeDraft,
+  empty: (evt) => !onPicture(placePointAt(evt)) && !ringAt(placeStagePointAt(evt)),
+  redraw: () => drawPlaceStage(),
+});
 // A cancelled pointer is the window taking the gesture away, not a click.
 placeStage.addEventListener('pointercancel', (evt) => endPlaceDrag(evt, false));
 
@@ -481,7 +490,7 @@ function sizePlaceStage() {
   const panel = placePanel.parentElement;
   let w = Math.round(panel.clientWidth * CROP_FRAME_SHARE);
   let h = Math.round(w * frame.height / frame.width);
-  const maxH = Math.round(window.innerHeight * CROP_HEIGHT_SHARE);
+  const maxH = popupStageRoom(panel, placeStage, CROP_HEIGHT_SHARE);
   if (h > maxH) {
     h = maxH;
     w = Math.round(h * frame.width / frame.height);
@@ -492,41 +501,52 @@ function sizePlaceStage() {
 }
 
 function drawPlaceStage() {
-  const { w, h } = sizePlaceStage();
-  const dpr = window.devicePixelRatio || 1;
-  placeCanvas.width = Math.round(w * dpr);
-  placeCanvas.height = Math.round(h * dpr);
+  sizePlaceStage();
+  const w = placeStage.clientWidth;
+  const h = placeStage.clientHeight;
+  const dpr = hostWindowOf(placeStage).devicePixelRatio || 1;
+  placeCanvas.width = Math.max(1, Math.round(w * dpr));
+  placeCanvas.height = Math.max(1, Math.round(h * dpr));
   const ctx = placeCanvas.getContext('2d');
-  // No transform: drawImageArgs maps the project frame onto whatever size the
-  // canvas is, which is what the preview canvas does with its own too.
+  // V3.3. The stage's view as the canvas's transform, and the canvas handed to
+  // the painters as one the frame's own size: drawImageArgs maps the project
+  // frame onto whatever size it is told the canvas is, so this way the frame
+  // lands where the view puts it and a picture hanging off it is drawn where
+  // it hangs, to be dimmed below.
+  const r = stageFrameRect(placeStage);
+  const frame = projectFrame();
+  const virtual = { width: frame.width, height: frame.height };
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, placeCanvas.width, placeCanvas.height);
+  ctx.setTransform(r.s * dpr, 0, 0, r.s * dpr, r.left * dpr, r.top * dpr);
   const target = cropTargetLayer();
   // Everything except the layer being placed, which is drawn afterwards from
   // the two drafts. It is drawn whether or not the playhead covers it: a layer
   // the playhead has left is not in the composite, and placing a picture that
   // is not on screen is placing it blind. Its decoder was parked on that
   // layer's own first frame when the popup opened.
-  paintLayers(ctx, placeCanvas, compositeAt, null, target ? target.id : null);
-  if (target) drawLayerInto(ctx, placeCanvas, target, cropDraft, placeDraft);
-  drawPlaceBox(w, h);
+  paintLayers(ctx, virtual, compositeAt, null, target ? target.id : null);
+  if (target) drawLayerInto(ctx, virtual, target, cropDraft, placeDraft);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  dimOutsideFrame(ctx, placeCanvas, placeStage);
+  drawPlaceBox();
   layoutPlaceRings();
 }
 
 /** Where the layer being placed lands, and the numbers under the stage. */
-function drawPlaceBox(w, h) {
+function drawPlaceBox() {
   const target = cropTargetLayer();
-  const frame = projectFrame();
   const d = placeDraft;
   placeBox.hidden = !d;
   if (!d) {
     placeSize.textContent = '';
     return;
   }
-  const kx = w / frame.width;
-  const ky = h / frame.height;
-  placeBox.style.left = Math.round(d.x * kx) + 'px';
-  placeBox.style.top = Math.round(d.y * ky) + 'px';
-  placeBox.style.width = Math.round(d.width * kx) + 'px';
-  placeBox.style.height = Math.round(d.height * ky) + 'px';
+  const r = stageFrameRect(placeStage);
+  placeBox.style.left = Math.round(r.left + d.x * r.s) + 'px';
+  placeBox.style.top = Math.round(r.top + d.y * r.s) + 'px';
+  placeBox.style.width = Math.round(d.width * r.s) + 'px';
+  placeBox.style.height = Math.round(d.height * r.s) + 'px';
   // Said rather than left to be worked out: a draft that is still the fit is
   // what Accept will store as no position at all.
   //
@@ -1047,6 +1067,29 @@ for (const preset of CROP_PRESETS) {
 
 function openCrop(layerId) {
   if (busy) return;
+  // V3.3. The main window stays usable while a crop window is out, so this can
+  // be asked for with one already open. On the same layer and keyframe it is
+  // brought forward; anything else asks before the open one is thrown away,
+  // and so does Crop Render Frame, whose Accept would move the frame under it.
+  if (!cropModal.hidden || !renderModal.hidden) {
+    const want = timelineDriving()
+      ? ((layerId && timelineModel.layerById(layers, layerId)) || cropTargetLayer())
+      : null;
+    const same = !cropModal.hidden && (!timelineDriving() || sameCropTarget(want));
+    if (same && renderModal.hidden) {
+      focusPopOut(cropModal);
+      return;
+    }
+    confirmPopoutConflict([
+      !cropModal.hidden && {
+        message: t('Another crop window is open. Going on closes it and discards what it has not accepted.'),
+        close: closeCrop,
+      },
+      renderWindowConflict(),
+    ], () => openCrop(layerId));
+    return;
+  }
+  cropFrozen = null;
   if (timelineDriving()) {
     // Opened on a named row, or on whichever one is selected. Fixed here for
     // the life of the popup, which is what cropTargetLayer then reads.
@@ -1089,6 +1132,17 @@ function openCrop(layerId) {
   // Whatever a previous session left part way towards a step is not this one's.
   zoomWheelResidue = 0;
   cropModal.hidden = false;
+  // V3.3. The Render Position tab opens on the view this keyframe, or this
+  // layer, was last left at, and fitted when there is none.
+  recallStageView(placeStage, cropLayerId, cropKeyframe);
+  // V3.3. Out into a window of its own, before anything below measures it.
+  cropPreviewKey = '';
+  popOut(cropModal, 'crop', {
+    title: cropModal.querySelector('.modal__title').textContent,
+    cancel: closeCrop,
+    relayout: resizeCropStage,
+    preview: previewCropDraft,
+  });
   // Before the first paint, so a layer the playhead has left is not cropped
   // against whatever frame its decoder was last asked for.
   const target = cropTargetLayer();
@@ -1120,7 +1174,101 @@ function openCrop(layerId) {
   showCropTab('frame');
 }
 
+/**
+ * V3.3. The main window's picture of what a popped out crop window is doing,
+ * POPOUT_FPS times a second and only when the drafts have changed: the layer
+ * drawn from them in advanced editing, the crop outlined over the picture in
+ * simple editing.
+ */
+let cropPreviewKey = '';
+let cropPreviewLayers = null;
+let cropPreviewAt = -1;
+function previewCropDraft() {
+  if (cropModal.hidden || !cropDraft) return;
+  const render = placeTouched && placeDraft ? { ...placeDraft } : null;
+  const key = JSON.stringify([cropLayerId, cropDraft, render, placeAnchor]);
+  // V3.3. The main window stays usable, so the Render Position tab's picture
+  // of the other layers follows the playhead and any edit made there too.
+  if (cropTab === 'place' && placeDraft && (layers !== cropPreviewLayers || compositeAt !== cropPreviewAt)) {
+    drawPlaceStage();
+  }
+  const moved = layers !== cropPreviewLayers || compositeAt !== cropPreviewAt;
+  cropPreviewLayers = layers;
+  cropPreviewAt = compositeAt;
+  if (key === cropPreviewKey && !moved) return;
+  cropPreviewKey = key;
+  if (!timelineDriving()) {
+    updateCropOverlays({ ...cropDraft });
+    return;
+  }
+  if (!cropLayerId || !timelineModel.layerById(layers, cropLayerId)) return;
+  // Built at every draw rather than held, so a clip moved or trimmed in the
+  // main window is drawn where it now is, not where the last tick left it.
+  popoutPreview = { layerId: cropLayerId, layerNow: () => cropDraftLayer(render) };
+  // Playing, the compositor's own tick draws it at its rate.
+  if (!compositePlaying) drawComposite();
+}
+
+/**
+ * V3.3. The layer as Accept would leave it, for the main window's preview: so
+ * with the playhead anywhere on the clip it shows the final picture with this
+ * crop in it, a keyframe's crop blended along the move like any other.
+ */
+function cropDraftLayer(render) {
+  const layer = cropLayerId ? timelineModel.layerById(layers, cropLayerId) : null;
+  if (!layer) return null;
+  const size = sourceSize();
+  const crop = (size && !isFullFrame(cropDraft, size)) ? { ...cropDraft } : null;
+  if (!cropKeyframe) return { ...layer, crop, render, anchor: placeAnchor };
+  const live = cropKeyframe.id
+    ? timelineModel.keyframesFor(layer).find((k) => k.id === cropKeyframe.id)
+    : null;
+  const next = timelineModel.putKeyframe([layer], layer.id,
+    { ...cropKeyframe, ...(live || {}), crop, render, anchor: placeAnchor, id: cropKeyframe.id || 'draft' });
+  return next[0];
+}
+
+/**
+ * V3.3. Whether opening the crop popup on `layer` now would open what it
+ * already has open: the same layer and the same keyframe, or the same new
+ * keyframe's moment, or neither having any.
+ */
+function sameCropTarget(layer) {
+  if (!layer || layer.id !== cropLayerId) return false;
+  const kf = keyframeToEdit(layer);
+  if (!kf || !cropKeyframe) return !kf && !cropKeyframe;
+  if (kf.id || cropKeyframe.id) return kf.id === cropKeyframe.id;
+  return Math.abs(kf.t - cropKeyframe.t) < 1e-6;
+}
+
+/** V3.3. Whether the crop popup is open on this layer. */
+function cropWindowOn(layerId) {
+  return !cropModal.hidden && !!cropLayerId && cropLayerId === layerId;
+}
+
+/** V3.3. The open crop popup as a conflict confirmPopoutConflict can name. */
+function cropWindowConflict() {
+  if (cropModal.hidden) return null;
+  return {
+    message: t('The crop window is open on this track. Going on closes it and discards what it has not accepted.'),
+    close: closeCrop,
+  };
+}
+
 function closeCrop() {
+  // V3.3. Kept before the keyframe it belongs to is let go, Accept or Cancel.
+  rememberStageView(placeStage, cropLayerId, cropKeyframe);
+  // V3.3. Back from its own window, and the main window's preview back to
+  // the layer as it is, which Accept has by now made it.
+  cropFrozen = null;
+  cropPreviewLayers = null;
+  const wasPopped = isPoppedOut(cropModal);
+  popIn(cropModal);
+  if (popoutPreview) {
+    popoutPreview = null;
+    drawComposite();
+  }
+  if (wasPopped && !timelineDriving()) updateCropOverlays();
   cropModal.hidden = true;
   cropDraft = null;
   placeDraft = null;
@@ -1209,8 +1357,8 @@ cropAcceptBtn.addEventListener('click', () => {
   // playhead, and Accept writes that keyframe or makes it there: the user's
   // rule for an edit between two of them.
   if (cropKeyframe && cropLayerId) {
-    if (rect) cropViews.set(cropLayerId, { zoom: viewZoom, panX: viewPanX, panY: viewPanY });
-    else cropViews.delete(cropLayerId);
+    rememberView('crop', cropLayerId, cropKeyframe,
+      rect ? { zoom: viewZoom, panX: viewPanX, panY: viewPanY } : null);
     saveCropKeyframe({ crop: rect, render, anchor: placeAnchor });
     commitHistory();
     closeCrop();

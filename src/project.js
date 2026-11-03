@@ -107,6 +107,49 @@ const projectFile = (() => {
     };
   }
 
+  /**
+   * V3.3. The zoom and pan each editor was left at, by layer and keyframe:
+   * the user, 2026-11-03, "each setting/pan/zoom should be saved in the
+   * project file as well". Keyed by strings the window makes and reads back
+   * as they are; this only keeps what is a view and drops the rest, so a hand
+   * edited file cannot hand the window a zoom of nothing.
+   *
+   * Not part of documentOf, for the reason the timeline's own zoom is not:
+   * it is where the editors were looking, not what the project is. Zooming a
+   * stage is therefore not an unsaved change on its own, and every save
+   * writes the views as they are at that moment.
+   */
+  function viewsOf(source) {
+    const out = {};
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return out;
+    for (const [key, view] of Object.entries(source)) {
+      if (!key || !view || typeof view !== 'object') continue;
+      const zoom = Number(view.zoom);
+      if (!Number.isFinite(zoom) || zoom <= 0) continue;
+      const kept = { zoom: round(zoom) };
+      for (const field of ['cx', 'cy', 'panX', 'panY']) {
+        if (view[field] === null) kept[field] = null;
+        else if (typeof view[field] === 'number' && Number.isFinite(view[field])) kept[field] = round(view[field]);
+      }
+      out[key] = kept;
+    }
+    return out;
+  }
+
+  /**
+   * V3.3. The undo stack as history.js packs it, kept beside the document for
+   * the same reason the views are: undoing changes the document, the stack
+   * itself is not an unsaved change. Only its shape is checked here;
+   * projectHistory.unpack decides whether it still fits the project that
+   * opened, and drops it whole if it does not.
+   */
+  function historyOf(source) {
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return null;
+    if (!Array.isArray(source.pool) || !Array.isArray(source.steps)) return null;
+    if (!Number.isInteger(source.at)) return null;
+    return { at: source.at, pool: source.pool, steps: source.steps };
+  }
+
   /** Whether the document has changed since a given copy of it. */
   function sameDocument(a, b) {
     return deepEqual(documentOf(a), documentOf(b));
@@ -160,6 +203,10 @@ const projectFile = (() => {
         // one.
         ref: l.src ? refFor(l, stats[l.src], relatives[l.src]) : null,
       })),
+      // V3.3. Beside the document rather than in it, see viewsOf.
+      views: viewsOf(state.views),
+      // V3.3. The undo stack, see historyOf. Last, since it is the bulk.
+      history: historyOf(state.history),
     };
   }
 
@@ -194,7 +241,14 @@ const projectFile = (() => {
     // out why that was a mistake: a field added to one of them and not the
     // other is a field that is written and then silently dropped on the way
     // back in. There is one description of the document now.
-    return { ok: true, version, doc: documentOf(doc), meta: metaOf(doc) };
+    return {
+      ok: true,
+      version,
+      doc: documentOf(doc),
+      meta: metaOf(doc),
+      views: viewsOf(doc.views),
+      history: historyOf(doc.history),
+    };
   }
 
   /**
@@ -318,6 +372,8 @@ const projectFile = (() => {
     VERSION,
     documentOf,
     metaOf,
+    viewsOf,
+    historyOf,
     sameDocument,
     serialise,
     stringify,

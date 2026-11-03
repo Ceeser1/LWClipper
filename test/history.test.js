@@ -265,3 +265,56 @@ test('the width and the height are compared separately', () => {
   assert.equal(H.sameState(a, { ...a, width: 1440 }), false);
   assert.equal(H.sameState(a, { ...a }), true);
 });
+
+// ---- V3.3. The stack in the project file ----
+
+// A short session: add two clips, move one, undo once, so there is a past,
+// a present and a future to keep.
+function session() {
+  const a = video({ id: 'a', start: 0, duration: 10 });
+  const b = video({ id: 'b', start: 10, duration: 10 });
+  const s0 = state([a]);
+  const s1 = state([a, b]);
+  const s2 = state([a, { ...b, start: 14 }]);
+  let h = H.create(s0);
+  h = H.commit(h, s1);
+  h = H.commit(h, s2);
+  return H.undo(h);
+}
+
+const throughFile = (packed) => JSON.parse(JSON.stringify(packed));
+
+test('pack keeps every step once, sharing the layers that did not change', () => {
+  const p = H.pack(session());
+  assert.equal(p.at, 1);
+  assert.equal(p.steps.length, 3);
+  // a, b, and b moved: three distinct layers across five uses.
+  assert.equal(p.pool.length, 3);
+  assert.deepEqual(p.steps.map((s) => s.layers), [[0], [0, 1], [0, 2]]);
+});
+
+test('unpack stands the saved stack on the project that opened, undo and redo intact', () => {
+  const h = session();
+  const opened = { ...h.present, layers: h.present.layers.map((l) => T.createLayer(l)) };
+  const back = H.unpack(throughFile(H.pack(h)), opened, (l) => T.createLayer(l));
+  assert.equal(back.present, opened);
+  assert.equal(back.past.length, 1);
+  assert.equal(back.future.length, 1);
+  assert.deepEqual(H.undo(back).present.layers.map((l) => l.id), ['a']);
+  assert.equal(H.redo(back).present.layers[1].start, 14);
+});
+
+test('unpack starts fresh when the stack does not fit what opened, or is broken', () => {
+  const h = session();
+  const packed = throughFile(H.pack(h));
+  const other = state([video({ id: 'z' })]);
+  assert.equal(H.canUndo(H.unpack(packed, other)), false);
+  assert.equal(H.canUndo(H.unpack(null, h.present)), false);
+  assert.equal(H.canUndo(H.unpack({ ...packed, at: 9 }, h.present)), false);
+  const holed = throughFile(packed);
+  holed.steps[0].layers = [7];
+  assert.equal(H.canUndo(H.unpack(holed, h.present)), false);
+  // The trim markers as the file rounds them still count as the same step.
+  const nudged = { ...h.present, start: h.present.start + 1e-7 };
+  assert.equal(H.canUndo(H.unpack(packed, nudged)), true);
+});

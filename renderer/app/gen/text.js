@@ -535,9 +535,9 @@ function lineRatio(style) {
   return lineRatios.get(font);
 }
 
-// CSS pixels on the stage per pixel of the draft's own.
+// CSS pixels on the stage per pixel of the draft's own, zoomed as it is.
 function textEditScale() {
-  return (parseFloat(textCanvas.style.height) || 0) / textDraft.refHeight;
+  return stageFrameRect(textStage).height / textDraft.refHeight;
 }
 
 // One span in its run's style. Each has its own line height, from its own
@@ -566,14 +566,13 @@ function styleTextEdit() {
   const d = textDraft;
   if (!d) return;
   const base = d.text.style;
-  const left = parseFloat(textCanvas.style.left) || 0;
-  const top = parseFloat(textCanvas.style.top) || 0;
+  const r = stageFrameRect(textStage);
   const k = textEditScale();
   const box = d.text.box;
-  textFrame.style.left = (left + (box ? box.x * k : 0)) + 'px';
-  textFrame.style.top = (top + (box ? box.y * k : 0)) + 'px';
-  textFrame.style.width = (box ? box.w * k : parseFloat(textCanvas.style.width) || 0) + 'px';
-  textFrame.style.height = (box ? box.h * k : parseFloat(textCanvas.style.height) || 0) + 'px';
+  textFrame.style.left = (r.left + (box ? box.x * k : 0)) + 'px';
+  textFrame.style.top = (r.top + (box ? box.y * k : 0)) + 'px';
+  textFrame.style.width = (box ? box.w * k : r.width) + 'px';
+  textFrame.style.height = (box ? box.h * k : r.height) + 'px';
   // 31b. Turned with the text, about the same centre, so the words are typed
   // where the render puts them.
   textFrame.style.transform = d.text.rotation ? 'rotate(' + d.text.rotation + 'deg)' : '';
@@ -647,6 +646,7 @@ function openTextSettings(layer, first) {
   textBackground.checked = genBackdropOn;
   titleTextTools();
   textModal.hidden = false;
+  recallStageView(textStage, textLayerId, genKeyframeOf(textLayerId));
   sizeTextStage();
   renderEditBox();
   // Straight into typing. A new text has its placeholder word selected so
@@ -660,6 +660,8 @@ function openTextSettings(layer, first) {
 }
 
 function closeTextSettings() {
+  // V3.3. Kept before the modal lets the layer go, Accept or Cancel.
+  if (textLayerId) rememberStageView(textStage, textLayerId, genKeyframeOf(textLayerId));
   closeFx(false);
   settlePick(false);
   fontCombo.close();
@@ -738,9 +740,9 @@ function sizeTextStage() {
 // edge or the frame's middle to land on it. The timeline's snapping reach.
 const TEXT_BOX_SNAP = 5;
 
-// Screen pixels per project pixel on the stage.
+// Screen pixels per project pixel on the stage, zoomed as it is.
 function textStageScale() {
-  return (parseFloat(textCanvas.style.height) || 1) / projectFrame().height;
+  return stageFrameRect(textStage).s;
 }
 
 // The box in project pixels, the whole frame when there is none.
@@ -770,12 +772,11 @@ function setTextBox(box) {
 
 function placeTextBox() {
   if (!textDraft) return;
-  const s = textStageScale();
-  const left = parseFloat(textCanvas.style.left) || 0;
-  const top = parseFloat(textCanvas.style.top) || 0;
+  const r = stageFrameRect(textStage);
+  const s = r.s;
   const b = textBoxNow();
-  textBoxEl.style.left = (left + b.x * s) + 'px';
-  textBoxEl.style.top = (top + b.y * s) + 'px';
+  textBoxEl.style.left = (r.left + b.x * s) + 'px';
+  textBoxEl.style.top = (r.top + b.y * s) + 'px';
   textBoxEl.style.width = (b.w * s) + 'px';
   textBoxEl.style.height = (b.h * s) + 'px';
   // 31b. CSS turns an element about its centre, which is the box's centre,
@@ -786,20 +787,18 @@ function placeTextBox() {
 
 // The frame line a drag has met, across the whole frame, or none.
 function showTextGuides(x, y) {
-  const s = textStageScale();
-  const left = parseFloat(textCanvas.style.left) || 0;
-  const top = parseFloat(textCanvas.style.top) || 0;
+  const r = stageFrameRect(textStage);
   textGuideX.hidden = x === null;
   textGuideY.hidden = y === null;
   if (x !== null) {
-    textGuideX.style.left = (left + x * s) + 'px';
-    textGuideX.style.top = top + 'px';
-    textGuideX.style.height = textCanvas.style.height;
+    textGuideX.style.left = (r.left + x * r.s) + 'px';
+    textGuideX.style.top = r.top + 'px';
+    textGuideX.style.height = r.height + 'px';
   }
   if (y !== null) {
-    textGuideY.style.top = (top + y * s) + 'px';
-    textGuideY.style.left = left + 'px';
-    textGuideY.style.width = textCanvas.style.width;
+    textGuideY.style.top = (r.top + y * r.s) + 'px';
+    textGuideY.style.left = r.left + 'px';
+    textGuideY.style.width = r.width + 'px';
   }
 }
 
@@ -873,13 +872,13 @@ for (const rotor of textBoxEl.querySelectorAll('.text-rotor')) {
     // Or the box underneath would take it as a move as well.
     evt.stopPropagation();
     const b = textBoxNow();
-    const s = textStageScale();
-    const r = textCanvas.getBoundingClientRect();
-    const cx = r.left + (b.x + b.w / 2) * s;
-    const cy = r.top + (b.y + b.h / 2) * s;
+    const r = stageFrameRect(textStage);
+    const s = r.s;
+    const stage = textStage.getBoundingClientRect();
+    const cx = stage.left + textStage.clientLeft + r.left + (b.x + b.w / 2) * s;
+    const cy = stage.top + textStage.clientTop + r.top + (b.y + b.h / 2) * s;
     const start = textDraft.text.rotation;
     const from = [evt.clientX - cx, evt.clientY - cy];
-    const stage = textStage.getBoundingClientRect();
     textAngle.style.left = (cx - stage.left) + 'px';
     textAngle.style.top = (cy - stage.top) + 'px';
     textAngle.textContent = start + '°';
@@ -896,11 +895,23 @@ for (const rotor of textBoxEl.querySelectorAll('.text-rotor')) {
 
 // Edit shows the frame without this layer, over which the box stands; Render
 // Preview draws the draft itself, as the export will.
-function paintTextPreview() {
+function paintTextPreview(quick) {
   if (!textDraft) return;
   paintGenPreview(textStage, textCanvas, textLayerId,
-    textMode === 'render' ? textGenOf(textDraft) : null);
+    textMode === 'render' ? textGenOf(textDraft) : null, quick);
 }
+
+// V3.3. The wheel zooms and empty space pans, so a text can be put off the
+// frame and found there again, in Edit and in Render Preview alike.
+bindStageView(textStage, {
+  open: () => !!textDraft && !textModal.hidden,
+  empty: (evt) => evt.target === textStage || evt.target === textCanvas,
+  redraw: (quick) => {
+    styleTextEdit();
+    placeTextBox();
+    paintTextPreview(quick);
+  },
+});
 
 // A font that is not loaded yet draws as the fallback, so the preview is drawn
 // again once it is.

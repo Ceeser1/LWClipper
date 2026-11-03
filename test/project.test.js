@@ -52,6 +52,42 @@ test('everything a layer carries survives the trip', () => {
   }
 });
 
+// V3.3. The user: "each setting/pan/zoom should be saved in the project file".
+test('the views of the editors survive the trip, and are not part of the document', () => {
+  const s = state([video({ id: 'lA' })]);
+  const views = {
+    'placeStage|lA': { zoom: 0.5, cx: -120.25, cy: 540 },
+    'shapeStage|lA#k1': { zoom: 2, cx: null, cy: null },
+    'crop|lA': { zoom: 1.5, panX: 800, panY: 450 },
+  };
+  const back = P.parse(P.stringify(P.serialise({ ...s, views })));
+  assert.equal(back.ok, true);
+  assert.deepEqual(back.views, views);
+  // Zooming is not an unsaved change.
+  assert.equal(P.sameDocument({ ...s, views }, s), true);
+});
+
+test('the undo stack travels beside the document, and a broken one is left out', () => {
+  const s = state([video({ id: 'lA' })]);
+  const history = { at: 0, pool: [{ id: 'lA' }], steps: [{ start: 0, end: 60, layers: [0] }] };
+  const back = P.parse(P.stringify(P.serialise({ ...s, history })));
+  assert.deepEqual(back.history, history);
+  assert.equal(P.sameDocument({ ...s, history }, s), true);
+  assert.equal(P.parse(P.stringify(P.serialise(s))).history, null);
+  assert.equal(P.historyOf({ at: 'x', pool: [], steps: [] }), null);
+});
+
+test('a file without views, or with nonsense in them, opens with what is sound', () => {
+  const plain = P.parse(P.stringify(P.serialise(state([video()]))));
+  assert.deepEqual(plain.views, {});
+  const raw = JSON.parse(P.stringify(P.serialise(state([video()]))));
+  raw.views = { a: { zoom: 0 }, b: { zoom: 'x' }, c: null, d: { zoom: 3, cx: 'no', cy: 4, extra: 1 } };
+  delete raw.views.c;
+  assert.deepEqual(P.parse(JSON.stringify(raw)).views, { d: { zoom: 3, cy: 4 } });
+  raw.views = [1, 2];
+  assert.deepEqual(P.parse(JSON.stringify(raw)).views, {});
+});
+
 test('the project frame and the trim markers survive', () => {
   const out = P.parse(P.stringify(P.serialise(state([video()], 4.5, 31.25))));
   assert.deepEqual(out.doc.project, { width: 1920, height: 1080, fps: 30 });

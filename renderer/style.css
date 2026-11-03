@@ -2926,9 +2926,40 @@ body.layer-alpha * {
 
 /* The cursor says what the pointer is over, and it is set from the hit test
    rather than from the class: the picture can be anywhere in the frame, and a
-   move cursor over the empty grey would promise a drag that does nothing. */
+   move cursor over the empty grey would promise a drag that does nothing.
+   V3.3: the empty grey pans now, so it says grab. */
 .place-stage {
-  cursor: default;
+  cursor: grab;
+}
+
+/* ---- V3.3. Zoom and pan on the stages a layer is placed on ---- */
+
+.gen-stage[data-zoomable="true"] {
+  cursor: grab;
+}
+
+.place-stage[data-panning="true"],
+.gen-stage[data-panning="true"],
+.gen-stage[data-panning="true"] * {
+  cursor: grabbing !important;
+}
+
+/* The zoom, in the corner, while it is not the fit. */
+.stage-zoom {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #e6e6ea;
+  font-size: 11px;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.stage-zoom[hidden] {
+  display: none;
 }
 
 .crop-zoom__caption {
@@ -3319,10 +3350,11 @@ button.crop-remove-btn:hover:not(:disabled) {
 }
 
 /* The same checkerboard the bar clip draws on the timeline, so transparency
-   looks the same wherever it shows. */
+   looks the same wherever it shows. The render preview stages draw theirs on
+   the canvas since V3.3, inside the frame only, as the canvas covers the whole
+   stage now. */
 .color-swatch,
-.color-bar--alpha,
-.gen-stage[data-checker="true"] .gen-canvas {
+.color-bar--alpha {
   background: repeating-conic-gradient(#9a9aa2 0 25%, #6a6a72 0 50%) 0 0 / 12px 12px;
 }
 
@@ -3734,11 +3766,12 @@ button.color-swatch:hover:not(:disabled) {
 
 /* ---- V3, 31a: the text box ---- */
 
-/* The grips sit astride the box's lines, and a box on the frame's edge puts
-   them half off the frame, so the stage lets them show past its own edge. */
+/* V3.3. Clipped to the stage now that a box can be anywhere off the frame:
+   zoomed out it could otherwise be drawn out over the buttons. The fitted view
+   leaves room round the frame, so a grip on the frame's edge still shows. */
 #textStage,
 #shapeStage {
-  overflow: visible;
+  overflow: hidden;
 }
 
 .text-frame[data-boxed="true"] {
@@ -3841,4 +3874,34 @@ button.color-swatch:hover:not(:disabled) {
 
 .text-angle[hidden] {
   display: none;
+}
+
+/* ---- V3.3. The crop popups in windows of their own ---- */
+
+/* Left behind in the main window, open but emptied: the main window stays
+   usable while the crop window is out. */
+.modal.modal--popped {
+  display: none;
+}
+
+/* The popped out window's page: the panel and nothing else, filling it. */
+body.popout-body {
+  display: block;
+  height: auto;
+  min-height: 100%;
+  overflow: auto;
+  padding: 0;
+  background: #2a2a30;
+}
+
+body.popout-body > .modal__panel {
+  width: auto;
+  max-width: none;
+  max-height: none;
+  /* No min-height: popupStageRoom measures the panel's own content to know
+     what the stage may have, and a panel held to the window's height would
+     always measure as full. The body's background fills the rest. */
+  border: 0;
+  border-radius: 0;
+  overflow: visible;
 }

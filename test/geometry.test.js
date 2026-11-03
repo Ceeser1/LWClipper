@@ -922,22 +922,30 @@ test('textBoxEdge moves one side and leaves the others', () => {
   assert.deepEqual(G.textBoxEdge(BOX, 'bottom', -20, false, SMALL).box, { x: 100, y: 100, w: 400, h: 180 });
 });
 
-test('textBoxEdge holds to the frame and to the least size', () => {
-  assert.equal(G.textBoxEdge(BOX, 'left', -500, false, SMALL).box.x, 0);
-  assert.equal(G.textBoxEdge(BOX, 'right', 5000, false, SMALL).box.w, 1280 - 100);
+// V3.3. A side may leave the frame, as far as a whole frame past its edge and
+// the 1% margin: 13 pixels across a 1280 frame, 8 down a 720 one.
+test('textBoxEdge reaches a frame past the edge, and holds to the least size', () => {
+  assert.equal(G.textBoxEdge(BOX, 'left', -500, false, SMALL).box.x, -400);
+  assert.equal(G.textBoxEdge(BOX, 'left', -2000, false, SMALL).box.x, -1280 - 13);
+  assert.equal(G.textBoxEdge(BOX, 'right', 5000, false, SMALL).box.w, 2 * 1280 + 13 - 100);
+  // A side already further out than that is not pulled in by grabbing it.
+  const far = { x: -1500, y: 0, w: 400, h: 50 };
+  assert.equal(G.textBoxEdge(far, 'left', 0, false, SMALL).box.x, -1500);
   const shut = G.textBoxEdge(BOX, 'right', -1000, false, SMALL).box;
   assert.equal(shut.w, G.TEXT_BOX_MIN);
   assert.equal(shut.x, 100);
   assert.equal(G.textBoxEdge(BOX, 'top', 1000, false, SMALL).box.h, G.TEXT_BOX_MIN);
 });
 
-test('textBoxEdge mirrored keeps the centre, whole pixels, and stops at the nearer edge', () => {
+test('textBoxEdge mirrored keeps the centre, whole pixels, and stops at the nearer reach', () => {
   const r = G.textBoxEdge(BOX, 'right', 30, true, SMALL).box;
   assert.deepEqual(r, { x: 70, y: 100, w: 460, h: 200 });
   const l = G.textBoxEdge(BOX, 'left', 10, true, SMALL).box;
   assert.deepEqual(l, { x: 110, y: 100, w: 380, h: 200 });
-  // Centre 300 is 300 from the left edge, so the pair stops there.
-  assert.deepEqual(G.textBoxEdge(BOX, 'right', 900, true, SMALL).box, { x: 0, y: 100, w: 600, h: 200 });
+  // Past the frame's edge now, both sides about the centre.
+  assert.deepEqual(G.textBoxEdge(BOX, 'right', 900, true, SMALL).box, { x: -800, y: 100, w: 2200, h: 200 });
+  // Centre 300 is 1593 from the left reach, -1293, so the pair stops there.
+  assert.deepEqual(G.textBoxEdge(BOX, 'right', 5000, true, SMALL).box, { x: -1293, y: 100, w: 3186, h: 200 });
   const tight = G.textBoxEdge(BOX, 'right', -900, true, SMALL).box;
   assert.equal(tight.w, G.TEXT_BOX_MIN);
   assert.equal(tight.x + tight.w / 2, 300);
@@ -960,9 +968,12 @@ test('textBoxEdge snaps a side onto the frame edges and middle within reach', ()
   assert.equal(G.textBoxEdge(BOX, 'right', 136, false, SMALL, 0).snap, null);
 });
 
-test('textBoxMove moves, holds to the frame, and snaps edges and centre', () => {
+test('textBoxMove moves, leaves the frame wholly, and snaps edges and centre', () => {
   assert.deepEqual(G.textBoxMove(BOX, 10.4, -20, SMALL).box, { x: 110, y: 80, w: 400, h: 200 });
-  assert.deepEqual(G.textBoxMove(BOX, -900, 900, SMALL).box, { x: 0, y: 520, w: 400, h: 200 });
+  // V3.3. Wholly off the frame and the 1% past it, and no further: 400 + 13
+  // off the left, 720 + 8 down.
+  assert.deepEqual(G.textBoxMove(BOX, -900, 900, SMALL).box, { x: -413, y: 728, w: 400, h: 200 });
+  assert.deepEqual(G.textBoxMove(BOX, 5000, -5000, SMALL).box, { x: 1293, y: -208, w: 400, h: 200 });
   // Centre 300 + 336 = 636, four off the middle: it lands on 640.
   const c = G.textBoxMove(BOX, 336, 0, SMALL, 8);
   assert.equal(c.box.x + c.box.w / 2, 640);
@@ -974,8 +985,8 @@ test('textBoxMove moves, holds to the frame, and snaps edges and centre', () => 
   const bottom = G.textBoxMove(BOX, 0, 415, SMALL, 8);
   assert.equal(bottom.box.y + bottom.box.h, 720);
   assert.equal(bottom.snapY, 720);
-  // A box wider than the frame could never be held inside it; it sits at 0.
-  assert.equal(G.textBoxMove({ x: 0, y: 0, w: 2000, h: 10 }, 50, 0, SMALL).box.x, 0);
+  // A box wider than the frame moves like any other.
+  assert.equal(G.textBoxMove({ x: 0, y: 0, w: 2000, h: 10 }, 50, 0, SMALL).box.x, 50);
 });
 
 test('isWholeBox: none, or the frame to the pixel', () => {
@@ -1041,16 +1052,20 @@ test('textBoxEdgeTurned: the opposite side stays put on the screen', () => {
   assert.equal(G.textBoxEdgeTurned(box, 'right', -1000, false, 45, frame).box.w, G.TEXT_BOX_MIN);
 });
 
-test('textBoxMoveTurned: the centre snaps and stays in the frame', () => {
+test('textBoxMoveTurned: the centre snaps, and the box may leave the frame wholly', () => {
   const frame = { width: 1280, height: 720 };
   const box = { x: 100, y: 100, w: 400, h: 200 };
   const r = G.textBoxMoveTurned(box, 337, 157, frame, 5);
   assert.deepEqual(r.box, { x: 440, y: 260, w: 400, h: 200 });
   assert.deepEqual([r.snapX, r.snapY], [640, 360]);
-  // The centre held on the frame's edge, the box half off it.
+  // V3.3. Held where half the diagonal and the 13 pixel margin are past the
+  // edge, which is wholly off the frame whichever way the box is turned.
   const off = G.textBoxMoveTurned(box, -900, 0, frame, 0);
-  assert.equal(off.box.x + off.box.w / 2, 0);
+  const half = Math.hypot(400, 200) / 2;
+  assert.ok(Math.abs(off.box.x + off.box.w / 2 - (-half - 13)) <= 0.5);
   assert.equal(off.snapX, null);
+  const down = G.textBoxMoveTurned(box, 0, 5000, frame, 0);
+  assert.ok(Math.abs(down.box.y + down.box.h / 2 - (720 + half + 8)) <= 0.5);
 });
 
 // ---- shapes: a corner scales the box and keeps its proportions ----
@@ -1070,8 +1085,19 @@ test('boxCornerScale mirrored holds the centre', () => {
   assert.deepEqual(G.boxCornerScale(box, 'tr', 50, 0, true, HD), { x: 60, y: 80, w: 280, h: 140 });
 });
 
-test('boxCornerScale is held to the frame and to the least size', () => {
+test('boxCornerScale is held to the off-frame reach and to the least size', () => {
   const box = { x: 100, y: 100, w: 200, h: 100 };
-  assert.deepEqual(G.boxCornerScale(box, 'br', 5000, 0, false, HD), { x: 100, y: 100, w: 1820, h: 910 });
+  // V3.3. Out to a frame past the right edge and the margin, 2 * 1920 + 20.
+  assert.deepEqual(G.boxCornerScale(box, 'br', 99999, 0, false, HD), { x: 100, y: 100, w: 3760, h: 1880 });
   assert.deepEqual(G.boxCornerScale(box, 'br', -500, -500, false, HD), { x: 100, y: 100, w: 32, h: 16 });
+  // A box already off the frame scales about its far corner like any other.
+  const off = { x: -500, y: 100, w: 200, h: 100 };
+  assert.deepEqual(G.boxCornerScale(off, 'tl', -100, -50, false, HD), { x: -600, y: 50, w: 300, h: 150 });
+});
+
+test('holdOffFrame: wholly off either edge plus 1% of the frame, no further', () => {
+  assert.equal(G.holdOffFrame(-5000, 400, 1920), -420);
+  assert.equal(G.holdOffFrame(5000, 400, 1920), 1940);
+  assert.equal(G.holdOffFrame(-100, 400, 1920), -100);
+  assert.deepEqual(G.offFrameReach(1080), { lo: -1091, hi: 2171 });
 });

@@ -201,9 +201,15 @@ function splitSelected(at) {
   if (!timelineDriving() || busy || !selectedLayerId) return false;
   const next = timelineModel.splitLayer(layers, selectedLayerId, at);
   if (next === layers) return false;
-  setLayers(next);
-  commitHistory();
-  return true;
+  // V3.3. The track a crop window is open on asks first.
+  const id = selectedLayerId;
+  return confirmPopoutConflict([cropWindowOn(id) && cropWindowConflict()], () => {
+    const now = timelineModel.splitLayer(layers, id, at);
+    if (now === layers) return false;
+    setLayers(now);
+    commitHistory();
+    return true;
+  });
 }
 
 /**
@@ -288,9 +294,16 @@ function deleteSelected() {
   if (selectedKeyframe) return deleteSelectedKeyframe();
   const next = timelineModel.removeLayer(layers, selectedLayerId);
   if (next.length === layers.length) return false;
-  setLayers(next);
-  commitHistory();
-  return true;
+  // V3.3. The user: "if you are trying to delete a track while a
+  // crop/keyframe window is open it must show a warning modal".
+  const id = selectedLayerId;
+  return confirmPopoutConflict([cropWindowOn(id) && cropWindowConflict()], () => {
+    const now = timelineModel.removeLayer(layers, id);
+    if (now.length === layers.length) return false;
+    setLayers(now);
+    commitHistory();
+    return true;
+  });
 }
 
 // Ctrl+C and Ctrl+V on the timeline, and Del and Backspace. Each leaves the key
@@ -670,7 +683,11 @@ async function saveProject(alwaysAsk) {
   // Step 18. Who this project was before this save, so that a Save As renames
   // the claim in the cache rather than leaving the old one behind. Null on a
   // project that has never been saved, which has nothing to rename.
-  const result = await window.lwclipper.saveProject(target, document,
+  // V3.3. The editors' views go into the file beside the document, and not
+  // into it: what markProjectSaved keeps below is the document alone.
+  // V3.3. The undo stack goes with them, the same way.
+  const result = await window.lwclipper.saveProject(target,
+    { ...document, views: viewsForFile(), history: projectHistory.pack(undoStack) },
     projectPath ? { path: projectPath, name: projectTitle } : null);
   if (!result.ok) {
     reportFailure(result);
@@ -798,6 +815,12 @@ async function adoptProject(result) {
   sizeCompositeCanvas();
 
   resetLaneRows();
+  // V3.3. A crop window left open on the old project goes, the way its Cancel
+  // would; opening has already asked about unsaved work.
+  if (!cropModal.hidden) closeCrop();
+  if (!renderModal.hidden) closeRenderCrop();
+  // V3.3. Before anything opens an editor on the new layers.
+  adoptViews(result.views);
   setLayers(keep, true);
   // After setLayers, the same ordering applyHistory needs: syncProjectTrim in
   // there follows the project's new length and would move the very markers
@@ -821,9 +844,22 @@ async function adoptProject(result) {
 
   projectPath = result.path;
   projectTitle = result.name;
-  // Opening replaces the document, so there is nothing behind it for Ctrl+Z to
-  // resurrect. The stack is session state and never goes in the file.
-  undoStack = projectHistory.create(projectState());
+  // V3.3. The undo stack the file was saved with, standing on the project as
+  // it opened: "a big history of undo-actions" kept in the project. Each step's
+  // layers go through the model like the document's, pointed wherever their
+  // files were found. With a track left out for a missing file it starts
+  // fresh instead, since undo could only bring that track back broken.
+  if (trouble.length) {
+    undoStack = projectHistory.create(projectState());
+  } else {
+    const moved = new Map();
+    result.doc.layers.forEach((l, i) => {
+      if (l.src && resolved[i] && resolved[i].src !== l.src) moved.set(l.src, resolved[i].src);
+    });
+    undoStack = projectHistory.unpack(result.history, projectState(),
+      (l) => timelineModel.createLayer({ ...l, src: moved.get(l.src) || l.src }));
+  }
+
 
   // The baseline is the project **as the file has it**, tracks in trouble
   // included. So Continue having dropped them in memory reads as unsaved work,
@@ -1004,5 +1040,20 @@ document.addEventListener('keydown', (evt) => {
   if (focused && KEEPS_UNDO.includes(focused.tagName)) return;
   if (focused && focused.isContentEditable) return;
   evt.preventDefault();
-  applyHistory(redoing ? projectHistory.redo(undoStack) : projectHistory.undo(undoStack));
+  const next = redoing ? projectHistory.redo(undoStack) : projectHistory.undo(undoStack);
+  if (next === undoStack) return;
+  // V3.3. A step that would change the track a crop window is open on, or the
+  // project frame under Crop Render Frame, asks first.
+  const target = next.present;
+  const cropHit = !cropModal.hidden && cropLayerId
+    && JSON.stringify(timelineModel.layerById(layers, cropLayerId) || null)
+      !== JSON.stringify(target.layers.find((l) => l.id === cropLayerId) || null);
+  const frameHit = !renderModal.hidden && compositeFrame
+    && ((target.width && target.width !== compositeFrame.width)
+      || (target.height && target.height !== compositeFrame.height));
+  confirmPopoutConflict([cropHit && cropWindowConflict(), frameHit && renderWindowConflict()], () => {
+    // Asked about one step; if anything moved the stack meanwhile, nothing.
+    if ((redoing ? projectHistory.redo(undoStack) : projectHistory.undo(undoStack)).present !== target) return;
+    applyHistory(redoing ? projectHistory.redo(undoStack) : projectHistory.undo(undoStack));
+  });
 });

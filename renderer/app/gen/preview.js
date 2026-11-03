@@ -27,17 +27,38 @@ function sizeGenStage(stage, canvas) {
   }
   stage.style.width = w + 'px';
   stage.style.height = h + 'px';
-  const frame = projectFrame();
-  const k = Math.min(w / frame.width, h / frame.height);
-  const cw = Math.max(1, Math.round(frame.width * k));
-  const ch = Math.max(1, Math.round(frame.height * k));
-  canvas.style.left = Math.round((w - cw) / 2) + 'px';
-  canvas.style.top = Math.round((h - ch) / 2) + 'px';
-  canvas.style.width = cw + 'px';
-  canvas.style.height = ch + 'px';
+  // V3.3. The canvas covers the whole stage rather than only the frame, so a
+  // layer hanging off the frame can be drawn where it hangs. Where the frame
+  // is on it is stageFrameRect's to say, zoomed and panned or not.
+  canvas.style.left = '0px';
+  canvas.style.top = '0px';
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
   const dpr = window.devicePixelRatio || 1;
-  canvas.width = Math.round(cw * dpr);
-  canvas.height = Math.round(ch * dpr);
+  canvas.width = Math.max(1, Math.round(w * dpr));
+  canvas.height = Math.max(1, Math.round(h * dpr));
+}
+
+// The draft is drawn on its own surface first, as big as the stage's view in
+// project pixels at the project's own resolution, and then scaled onto the
+// stage. Held to this many pixels on its longer side, which a view zoomed far
+// out would otherwise ask several frames' worth of.
+const GEN_SURFACE_MAX = 4096;
+
+// The checkerboard behind a draft with Enable Background off, the one the
+// stylesheet drew under the canvas until V3.3: twelve pixel tiles of four.
+function checkerPattern(ctx, dpr) {
+  const q = Math.max(1, Math.round(6 * dpr));
+  const tile = document.createElement('canvas');
+  tile.width = q * 2;
+  tile.height = q * 2;
+  const t = tile.getContext('2d');
+  t.fillStyle = '#6a6a72';
+  t.fillRect(0, 0, q * 2, q * 2);
+  t.fillStyle = '#9a9aa2';
+  t.fillRect(q, 0, q, q);
+  t.fillRect(0, q, q, q);
+  return ctx.createPattern(tile, 'repeat');
 }
 
 // `quick` draws the draft at the stage's own size rather than the project's,
@@ -46,12 +67,27 @@ function sizeGenStage(stage, canvas) {
 // down anyway. The drag's end paints it again at full size.
 function paintGenPreview(stage, canvas, id, gen, quick) {
   const frame = projectFrame();
+  const r = stageFrameRect(stage);
+  const dpr = canvas.width / Math.max(1, r.w);
+  // Surface pixels per project pixel: the project's own, or the screen's when
+  // quick, never less than the screen's and never past the cap.
+  const viewW = r.w / r.s;
+  const viewH = r.h / r.s;
+  const screen = r.s * dpr;
+  const k = Math.max(screen, Math.min(quick ? screen : 1, GEN_SURFACE_MAX / Math.max(viewW, viewH)));
   const surface = genPreviewSurface;
-  const sw = quick ? canvas.width : frame.width;
-  const sh = quick ? canvas.height : frame.height;
+  const sw = Math.max(1, Math.round(viewW * k));
+  const sh = Math.max(1, Math.round(viewH * k));
   if (surface.width !== sw) surface.width = sw;
   if (surface.height !== sh) surface.height = sh;
-  genDraw.drawGen(surface.getContext('2d'), gen, sw, sh);
+  const sctx = surface.getContext('2d');
+  sctx.setTransform(1, 0, 0, 1, 0, 0);
+  sctx.clearRect(0, 0, sw, sh);
+  // The frame's origin where the stage has it, and drawn at k times the
+  // project's size, which genDraw scales everything to by the height.
+  sctx.setTransform(1, 0, 0, 1, (r.left / r.s) * k, (r.top / r.s) * k);
+  genDraw.drawGen(sctx, gen, frame.width * k, frame.height * k);
+  sctx.setTransform(1, 0, 0, 1, 0, 0);
   stage.dataset.checker = String(!genBackdropOn);
   const ctx = canvas.getContext('2d');
   const own = timelineModel.layerById(layers, id);
@@ -59,15 +95,33 @@ function paintGenPreview(stage, canvas, id, gen, quick) {
   // anywhere, and a bar that vanished because the playhead sits on the first
   // frame of its fade in would look like a bar that did not work.
   const ownAlpha = own ? timelineModel.alphaOf(own) : 1;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (!genBackdropOn) {
+  const fx = r.left * dpr;
+  const fy = r.top * dpr;
+  const fw = r.width * dpr;
+  const fh = r.height * dpr;
+  const drawDraft = () => {
     ctx.globalAlpha = ownAlpha;
     ctx.drawImage(surface, 0, 0, canvas.width, canvas.height);
     ctx.globalAlpha = 1;
+  };
+  if (!genBackdropOn) {
+    ctx.save();
+    ctx.translate(fx, fy);
+    ctx.fillStyle = checkerPattern(ctx, dpr);
+    ctx.fillRect(0, 0, fw, fh);
+    ctx.restore();
+    drawDraft();
+    dimOutsideFrame(ctx, canvas, stage);
     return;
   }
   ctx.fillStyle = '#000';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillRect(fx, fy, fw, fh);
+  // The other layers in project pixels, with the stage's view as the canvas's
+  // transform: drawLayerInto maps the frame onto the canvas it is handed, so
+  // it is handed one the frame's own size.
+  const virtual = { width: frame.width, height: frame.height };
   // Back to front, as paintLayers goes, with the layer being edited drawn from
   // the draft wherever it stands in the list, and drawn whether or not the
   // playhead is over it.
@@ -75,19 +129,20 @@ function paintGenPreview(stage, canvas, id, gen, quick) {
     const l = layers[i];
     if (l.type !== 'video') continue;
     if (l.id === id) {
-      ctx.globalAlpha = ownAlpha;
-      ctx.drawImage(surface, 0, 0, canvas.width, canvas.height);
-      ctx.globalAlpha = 1;
+      drawDraft();
       continue;
     }
     if (!l.enabled || !timelineModel.covers(l, compositeAt)) continue;
     const alpha = timelineModel.layerAlphaAt(l, compositeAt);
     if (alpha <= 0) continue;
     ctx.globalAlpha = alpha;
+    ctx.setTransform(r.s * dpr, 0, 0, r.s * dpr, fx, fy);
     // V3.3. At the playhead, so a layer with keyframes is where it is then.
-    drawLayerInto(ctx, canvas, l, undefined, undefined, compositeAt);
+    drawLayerInto(ctx, virtual, l, undefined, undefined, compositeAt);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalAlpha = 1;
   }
+  dimOutsideFrame(ctx, canvas, stage);
 }
 
 // What addGenMedia had before it added, so Cancel on the first opening can put

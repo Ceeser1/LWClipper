@@ -175,7 +175,14 @@ function genKeyframeToEdit(layer) {
 function saveCropKeyframe(fields) {
   if (!cropKeyframe || !cropLayerId) return;
   const id = cropKeyframe.id || newKeyframeId();
-  setLayers(timelineModel.putKeyframe(layers, cropLayerId, { ...cropKeyframe, ...fields, id }));
+  // V3.3. The keyframe as it stands now, not as it was when the popup opened:
+  // the main window stays usable while the popup is out, so the keyframe may
+  // have been dragged along the clip, or the clip trimmed, in the meantime.
+  const layer = timelineModel.layerById(layers, cropLayerId);
+  const live = cropKeyframe.id && layer
+    ? timelineModel.keyframesFor(layer).find((k) => k.id === cropKeyframe.id)
+    : null;
+  setLayers(timelineModel.putKeyframe(layers, cropLayerId, { ...cropKeyframe, ...(live || {}), ...fields, id }));
   selectKeyframe(cropLayerId, id);
 }
 
@@ -209,6 +216,17 @@ function addKeyframeAt(layerId, t) {
 function deleteKeyframe(layerId, id) {
   const layer = timelineModel.layerById(layers, layerId);
   if (!layer || busy || !timelineModel.keyframesFor(layer).some((k) => k.id === id)) return false;
+  // V3.3. The keyframe a crop window has open, or one whose going takes it
+  // with it (a last pair collapses), asks first.
+  const left = timelineModel.keyframesFor(layer).length - 1;
+  const hit = cropWindowOn(layerId) && (!cropKeyframe || cropKeyframe.id === id || left < 2);
+  return confirmPopoutConflict([hit && cropWindowConflict()], () => {
+    removeKeyframeNow(layerId, id);
+    return true;
+  });
+}
+
+function removeKeyframeNow(layerId, id) {
   setLayers(timelineModel.removeKeyframe(layers, layerId, id));
   commitHistory();
   selectKeyframe(null, null);

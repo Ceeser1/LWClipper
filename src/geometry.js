@@ -773,10 +773,35 @@ const layerGeometry = (() => {
   //
   // A generated text's box, dragged in the Edit Text modal: its sides, one at a
   // time or with Shift the opposite one too, and the whole box. In project
-  // pixels, whole ones, and held to the frame so every grip stays where it can
-  // be grabbed. Nothing here is the crop's resizeEdge: that one steps in even
-  // pixels for the encoder and caps a mirrored drag at a pixel per screen pixel,
-  // which on a text box would leave the side trailing behind the pointer.
+  // pixels, whole ones. Nothing here is the crop's resizeEdge: that one steps in
+  // even pixels for the encoder and caps a mirrored drag at a pixel per screen
+  // pixel, which on a text box would leave the side trailing behind the pointer.
+  //
+  // V3.3. No longer held to the frame. The user, 2026-11-03: "it should be able
+  // to let it spawn outside", for a shape flying into the screen, "maybe even
+  // up to 1% more further so pixels dont clip". So a box may travel until it is
+  // wholly outside the frame plus OFF_FRAME_SHARE of it, and a side may reach a
+  // whole frame past each edge plus the same margin. The editors zoom out to
+  // show it, so a box out there can still be grabbed and brought back.
+  const OFF_FRAME_SHARE = 0.01;
+
+  const offMargin = (size) => Math.ceil(Math.max(0, finite(size, 0)) * OFF_FRAME_SHARE);
+
+  /**
+   * Where a box's near edge may go along one axis, for a box `len` long in a
+   * frame `size` long: from wholly off the near edge to wholly off the far one,
+   * each with the margin past it.
+   */
+  function holdOffFrame(pos, len, size) {
+    const m = offMargin(size);
+    return clamp(pos, -(Math.max(0, len) + m), size + m);
+  }
+
+  /** How far a side may reach along one axis: a frame past each edge, plus the margin. */
+  function offFrameReach(size) {
+    const m = offMargin(size);
+    return { lo: -(size + m), hi: 2 * size + m };
+  }
 
   // As small as a box may get, the crop's figure for the same reason: below it
   // the grips pile onto each other.
@@ -811,6 +836,11 @@ const layerGeometry = (() => {
     let v = (movesLo ? lo0 : hi0) + delta;
     const snap = nearestLine([v], size, reach);
     if (snap) v = snap.line;
+    // V3.3. As far as a side may reach, or where it already is if a move took
+    // it further, so grabbing a side never pulls it in by itself.
+    const outer = offFrameReach(size);
+    const floor = Math.min(outer.lo, lo0);
+    const ceiling = Math.max(outer.hi, hi0);
     let lo;
     let hi;
     if (mirrored) {
@@ -818,15 +848,15 @@ const layerGeometry = (() => {
       // rounding one side and taking the other from the sum keeps both whole.
       const sum = lo0 + hi0;
       const c = sum / 2;
-      const half = Math.min(Math.min(c, size - c), Math.max(least / 2, movesLo ? c - v : v - c));
+      const half = Math.min(Math.min(c - floor, ceiling - c), Math.max(least / 2, movesLo ? c - v : v - c));
       lo = Math.round(c - half);
       hi = sum - lo;
     } else if (movesLo) {
-      lo = Math.min(hi0 - least, Math.max(0, Math.round(v)));
+      lo = Math.min(hi0 - least, Math.max(floor, Math.round(v)));
       hi = hi0;
     } else {
       lo = lo0;
-      hi = Math.max(lo0 + least, Math.min(size, Math.round(v)));
+      hi = Math.max(lo0 + least, Math.min(ceiling, Math.round(v)));
     }
     const moved = movesLo ? lo : hi;
     const out = vertical ? { ...box, y: lo, h: hi - lo } : { ...box, x: lo, w: hi - lo };
@@ -834,17 +864,17 @@ const layerGeometry = (() => {
   }
 
   /**
-   * The whole box moved, held to the frame. Its left edge, centre or right
-   * edge lands on the frame's edges or middle when it comes within `reach`,
-   * and the same up and down. Hands back the box and the line met on each
-   * axis, or null.
+   * The whole box moved, as far as wholly off the frame and the margin past
+   * it. Its left edge, centre or right edge lands on the frame's edges or
+   * middle when it comes within `reach`, and the same up and down. Hands back
+   * the box and the line met on each axis, or null.
    */
   function textBoxMove(box, dx, dy, frame, reach = 0) {
     const axis = (pos, len, delta, size) => {
       let p = pos + delta;
       const snap = nearestLine([p, p + len / 2, p + len], size, reach);
       if (snap) p += snap.d;
-      const held = Math.min(Math.max(0, size - len), Math.max(0, Math.round(p)));
+      const held = holdOffFrame(Math.round(p), len, size);
       // A centre on the middle of an odd frame is half a pixel off it once
       // rounded, and still counts as on it.
       return { p: held, line: snap && Math.abs(held - p) <= 0.5 ? snap.line : null };
@@ -920,15 +950,17 @@ const layerGeometry = (() => {
 
   /**
    * A turned box moved. Its centre, the one point of it that means the same
-   * turned or not, lands on the frame's edges or middle within `reach`, and is
-   * held inside the frame so the box cannot be lost off it.
+   * turned or not, lands on the frame's edges or middle within `reach`. V3.3:
+   * it may go as far as takes the whole box off the frame, whichever way it is
+   * turned, which is half its diagonal past the edge, and the margin past that.
    */
   function textBoxMoveTurned(box, dx, dy, frame, reach = 0) {
+    const half = Math.hypot(box.w, box.h) / 2;
     const axis = (pos, len, delta, size) => {
       let c = pos + len / 2 + delta;
       const snap = nearestLine([c], size, reach);
       if (snap) c = snap.line;
-      c = Math.min(size, Math.max(0, c));
+      c = holdOffFrame(c - half, 2 * half, size) + half;
       const p = Math.round(c - len / 2);
       return { p, line: snap && Math.abs(p + len / 2 - snap.line) <= 0.5 ? snap.line : null };
     };
@@ -942,8 +974,9 @@ const layerGeometry = (() => {
    * `corner` ('tl', 'tr', 'bl', 'br') moved by `dx, dy` project pixels, the
    * corner opposite staying put, or with `mirrored` the centre. The pointer is
    * taken along the box's diagonal, so the corner follows it smoothly outwards
-   * and inwards whichever way it strays. Held to the frame and to
-   * TEXT_BOX_MIN on the shorter side.
+   * and inwards whichever way it strays. Held to TEXT_BOX_MIN on the
+   * shorter side and, V3.3, to as far as a side may reach off the frame; a box
+   * already past that may keep its size but not grow.
    */
   function boxCornerScale(box, corner, dx, dy, mirrored, frame) {
     const left = corner === 'tl' || corner === 'bl';
@@ -958,17 +991,17 @@ const layerGeometry = (() => {
     const w0 = box.w / k;
     const h0 = box.h / k;
     const along = (ux * w0 + uy * h0) / (w0 * w0 + h0 * h0);
-    const roomX = mirrored ? Math.min(ax, frame.width - ax) * 2 : (left ? ax : frame.width - ax);
-    const roomY = mirrored ? Math.min(ay, frame.height - ay) * 2 : (top ? ay : frame.height - ay);
-    const most = Math.min(roomX / box.w, roomY / box.h);
+    const ox = offFrameReach(frame.width);
+    const oy = offFrameReach(frame.height);
+    const roomX = mirrored ? Math.min(ax - ox.lo, ox.hi - ax) * 2 : (left ? ax - ox.lo : ox.hi - ax);
+    const roomY = mirrored ? Math.min(ay - oy.lo, oy.hi - ay) * 2 : (top ? ay - oy.lo : oy.hi - ay);
+    const most = Math.max(1, Math.min(roomX / box.w, roomY / box.h));
     const least = Math.min(most, TEXT_BOX_MIN / Math.min(box.w, box.h));
     const s = Math.min(most, Math.max(least, along));
     const w = Math.max(1, Math.round(box.w * s));
     const h = Math.max(1, Math.round(box.h * s));
-    let x = mirrored ? Math.round(ax - w / 2) : (left ? Math.round(ax) - w : Math.round(ax));
-    let y = mirrored ? Math.round(ay - h / 2) : (top ? Math.round(ay) - h : Math.round(ay));
-    x = Math.min(Math.max(0, frame.width - w), Math.max(0, x));
-    y = Math.min(Math.max(0, frame.height - h), Math.max(0, y));
+    const x = mirrored ? Math.round(ax - w / 2) : (left ? Math.round(ax) - w : Math.round(ax));
+    const y = mirrored ? Math.round(ay - h / 2) : (top ? Math.round(ay) - h : Math.round(ay));
     return { x, y, w, h };
   }
 
@@ -979,6 +1012,9 @@ const layerGeometry = (() => {
   }
 
   return {
+    OFF_FRAME_SHARE,
+    holdOffFrame,
+    offFrameReach,
     TEXT_BOX_MIN,
     textBoxEdge,
     textBoxMove,

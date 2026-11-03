@@ -25,6 +25,9 @@ const DEFAULTS = {
   // the simple window is what the app is for, and the timeline is the thing you
   // go and ask for.
   advancedEditing: true,
+  // V3.3. Where each popped out editor window was last closed, by its name:
+  // { x, y, width, height }. null until one has been.
+  popoutBounds: null,
 };
 
 function settingsFile() {

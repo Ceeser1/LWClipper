@@ -1119,9 +1119,13 @@ function addEmptyRow(type) {
  * one time lanes are renumbered.
  */
 function deleteRow(type, lane) {
-  laneRows[type] = rowsOf(type) - 1;
-  setLayers(timelineModel.removeLane(layers, type, lane));
-  commitHistory();
+  // V3.3. A row holding the track a crop window is open on asks first.
+  const hit = !cropModal.hidden && layers.some((l) => l.id === cropLayerId && l.type === type && l.lane === lane);
+  confirmPopoutConflict([hit && cropWindowConflict()], () => {
+    laneRows[type] = rowsOf(type) - 1;
+    setLayers(timelineModel.removeLane(layers, type, lane));
+    commitHistory();
+  });
 }
 
 function buildEmptyRow(type, lane, removable) {
@@ -1754,6 +1758,10 @@ function drawClipFades(layer, ctx, leftX, width, height) {
   // clip is under this one here and cannot show its own ramp, so this one
   // draws it. Only while the fade is still the one the overlap wrote: a fade
   // changed by hand since is somebody's own and is drawn as just that.
+  //
+  // V3.3. Where either clip is see-through, a text say, the earlier one does
+  // carry the fade, since nothing covers it; the line drawn is then its own
+  // ramp, the same line either way.
   const cross = transitionInto(layer);
   if (cross && Math.abs(fades.in - cross.overlap) < 1e-6) {
     const under = timelineModel.layerById(layers, cross.from);

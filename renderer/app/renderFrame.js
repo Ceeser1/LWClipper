@@ -128,7 +128,8 @@ function sizeRenderStage() {
   // window narrow and tall.
   let w = Math.round(panel.clientWidth * CROP_FRAME_SHARE);
   let h = Math.round(w * 9 / 16);
-  const maxH = Math.round(window.innerHeight * CROP_HEIGHT_SHARE);
+  // V3.3. In a window of its own, as tall as the rest of the panel leaves.
+  const maxH = popupStageRoom(panel, renderStage, CROP_HEIGHT_SHARE);
   if (h > maxH) {
     h = maxH;
     w = Math.round(h * 16 / 9);
@@ -186,10 +187,10 @@ function placeRenderBox() {
   // The boxes say what the frame is, and typing in them is how it is said back.
   // V2.8 dropped the line of text above them that said the same two numbers,
   // the user having counted them: shown twice, so shown once.
-  if (document.activeElement !== renderWidthBox) {
+  if (renderWidthBox.ownerDocument.activeElement !== renderWidthBox) {
     renderWidthBox.value = String(renderDraft.width);
   }
-  if (document.activeElement !== renderHeightBox) {
+  if (renderHeightBox.ownerDocument.activeElement !== renderHeightBox) {
     renderHeightBox.value = String(renderDraft.height);
   }
 }
@@ -201,7 +202,7 @@ function paintRenderFrame() {
   const pic = renderOnStage(renderBase);
   const w = Math.max(1, Math.round(pic.width));
   const h = Math.max(1, Math.round(pic.height));
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = hostWindowOf(renderCanvas).devicePixelRatio || 1;
   renderCanvas.width = Math.max(1, Math.round(w * dpr));
   renderCanvas.height = Math.max(1, Math.round(h * dpr));
   paintLayers(renderCanvas.getContext('2d'), renderCanvas, compositeAt);
@@ -273,11 +274,12 @@ const renderBoxCtx = {
   commit: renderCommit,
   begin: (info) => {
     renderGesture = { ...info, extended: false, timer: null, last: null };
-    document.addEventListener('pointermove', renderWatchPointer, true);
+    // V3.3. On the document the stage is in, its own window's when popped.
+    renderStage.ownerDocument.addEventListener('pointermove', renderWatchPointer, true);
   },
   end: () => {
     renderStopDwell();
-    document.removeEventListener('pointermove', renderWatchPointer, true);
+    renderStage.ownerDocument.removeEventListener('pointermove', renderWatchPointer, true);
     renderGesture = null;
     // The scale is allowed back up now that the hand is off, which is the one
     // moment doing so cannot move anything out from under the pointer.
@@ -538,8 +540,30 @@ for (const box of [renderWidthBox, renderHeightBox]) {
 
 // ---- open, accept, close ----
 
+/** V3.3. The open Crop Render Frame window as a conflict, or null. */
+function renderWindowConflict() {
+  if (renderModal.hidden) return null;
+  return {
+    message: t('Crop Render Frame is open. Going on closes it and discards what it has not accepted.'),
+    close: closeRenderCrop,
+  };
+}
+
 function openRenderCrop() {
   if (busy || !canRenderCrop()) return;
+  // V3.3. Already open: brought forward. A crop window open beside it asks
+  // first, since this one's Accept moves the frame that crop is placed in.
+  if (!renderModal.hidden) {
+    focusPopOut(renderModal);
+    return;
+  }
+  if (!cropModal.hidden) {
+    confirmPopoutConflict([{
+      message: t('Another crop window is open. Going on closes it and discards what it has not accepted.'),
+      close: closeCrop,
+    }], openRenderCrop);
+    return;
+  }
   renderFromFrame = { ...compositeFrame };
   renderDraft = { x: 0, y: 0, width: renderFromFrame.width, height: renderFromFrame.height };
   renderBase = { x: 0, y: 0, width: renderFromFrame.width, height: renderFromFrame.height };
@@ -547,6 +571,7 @@ function openRenderCrop() {
   // auto-fitted to the frame, so a frame that changed shape would re-fit it and
   // hand back exactly the bars this window exists to get rid of.
   renderPins = new Map();
+  renderOpened = new Map(layers.map((l) => [l.id, l]));
   for (const l of layers) {
     // V3. A generated layer is drawn at whatever size the frame becomes, so it
     // has no pin. Accept carries it through reframeGen instead.
@@ -567,6 +592,14 @@ function openRenderCrop() {
   renderGesture = null;
   renderScale = 0;
   renderModal.hidden = false;
+  // V3.3. Out into a window of its own, before anything below measures it.
+  renderPreviewKey = '';
+  popOut(renderModal, 'render', {
+    title: renderModal.querySelector('.modal__title').textContent,
+    cancel: closeRenderCrop,
+    relayout: relayoutRenderCrop,
+    preview: previewRenderDraft,
+  });
   sizeRenderStage();
   buildRenderPresets();
   fitRenderScale(true);
@@ -575,15 +608,81 @@ function openRenderCrop() {
   setRenderHint(false);
 }
 
+/** V3.3. The popped out window fitted again to its size. */
+function relayoutRenderCrop() {
+  if (renderModal.hidden || !renderDraft || renderGesture) return;
+  sizeRenderStage();
+  fitRenderScale(true);
+  paintRenderFrame();
+  placeRenderBox();
+}
+
+/**
+ * V3.3. The main window's preview of a popped out Render Frame window: the new
+ * frame outlined over the picture and the rest of it dimmed, POPOUT_FPS times
+ * a second and only when the draft has changed.
+ */
+let renderPreviewKey = '';
+function previewRenderDraft() {
+  if (renderModal.hidden || !renderDraft) return;
+  const key = JSON.stringify(renderDraft);
+  if (key === renderPreviewKey) return;
+  renderPreviewKey = key;
+  popoutPreview = { frame: { ...renderDraft } };
+  drawComposite();
+}
+
 function closeRenderCrop() {
   renderStopDwell();
+  renderStage.ownerDocument.removeEventListener('pointermove', renderWatchPointer, true);
   document.removeEventListener('pointermove', renderWatchPointer, true);
+  // V3.3. Back from its own window, and the preview back to the frame as it is.
+  popIn(renderModal);
+  if (popoutPreview) {
+    popoutPreview = null;
+    drawComposite();
+  }
   renderModal.hidden = true;
   renderDraft = null;
   renderBase = null;
   renderPins = null;
+  renderOpened = null;
   renderFromFrame = null;
   renderGesture = null;
+}
+
+// V3.3. Every layer as the window found it, by id. The main window stays
+// usable while the window is out, so a layer may be added, cropped or placed
+// before Accept; one that is no longer the very object it opened on is pinned
+// again then, see renderPinsNow.
+let renderOpened = null;
+
+/**
+ * The pins as Accept should use them: those taken when the window opened, and
+ * for every layer changed or added since, its place now, carried the way the
+ * window has carried every pin since. Each resolution picked in the window
+ * moves and scales the base and every pin alike, so the base says where a
+ * place in the opening frame has gone.
+ */
+function renderPinsNow() {
+  const pins = new Map(renderPins);
+  const base = renderBase;
+  const k = base.width / renderFromFrame.width;
+  const carry = (p) => (p
+    ? { x: base.x + p.x * k, y: base.y + p.y * k, width: p.width * k, height: p.height * k }
+    : null);
+  for (const l of layers) {
+    if (l.type !== 'video' || l.kind === 'gen') continue;
+    if (renderOpened && renderOpened.get(l.id) === l) continue;
+    const pin = carry(renderPinOf(l));
+    if (pin) pins.set(l.id, pin);
+    else pins.delete(l.id);
+    for (const kf of timelineModel.keyframesFor(l)) {
+      const kpin = carry(renderPinOf({ ...l, crop: kf.crop, render: kf.render }));
+      if (kpin) pins.set(keyframePinKey(l.id, kf.id), kpin);
+    }
+  }
+  return pins;
 }
 
 renderAcceptBtn.addEventListener('click', () => {
@@ -591,7 +690,7 @@ renderAcceptBtn.addEventListener('click', () => {
   const out = { width: renderDraft.width, height: renderDraft.height };
   const dx = renderDraft.x;
   const dy = renderDraft.y;
-  const pins = renderPins;
+  const pins = renderPinsNow();
   const from = renderFromFrame;
   const moved = out.width !== from.width || out.height !== from.height || dx || dy;
   if (!moved) {

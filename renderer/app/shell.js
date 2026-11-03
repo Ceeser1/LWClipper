@@ -174,6 +174,7 @@ const placeCanvas = el('placeCanvas');
 const placeBox = el('placeBox');
 const placeSize = el('placeSize');
 const placeHint = el('placeHint');
+const placeZoomHint = el('placeZoomHint');
 const placeScaleRow = el('placeScaleRow');
 const placeScaleSlider = el('placeScaleSlider');
 const placeScaleValue = el('placeScaleValue');

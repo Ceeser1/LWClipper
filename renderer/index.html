@@ -527,6 +527,7 @@
         </div>
       </div>
       <div id="placeHint" class="hint-label crop-hint" hidden>Drag the picture to place it, and the scale to resize it</div>
+      <div id="placeZoomHint" class="hint-label crop-hint" hidden>Scroll to zoom, drag empty space or with the middle button to pan, double-click empty space to fit the frame</div>
       <div id="cropHint" class="hint-label crop-hint">Hold Shift to move bars mirrored, Ctrl on a corner to move it diagonally, both to keep the shape</div>
       <div id="cropSize" class="crop-size"></div>
       <div id="placeSize" class="crop-size" hidden></div>
@@ -691,6 +692,7 @@
         </div>
       </div>
       <div class="hint-label crop-hint">Drag the sides to stretch the shape, a corner to scale it and inside it to move it, hold Shift to keep its centre</div>
+      <div class="hint-label crop-hint">Scroll to zoom, drag empty space or with the middle button to pan, double-click empty space to fit the frame</div>
       <label class="gen-check"><input id="shapeBackground" type="checkbox" /> Enable Background</label>
       <div class="crop-actions">
         <button id="shapeAcceptBtn" class="crop-accept-btn">Accept</button>
@@ -773,6 +775,7 @@
         <div id="textAngle" class="text-angle" data-no-translate hidden></div>
       </div>
       <div id="textHint" class="hint-label crop-hint">Drag the sides to size the text box and inside it to move it, hold Shift to move opposite sides together, drag a corner to turn it</div>
+      <div class="hint-label crop-hint">Scroll to zoom, drag empty space or with the middle button to pan, double-click empty space to fit the frame</div>
       <label class="gen-check"><input id="textBackground" type="checkbox" /> Enable Background</label>
       <div class="crop-actions">
         <button id="textAcceptBtn" class="crop-accept-btn">Accept</button>
@@ -923,6 +926,7 @@
        loads, and anything from any of them once it is running. Anything that
        calls back from the main process is subscribed in startup.js, last. -->
   <script src="app/core.js"></script>
+  <script src="app/popout.js"></script>
   <script src="app/shell.js"></script>
   <script src="app/media.js"></script>
   <script src="app/timeline.js"></script>
@@ -931,6 +935,7 @@
   <script src="app/editing.js"></script>
   <script src="app/layout.js"></script>
   <script src="app/crop.js"></script>
+  <script src="app/stageView.js"></script>
   <script src="app/placement.js"></script>
   <script src="app/renderFrame.js"></script>
   <script src="app/keyframes.js"></script>

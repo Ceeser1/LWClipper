@@ -881,9 +881,38 @@ const timelineModel = (() => {
   //
   // Sound is the other way: a mix adds rather than covers, so both sides fade.
   //
+  // V3.3, the user, 2026-11-03: "Fading out a text keeps the text at 100% alpha
+  // ... until the transition runs out where the text plops out of existence".
+  // Holding the one underneath opaque only works when the one on top covers
+  // it, and a text, a shape, a bar or a transparent picture does not: the held
+  // one shows through round the letters and vanishes at its end. So when
+  // either of the two is see-through the earlier one fades out across the
+  // overlap as well, the way sound does. Two videos keep the exact dissolve.
+  //
   // The fades are written onto the layers rather than worked out whenever they
   // are read, so the preview, the export and the clip's own drawing all read
   // one number, and so a fade dragged by hand afterwards stays where it was put.
+
+  /**
+   * Whether a picture may be transparent, so that a clip under it shows
+   * through: generated media always is round what it draws, and an image may
+   * be unless its format has no alpha. A video is taken as opaque.
+   */
+  function seeThrough(layer) {
+    if (!layer || layer.type !== 'video') return false;
+    if (layer.kind === 'gen') return true;
+    if (layer.kind !== 'image') return false;
+    return !/\.(jpe?g|jfif|bmp)$/i.test(String(layer.src || ''));
+  }
+
+  /**
+   * Whether the earlier clip of an overlapping pair fades out across it: a
+   * sound always, a picture when either of the two is see-through.
+   */
+  function fadesOutUnder(earlier, later) {
+    if (!earlier) return false;
+    return earlier.type === 'audio' || seeThrough(earlier) || seeThrough(later);
+  }
 
   /**
    * Every pair of neighbours on a lane that overlap, as "earlier|later" to the
@@ -927,15 +956,16 @@ const timelineModel = (() => {
       if (now.get(pair) === o) continue;
       const [a, b] = pair.split('|');
       if (fadeIs(b, 'fadeIn', o)) next = setFade(next, b, 'in', 0);
-      const left = layerById(next, a);
-      if (left && left.type === 'audio' && fadeIs(a, 'fadeOut', o)) next = setFade(next, a, 'out', 0);
+      if (fadesOutUnder(layerById(next, a), layerById(next, b)) && fadeIs(a, 'fadeOut', o)) {
+        next = setFade(next, a, 'out', 0);
+      }
     }
     for (const [pair, o] of now) {
       if (was.get(pair) === o) continue;
       const [a, b] = pair.split('|');
-      const left = layerById(next, a);
+      const both = fadesOutUnder(layerById(next, a), layerById(next, b));
       next = setFade(next, b, 'in', o);
-      next = setFade(next, a, 'out', left && left.type === 'audio' ? o : 0);
+      next = setFade(next, a, 'out', both ? o : 0);
     }
     return next;
   }
@@ -1817,6 +1847,8 @@ const timelineModel = (() => {
     lanesOf,
     overlapsOf,
     crossfade,
+    seeThrough,
+    fadesOutUnder,
     laneCount,
     reorderLane,
     removeLane,

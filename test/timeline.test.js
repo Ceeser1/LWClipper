@@ -1119,6 +1119,36 @@ test('pictures overlapping on a lane dissolve: the later one fades in over the e
   assert.deepEqual(out.map((l) => l.id), ['B', 'A']);
 });
 
+// V3.3. The user: "Fading out a text keeps the text at 100% alpha ... until
+// the transition runs out where the text plops out of existence".
+test('a see-through picture in a transition: the earlier one fades out too', () => {
+  const gen = { kind: 'gen', src: 'gen:1', gen: { form: 'text' } };
+  const texts = (bStart) => T.arrangeLanes([
+    video({ id: 'A', start: 0, duration: 10, lane: 0, ...gen }),
+    video({ id: 'B', start: bStart, duration: 10, lane: 0, ...gen }),
+  ]);
+  const out = T.crossfade(texts(12), texts(8));
+  assert.deepEqual(fades(out), { aOut: 2, bIn: 2 });
+  const a = T.layerById(out, 'A');
+  assert.equal(T.fadeAlphaAt(a, 9), 0.5);
+  assert.equal(T.fadeAlphaAt(a, 10), 0);
+  // Pulled apart, both are taken back.
+  assert.deepEqual(fades(T.crossfade(out, T.moveLayer(out, 'B', 12))), { aOut: 0, bIn: 0 });
+});
+
+test('a video under a text fades out, and under a png, not under a jpeg', () => {
+  const mixed = (bProps) => (bStart) => T.arrangeLanes([
+    video({ id: 'A', start: 0, duration: 10, lane: 0 }),
+    video({ id: 'B', start: bStart, duration: 10, lane: 0, ...bProps }),
+  ]);
+  const overText = mixed({ kind: 'gen', src: 'gen:1' });
+  assert.deepEqual(fades(T.crossfade(overText(12), overText(8))), { aOut: 2, bIn: 2 });
+  const overPng = mixed({ kind: 'image', src: 'C:/a/logo.PNG' });
+  assert.deepEqual(fades(T.crossfade(overPng(12), overPng(8))), { aOut: 2, bIn: 2 });
+  const overJpeg = mixed({ kind: 'image', src: 'C:/a/photo.jpeg' });
+  assert.deepEqual(fades(T.crossfade(overJpeg(12), overJpeg(8))), { aOut: 0, bIn: 2 });
+});
+
 test('sounds overlapping on a lane both fade, since a mix adds', () => {
   const out = T.crossfade(pair('audio', 12), pair('audio', 8));
   assert.deepEqual(fades(out), { aOut: 2, bIn: 2 });

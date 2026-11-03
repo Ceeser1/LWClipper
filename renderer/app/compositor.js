@@ -449,7 +449,15 @@ function drawLayerInto(ctx, canvas, layer, crop = layer.crop, render = layer.ren
     d.dx, d.dy, d.dw, d.dh);
 }
 
-function paintLayers(ctx, canvas, at, only, skip) {
+// V3.3. What a popped out crop window is doing, for the main window's preview
+// to show: { layerId, layerNow } draws that layer as the crop window's Accept
+// would leave it, at whatever moment the playhead is on, and { frame } is a
+// Render Frame draft, drawn as an outline with everything outside it dimmed.
+// Null when no crop window is open. Only drawComposite reads it, so the crop
+// windows' own stages and the trim frames are drawn as they always were.
+let popoutPreview = null;
+
+function paintLayers(ctx, canvas, at, only, skip, drafts = null) {
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   // Back to front, which is the order layersAt hands them back in, so index 0
@@ -482,9 +490,28 @@ function paintLayers(ctx, canvas, at, only, skip) {
     const alpha = timelineModel.layerAlphaAt(l, at);
     if (alpha <= 0) continue;
     ctx.globalAlpha = alpha;
-    drawLayerInto(ctx, canvas, l, undefined, undefined, at);
+    // V3.3. The layer a crop window is editing, as its Accept would leave it.
+    const shown = (drafts && l.id === drafts.layerId && drafts.layerNow()) || l;
+    drawLayerInto(ctx, canvas, shown, undefined, undefined, at);
     ctx.globalAlpha = 1;
   }
+}
+
+/** V3.3. A Render Frame draft over the preview: outlined, the rest dimmed. */
+function drawFrameDraft(ctx, canvas, rect) {
+  const frame = projectFrame();
+  const kx = canvas.width / frame.width;
+  const ky = canvas.height / frame.height;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 0, canvas.width, canvas.height);
+  ctx.rect(rect.x * kx, rect.y * ky, rect.width * kx, rect.height * ky);
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+  ctx.fill('evenodd');
+  ctx.strokeStyle = 'rgba(235, 235, 240, 0.9)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(rect.x * kx, rect.y * ky, rect.width * kx, rect.height * ky);
+  ctx.restore();
 }
 
 function drawComposite() {
@@ -497,7 +524,9 @@ function drawComposite() {
   // canvas keeps the last full composite. Clearing it to black instead would be
   // less use than the stale picture, not more.
   if (compositeScrub && !only) return;
-  paintLayers(compositeCtx, compositeCanvas, compositeAt, only);
+  const p = popoutPreview;
+  paintLayers(compositeCtx, compositeCanvas, compositeAt, only, null, p && p.layerId ? p : null);
+  if (p && p.frame) drawFrameDraft(compositeCtx, compositeCanvas, p.frame);
 }
 
 // Standing still: every covering layer on its exact frame, everything else
