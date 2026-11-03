@@ -32,6 +32,12 @@ function fakeCtx() {
     fillRect(...a) { calls.push(['fillRect', this.fillStyle, ...a]); },
     fillText(text, x, y) { calls.push(['fillText', text, x, y, this.fillStyle, this.font]); },
     strokeText(text, x, y) { calls.push(['strokeText', text, x, y, this.strokeStyle, this.lineWidth]); },
+    beginPath() { calls.push(['beginPath']); },
+    closePath() { calls.push(['closePath']); },
+    moveTo(x, y) { calls.push(['moveTo', x, y]); },
+    lineTo(x, y) { calls.push(['lineTo', x, y]); },
+    ellipse(...a) { calls.push(['ellipse', ...a]); },
+    fill(rule) { calls.push(['fill', this.fillStyle, rule]); },
   };
   return ctx;
 }
@@ -268,4 +274,126 @@ test('no shadow, no mask; and nowhere to draw one, no shadow', () => {
   D.drawGen(ctx, gen({ form: 'text', text: { runs: [{ text: 'a' }], style: { shadow: {} } } }),
     1920, 1080, () => null);
   assert.ok(ctx.calls.some((c) => c[0] === 'fillText'));
+});
+
+// ---- 3.2, words formatted one by one ----
+
+test('each run is drawn in its own font, size and colour, on the line\'s one baseline', () => {
+  const ctx = fakeCtx();
+  D.drawGen(ctx, gen({ form: 'text', refHeight: 1080, text: {
+    runs: [
+      { text: 'ab ' },
+      { text: 'cd', style: { size: 200, color: '#ff0000ff', bold: true } },
+      { text: ' ef', style: { font: 'Impact' } },
+    ],
+    style: { size: 100, color: '#ffffffff' },
+    align: { h: 'left', v: 'top' },
+  } }), 1920, 1080);
+  const fills = ctx.calls.filter((c) => c[0] === 'fillText');
+  // 50 a character at 100, 100 at 200; the line's ascent is the big run's 160.
+  assert.deepEqual(fills.map((c) => c.slice(1, 5)), [
+    ['ab ', 0, 160, '#ffffffff'],
+    ['cd', 150, 160, '#ff0000ff'],
+    [' ef', 350, 160, '#ffffffff'],
+  ]);
+  assert.match(fills[1][5], /^bold 200px "Arial"/);
+  assert.match(fills[2][5], /^100px "Impact"/);
+});
+
+test('an underline runs under each run at that run\'s own size and colour', () => {
+  const ctx = fakeCtx();
+  D.drawGen(ctx, gen({ form: 'text', refHeight: 1080, text: {
+    runs: [{ text: 'ab' }, { text: 'cd', style: { size: 200, color: '#00ff00ff' } }],
+    style: { size: 100, underline: true, color: '#112233ff' },
+    align: { h: 'left', v: 'top' },
+  } }), 1920, 1080);
+  const rects = ctx.calls.filter((c) => c[0] === 'fillRect');
+  // Baseline 160. At 100: 10 below it, 6 thick; at 200: 20 below, 12 thick.
+  assert.deepEqual(rects, [
+    ['fillRect', '#112233ff', 0, 170, 100, 6],
+    ['fillRect', '#00ff00ff', 100, 180, 200, 12],
+  ]);
+});
+
+test('outline and shadow are the whole text\'s: every run outlined, one mask for all', () => {
+  const ctx = fakeCtx();
+  ctx.drawImage = (...a) => ctx.calls.push(['drawImage', a[0].name, ...a.slice(1)]);
+  const log = [];
+  D.drawGen(ctx, gen({ form: 'text', text: {
+    runs: [
+      { text: 'a ', style: { outline: null, shadow: null } },
+      { text: 'b', style: { color: '#ff0000ff' } },
+    ],
+    style: {
+      outline: { width: 2, color: '#0000ffff' },
+      shadow: { color: '#000000ff', angle: 0, distance: 10, size: 4, fade: 1 },
+    },
+  } }), 1920, 1080, fakeSurface(log));
+  assert.deepEqual(ctx.calls.filter((c) => c[0] === 'strokeText').map((c) => [c[1], c[4]]),
+    [['a ', '#0000ffff'], ['b', '#0000ffff']]);
+  assert.equal(log.filter((l) => l[0] === 'surface').length, 1);
+  assert.equal(ctx.calls.filter((c) => c[0] === 'drawImage').length, 1);
+});
+
+// ---- shapes ----
+
+const near = (a, b) => Math.abs(a - b) < 1e-9;
+
+test('a shape with no box is centred, a third of the frame high, in its own proportions', () => {
+  const circle = gen({ form: 'shape', shape: { kind: 'circle' } });
+  assert.deepEqual(D.shapeBox(circle, 1920, 1080), { x: 780, y: 360, w: 360, h: 360 });
+  const tri = D.shapeBox(gen({ form: 'shape', shape: { kind: 'triangle' } }), 1920, 1080);
+  assert.ok(near(tri.w, 360 * 2 / Math.sqrt(3)));
+  assert.ok(near(tri.x, (1920 - tri.w) / 2));
+});
+
+test('a shape with its own box is scaled to the frame like every other size', () => {
+  const g = gen({ form: 'shape', refHeight: 1080, shape: { kind: 'square', box: { x: 150, y: 60, w: 300, h: 120 } } });
+  assert.deepEqual(D.shapeBox(g, 960, 540), { x: 75, y: 30, w: 150, h: 60 });
+});
+
+test('a square fills its box in its colour', () => {
+  const ctx = fakeCtx();
+  D.drawGen(ctx, gen({ form: 'shape', shape: { kind: 'square', color: '#ff000080', box: { x: 10, y: 20, w: 30, h: 40 } } }),
+    1920, 1080);
+  assert.deepEqual(ctx.calls.slice(1), [
+    ['beginPath'], ['moveTo', 10, 20], ['lineTo', 40, 20], ['lineTo', 40, 60], ['lineTo', 10, 60], ['closePath'],
+    ['fill', '#ff000080', 'nonzero'],
+  ]);
+});
+
+test('a triangle points up from the middle of the top', () => {
+  const ctx = fakeCtx();
+  D.drawGen(ctx, gen({ form: 'shape', shape: { kind: 'triangle', box: { x: 0, y: 0, w: 100, h: 50 } } }), 1920, 1080);
+  assert.deepEqual(ctx.calls.filter((c) => c[0] === 'moveTo' || c[0] === 'lineTo'),
+    [['moveTo', 50, 0], ['lineTo', 100, 50], ['lineTo', 0, 50]]);
+});
+
+test('a star has ten corners that reach every side of its box and no further', () => {
+  const ctx = fakeCtx();
+  D.drawGen(ctx, gen({ form: 'shape', shape: { kind: 'star', box: { x: 0, y: 0, w: 100, h: 100 } } }), 1920, 1080);
+  const pts = ctx.calls.filter((c) => c[0] === 'moveTo' || c[0] === 'lineTo');
+  assert.equal(pts.length, 10);
+  const xs = pts.map((p) => p[1]);
+  const ys = pts.map((p) => p[2]);
+  assert.ok(near(Math.min(...xs), 0) && near(Math.max(...xs), 100));
+  assert.ok(near(Math.min(...ys), 0) && near(Math.max(...ys), 100));
+  assert.ok(near(pts[0][1], 50) && near(pts[0][2], 0), 'the first point is the top');
+});
+
+test('a circle is an ellipse filling its box; a ring cuts its hole by the even-odd rule', () => {
+  const ctx = fakeCtx();
+  D.drawGen(ctx, gen({ form: 'shape', shape: { kind: 'circle', box: { x: 0, y: 0, w: 200, h: 100 } } }), 1920, 1080);
+  assert.deepEqual(ctx.calls.find((c) => c[0] === 'ellipse').slice(1, 5), [100, 50, 100, 50]);
+  const ring = fakeCtx();
+  D.drawGen(ring, gen({ form: 'shape', shape: { kind: 'ring', box: { x: 0, y: 0, w: 200, h: 200 } } }), 1920, 1080);
+  const ellipses = ring.calls.filter((c) => c[0] === 'ellipse');
+  assert.equal(ellipses.length, 2);
+  assert.deepEqual(ellipses[1].slice(1, 5), [100, 100, 100 * D.RING_HOLE, 100 * D.RING_HOLE]);
+  assert.equal(ring.calls.find((c) => c[0] === 'fill')[2], 'evenodd');
+});
+
+test('a shape has no fonts', () => {
+  assert.deepEqual(D.familiesOf(gen({ form: 'shape' })), []);
+  assert.deepEqual(D.fontsOf(gen({ form: 'shape' })), []);
 });

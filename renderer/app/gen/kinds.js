@@ -7,10 +7,11 @@
 //
 // Everything the window knows about each kind, in one place: what Add Media
 // calls it, what a new one starts as, the settings it opens and their title,
-// what its clip is called and how the clip is drawn. A new kind, a shape say,
-// is an entry here, plus its form in timeline.js's genOf, its drawing in
-// genDraw.js and its settings modal; nothing else in the window has to learn
-// about it. Menu order is the order written here.
+// what its clip is called and how the clip is drawn. A new kind is an entry
+// here, plus its form in timeline.js's genOf, its drawing in genDraw.js and
+// its settings modal; nothing else in the window has to learn about it. Menu
+// order is the order written here. A kind with `variants` opens a submenu of
+// its own, and the variant picked is handed to its starter: the shapes.
 //
 // The functions are wrapped rather than named directly, so the table can sit
 // before the modals it opens.
@@ -34,7 +35,28 @@ const GEN_KINDS = {
     name: () => t('Bar'),
     drawClip: (...args) => drawClipBar(...args),
   },
+  shape: {
+    label: () => t('Shapes'),
+    variants: () => timelineModel.SHAPE_KINDS.map((kind) => ({ id: kind, label: shapeName(kind) })),
+    settingsTitle: () => t('Shape Settings'),
+    starter: (kind) => ({ form: 'shape', shape: { kind } }),
+    open: (layer, first) => openShapeSettings(layer, first),
+    name: (gen) => shapeName(gen.shape.kind),
+    drawClip: (...args) => drawClipShape(...args),
+  },
 };
+
+// Written out one by one, so check-locales finds every name.
+function shapeName(kind) {
+  const names = {
+    circle: () => t('Circle'),
+    square: () => t('Square'),
+    triangle: () => t('Triangle'),
+    star: () => t('Star'),
+    ring: () => t('Ring'),
+  };
+  return (names[kind] || names.circle)();
+}
 
 // A form this window does not know is shown as a text, the way the model
 // reads one.
@@ -180,6 +202,24 @@ function drawClipBar(layer, ctx, leftX, width, height) {
   }
   ctx.fillStyle = layer.gen.bar.color;
   ctx.fillRect(0, 0, width, height);
+}
+
+// A shape's clip is the shape in its colour at the clip's visible left edge,
+// with a thin dark edge so a white or faint one still shows, and its name.
+function drawClipShape(layer, ctx, leftX, width, height) {
+  const shape = layer.gen.shape;
+  const clipX = timelineView.timeToX(tlView, layer.start);
+  const x = Math.max(0, clipX - leftX) + 6;
+  const h = Math.max(4, Math.round(height * 0.6));
+  const w = h * (genDraw.SHAPE_ASPECT[shape.kind] || 1);
+  genDraw.fillShape(ctx, shape.kind, { x, y: (height - h) / 2, w, h }, shape.color);
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
+  ctx.stroke();
+  ctx.font = Math.max(8, Math.round(height * 0.4)) + 'px "Segoe UI", sans-serif';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#e8e8ee';
+  ctx.fillText(shapeName(shape.kind), x + w + 6, height / 2);
 }
 
 // A text's clip is its words, in its own font.

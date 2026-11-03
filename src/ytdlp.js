@@ -150,7 +150,72 @@ function downloadStatusLine(got, total, speed, eta) {
   return parts.join('   ');
 }
 
-const PROGRESS_RE = /^LWCLIPPER_DL\t([\d.]+|NA)\t([\d.]+|NA)\t([\d.]+|NA)\t([\d.]+|NA)$/;
+// ---- a merge left under its temporary name ----
+//
+// yt-dlp merges video and audio into NAME.temp.mp4 and then renames that over
+// NAME.mp4, with no retry of its own on the rename. On Windows a virus scanner
+// routinely has a freshly written file open for a while, longer the bigger it
+// is, and a 4 GB merge was measured failing exactly there with WinError 32
+// (2026-09-26, Defender's real-time protection on). The merged file is whole
+// by then, so throwing the download away would mean fetching gigabytes again
+// for a file that is already on disk.
+
+// How long to keep trying the rename, and how often.
+const RELEASE_WAIT_MS = 180000;
+const RELEASE_STEP_MS = 500;
+
+// The error codes Node gives a rename the other program's handle refuses.
+const BUSY_CODES = new Set(['EBUSY', 'EPERM', 'EACCES']);
+
+const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+
+function escapeRe(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Finish a merge yt-dlp could not rename. Only when its error is that very
+ * rename being refused (WinError 32 naming `STEM.temp.EXT`) and that file is
+ * there: then the rename is tried again until the other program lets go, and
+ * the separate video and audio parts yt-dlp would have deleted after its own
+ * rename are deleted, and nothing else. Answers the final path, or null when
+ * this was some other failure.
+ *
+ * `opts` is for the tests: `rename`, `sleep`, `waitMs`, and `cancelToken`,
+ * which stops the waiting the way it stops a download.
+ */
+async function finishStuckMerge(dir, stem, stderrText, onProgress, opts = {}) {
+  const rename = opts.rename || fs.renameSync;
+  const pause = opts.sleep || sleep;
+  const waitMs = opts.waitMs === undefined ? RELEASE_WAIT_MS : opts.waitMs;
+  if (!/WinError 32\]/.test(stderrText)) return null;
+  for (const ext of VIDEO_EXTS) {
+    const tempName = `${stem}.temp${ext}`;
+    const temp = path.join(dir, tempName);
+    if (!stderrText.includes(tempName) || !fs.existsSync(temp) || fs.statSync(temp).size === 0) continue;
+    const final = path.join(dir, stem + ext);
+    if (onProgress) onProgress(null, 'Waiting for another program to release the file...');
+    const until = Date.now() + waitMs;
+    for (;;) {
+      if (opts.cancelToken && opts.cancelToken.cancelled) return null;
+      try {
+        rename(temp, final);
+        break;
+      } catch (e) {
+        if (!BUSY_CODES.has(e.code) || Date.now() >= until) throw e;
+      }
+      await pause(RELEASE_STEP_MS);
+    }
+    const part = new RegExp('^' + escapeRe(stem) + '\\.f[^.]+\\.\\w+$');
+    for (const name of fs.readdirSync(dir)) {
+      if (part.test(name)) fs.rmSync(path.join(dir, name), { force: true });
+    }
+    return final;
+  }
+  return null;
+}
+
+const PROGRESS_RE =/^LWCLIPPER_DL\t([\d.]+|NA)\t([\d.]+|NA)\t([\d.]+|NA)\t([\d.]+|NA)$/;
 
 function parseNum(s) {
   if (s === 'NA' || !s) return null;
@@ -218,7 +283,17 @@ async function download(videoId, sourceUrl, title, format, cookies, onProgress, 
   }, cancelToken);
 
   if (result.exitCode !== 0) {
-    throw new Error('yt-dlp failed:\n' + result.stderrTail.join('\n'));
+    const stderrText = result.stderrTail.join('\n');
+    let rescued = null;
+    if (!format.isAudio) {
+      try {
+        rescued = await finishStuckMerge(toolPaths.cacheDir(), `${videoId}.${format.cacheKey}`,
+          stderrText, onProgress, { cancelToken });
+      } catch {
+        rescued = null;
+      }
+    }
+    if (!rescued) throw new Error('yt-dlp failed:\n' + stderrText);
   }
 
   const finalPath = findCachedFile(videoId, format);
@@ -242,4 +317,4 @@ function outputHints(filePath, isAudio, audioBitrate) {
   return { sourceFormat, compressionPreset: stepForBitrate(sourceFormat, audioBitrate) };
 }
 
-module.exports = { probe, download, normalizeUrl, cacheKeyFor, cookieArgs };
+module.exports = { probe, download, normalizeUrl, cacheKeyFor, cookieArgs, finishStuckMerge };

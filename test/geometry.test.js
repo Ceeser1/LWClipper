@@ -1045,3 +1045,26 @@ test('textBoxMoveTurned: the centre snaps and stays in the frame', () => {
   assert.equal(off.box.x + off.box.w / 2, 0);
   assert.equal(off.snapX, null);
 });
+
+// ---- shapes: a corner scales the box and keeps its proportions ----
+
+test('boxCornerScale follows the pointer along the diagonal, the opposite corner kept', () => {
+  const box = { x: 100, y: 100, w: 200, h: 100 };
+  // Straight out along the diagonal: exactly half as big again.
+  assert.deepEqual(G.boxCornerScale(box, 'br', 100, 50, false, HD), { x: 100, y: 100, w: 300, h: 150 });
+  // Across only: the projection, (300 * 200 + 100 * 100) / (200^2 + 100^2) = 1.4.
+  assert.deepEqual(G.boxCornerScale(box, 'br', 100, 0, false, HD), { x: 100, y: 100, w: 280, h: 140 });
+  // From the top left inwards: the bottom right stays.
+  assert.deepEqual(G.boxCornerScale(box, 'tl', 100, 0, false, HD), { x: 180, y: 140, w: 120, h: 60 });
+});
+
+test('boxCornerScale mirrored holds the centre', () => {
+  const box = { x: 100, y: 100, w: 200, h: 100 };
+  assert.deepEqual(G.boxCornerScale(box, 'tr', 50, 0, true, HD), { x: 60, y: 80, w: 280, h: 140 });
+});
+
+test('boxCornerScale is held to the frame and to the least size', () => {
+  const box = { x: 100, y: 100, w: 200, h: 100 };
+  assert.deepEqual(G.boxCornerScale(box, 'br', 5000, 0, false, HD), { x: 100, y: 100, w: 1820, h: 910 });
+  assert.deepEqual(G.boxCornerScale(box, 'br', -500, -500, false, HD), { x: 100, y: 100, w: 32, h: 16 });
+});

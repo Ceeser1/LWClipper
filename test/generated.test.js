@@ -103,14 +103,14 @@ test('a form this version does not know opens as text, and each form keeps only 
   assert.equal(b.bar.span, 0.01);
 });
 
-test('a run keeps only what it changes, and an effect set to null stays null', () => {
+test('a run keeps only what it changes, and never an outline or a shadow', () => {
   const g = T.genOf({ text: { runs: [
-    { text: 'a\r\nb', style: { bold: true, outline: null, nonsense: 1 } },
+    { text: 'a\r\nb', style: { bold: true, outline: null, shadow: { size: 4 }, nonsense: 1 } },
     { text: 5 },
     'not a run',
   ] } });
   assert.deepEqual(g.text.runs, [
-    { text: 'a\nb', style: { bold: true, outline: null } },
+    { text: 'a\nb', style: { bold: true } },
     { text: '', style: {} },
   ]);
 });
@@ -306,4 +306,34 @@ test('reframeGen: a whole frame text and a bar follow the frame, sizes held', ()
   const bar = T.reframeGen(T.genOf({ form: 'bar', refHeight: 720, bar: { thickness: 30 } }), 720, 1000, 1, 0, 0);
   assert.equal(bar.refHeight, 1000);
   assert.equal(bar.bar.thickness * 1000 / bar.refHeight, 30);
+});
+
+// ---- shapes ----
+
+test('a shape keeps its kind, colour and box, and nothing else', () => {
+  const g = T.genOf({ form: 'shape', shape: { kind: 'star', color: '#FF0000', box: { x: 1, y: 2, w: 3, h: 4 }, text: 'x' } });
+  assert.deepEqual(g, { form: 'shape', refHeight: 1080, shape: { kind: 'star', color: '#ff0000ff', box: { x: 1, y: 2, w: 3, h: 4 } } });
+  assert.deepEqual(T.genOf({ form: 'shape' }).shape, { kind: 'circle', color: '#ffffffff', box: null });
+  assert.equal(T.genOf({ form: 'shape', shape: { kind: 'hexagon' } }).shape.kind, 'circle');
+  assert.equal(T.genOf({ form: 'shape', shape: { box: { x: 0, y: 0, w: 0, h: 5 } } }).shape.box, null);
+  assert.deepEqual(T.SHAPE_KINDS, ['circle', 'square', 'triangle', 'star', 'ring']);
+});
+
+test('a shape layer is a generated picture like the others', () => {
+  const l = T.createLayer({ kind: 'gen', gen: { form: 'shape', shape: { kind: 'ring' } } });
+  assert.equal(l.type, 'video');
+  assert.equal(l.src, null);
+  assert.equal(l.gen.shape.kind, 'ring');
+  assert.equal(l.gen.text, undefined);
+});
+
+test('Crop Render pins a shape box like a text box, and a shape with none follows the frame', () => {
+  const boxed = { form: 'shape', refHeight: 720, shape: { kind: 'square', box: { x: 200, y: 100, w: 50, h: 50 } } };
+  const r = T.reframeGen(boxed, 720, 600, 1, -100, -60);
+  // A crop keeps sizes in pixels, so only the reference height follows the frame.
+  assert.equal(r.refHeight, 600);
+  assert.deepEqual(r.shape.box, { x: 100, y: 40, w: 50, h: 50 });
+  const free = T.reframeGen({ form: 'shape', refHeight: 720, shape: { kind: 'star' } }, 720, 1080, 1.5, 0, 0);
+  assert.equal(free.refHeight, 720);
+  assert.equal(free.shape.box, null);
 });

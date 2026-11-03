@@ -52,6 +52,97 @@ const genDraw = (() => {
     ctx.fillRect(r.x, r.y, r.w, r.h);
   }
 
+  // ---- shapes ----
+  //
+  // Each shape is an outline in a box, the same thing an SVG path is, traced
+  // straight onto the canvas: the bundled ffmpeg has no SVG reader, and the
+  // canvas is what already becomes the preview, the export's PNG and the clip.
+  // A shape fills its box edge to edge, so the box's grips sit on its ink.
+
+  // Corners as fractions of the box, for the shapes made of straight lines.
+  // The star is a regular five-pointed one, its inner points at the golden
+  // ratio's share of the outer, scaled to fill its box.
+  const STAR_POINTS = (() => {
+    const pts = [];
+    for (let i = 0; i < 10; i += 1) {
+      const r = i % 2 ? 0.381966 : 1;
+      const a = -Math.PI / 2 + i * Math.PI / 5;
+      pts.push([Math.cos(a) * r, Math.sin(a) * r]);
+    }
+    const xs = pts.map((p) => p[0]);
+    const ys = pts.map((p) => p[1]);
+    const x0 = Math.min(...xs);
+    const y0 = Math.min(...ys);
+    const w = Math.max(...xs) - x0;
+    const h = Math.max(...ys) - y0;
+    return pts.map(([x, y]) => [(x - x0) / w, (y - y0) / h]);
+  })();
+  const SHAPE_POLYGONS = {
+    square: [[0, 0], [1, 0], [1, 1], [0, 1]],
+    triangle: [[0.5, 0], [1, 1], [0, 1]],
+    star: STAR_POINTS,
+  };
+
+  // Width over height of a shape's default box, so a new one is the regular
+  // shape: an equilateral triangle, a star with its own proportions.
+  const SHAPE_ASPECT = {
+    circle: 1,
+    square: 1,
+    ring: 1,
+    triangle: 2 / Math.sqrt(3),
+    star: Math.cos(Math.PI / 10) / (0.5 + 0.5 * Math.cos(Math.PI / 5)),
+  };
+
+  // How much of a ring's width its hole takes.
+  const RING_HOLE = 0.6;
+
+  /**
+   * A shape's box in the frame's pixels: its own scaled, or with none the
+   * default, a third of the frame high in the shape's proportions, centred.
+   */
+  function shapeBox(gen, width, height) {
+    const s = gen.shape;
+    if (s.box) {
+      const k = scaleOf(gen, height);
+      return { x: s.box.x * k, y: s.box.y * k, w: s.box.w * k, h: s.box.h * k };
+    }
+    const h = height / 3;
+    const w = h * (SHAPE_ASPECT[s.kind] || 1);
+    return { x: (width - w) / 2, y: (height - h) / 2, w, h };
+  }
+
+  /** The outline of a shape in a box, as a path on `ctx`, ready to fill. */
+  function traceShape(ctx, kind, b) {
+    ctx.beginPath();
+    if (kind === 'circle' || kind === 'ring') {
+      const cx = b.x + b.w / 2;
+      const cy = b.y + b.h / 2;
+      ctx.ellipse(cx, cy, b.w / 2, b.h / 2, 0, 0, Math.PI * 2);
+      if (kind === 'ring') {
+        ctx.moveTo(cx + b.w / 2 * RING_HOLE, cy);
+        ctx.ellipse(cx, cy, b.w / 2 * RING_HOLE, b.h / 2 * RING_HOLE, 0, 0, Math.PI * 2);
+      }
+      return;
+    }
+    const pts = SHAPE_POLYGONS[kind] || SHAPE_POLYGONS.square;
+    pts.forEach(([x, y], i) => {
+      if (i) ctx.lineTo(b.x + x * b.w, b.y + y * b.h);
+      else ctx.moveTo(b.x + x * b.w, b.y + y * b.h);
+    });
+    ctx.closePath();
+  }
+
+  // The ring's hole is the inner ellipse, left out by the even-odd rule.
+  function fillShape(ctx, kind, b, color) {
+    traceShape(ctx, kind, b);
+    ctx.fillStyle = color;
+    ctx.fill(kind === 'ring' ? 'evenodd' : 'nonzero');
+  }
+
+  function drawShape(ctx, gen, width, height) {
+    fillShape(ctx, gen.shape.kind, shapeBox(gen, width, height), gen.shape.color);
+  }
+
   /** The measuring textLayout wants, done by canvas in the font a style names. */
   function measurer(ctx) {
     return (text, style, scale) => {
@@ -344,8 +435,8 @@ const genDraw = (() => {
    * The box and the rotation are 3.1's. With neither the text is laid out in
    * the whole frame; the rotation is about the box's centre.
    *
-   * Pieces with the same shadow share one mask. In 3.0 that is all of them,
-   * but a word with a shadow of its own, later, will get its own.
+   * The shadow and the outline belong to the whole text (3.2 formats words
+   * one by one, but never these two), so all of it goes into the one mask.
    */
   function drawText(ctx, gen, width, height, surface) {
     const text = gen.text;
@@ -365,16 +456,8 @@ const genDraw = (() => {
       for (const piece of line.pieces) pieces.push({ piece, line });
     }
 
-    const shadows = new Map();
-    for (const p of pieces) {
-      const s = p.piece.style.shadow;
-      if (!s) continue;
-      const key = JSON.stringify(s);
-      if (!shadows.has(key)) shadows.set(key, { shadow: s, pieces: [] });
-      shadows.get(key).pieces.push(p);
-    }
-    for (const { shadow, pieces: cast } of shadows.values()) {
-      drawShadow(ctx, text, cast, box, scale, shadow, width, height, surface || defaultSurface);
+    if (text.style.shadow && pieces.length) {
+      drawShadow(ctx, text, pieces, box, scale, text.style.shadow, width, height, surface || defaultSurface);
     }
 
     ctx.save();
@@ -394,6 +477,7 @@ const genDraw = (() => {
       if (gen.text) drawText(ctx, gen, width, height, surface);
     },
     bar: (ctx, gen, width, height) => drawBar(ctx, gen, width, height),
+    shape: (ctx, gen, width, height) => drawShape(ctx, gen, width, height),
   };
 
   /**
@@ -438,6 +522,10 @@ const genDraw = (() => {
   return {
     scaleOf,
     barRect,
+    SHAPE_ASPECT,
+    RING_HOLE,
+    shapeBox,
+    fillShape,
     drawGen,
     distanceField,
     shadowFalloff,

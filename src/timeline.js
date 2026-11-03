@@ -137,7 +137,7 @@ const timelineModel = (() => {
   // `form` rather than `type`, because a layer's type is already video or
   // audio and a generated layer is a video one in every sense that word has.
 
-  const GEN_FORMS = ['text', 'bar'];
+  const GEN_FORMS = ['text', 'bar', 'shape'];
 
   // Sizes in the gen object are pixels at the project height they were set at,
   // and that height travels with them as `refHeight`. Drawn into a frame of
@@ -165,9 +165,14 @@ const timelineModel = (() => {
   // that has it; falling back for the drawing is the window's business.
   const DEFAULT_FONT = 'Arial';
 
+  // What a run of a text may change from the text's own style. Outline and
+  // shadow are left out on purpose: they are set for the whole text.
+  const RUN_FIELDS = ['font', 'size', 'color', 'bold', 'italic', 'underline', 'strike'];
+
   const TEXT_H = ['left', 'center', 'right'];
   const TEXT_V = ['top', 'middle', 'bottom'];
   const BAR_SIDES = ['top', 'right', 'bottom', 'left'];
+  const SHAPE_KINDS = ['circle', 'square', 'triangle', 'star', 'ring'];
 
   function bool(v) {
     return v === true;
@@ -232,16 +237,15 @@ const timelineModel = (() => {
    * what that run changes from the text's style, so only the fields actually
    * present come out. Without it every field is filled in.
    *
-   * A partial style keeps an effect set to null, because on a run null is a
-   * statement, "no outline on these words", where an absent field says "the
-   * same as the rest".
+   * Outline and shadow belong to the whole text, the user's call for 3.2, so a
+   * run never carries either: only the fields in RUN_FIELDS survive on one.
    */
   function textStyleOf(v, partial) {
     const src = v && typeof v === 'object' ? v : {};
     const has = (k) => Object.prototype.hasOwnProperty.call(src, k) && src[k] !== undefined;
     const out = {};
     const field = (k, fn) => {
-      if (!partial || has(k)) out[k] = fn(src[k]);
+      if (!partial || (has(k) && RUN_FIELDS.includes(k))) out[k] = fn(src[k]);
     };
     field('font', (f) => (typeof f === 'string' && f.trim() ? f.trim() : DEFAULT_FONT));
     field('size', (n) => within(n, 1, GEN_FONT_MAX, 96));
@@ -257,10 +261,8 @@ const timelineModel = (() => {
 
   /**
    * The text itself, as runs: pieces of text that each carry the style they
-   * change. 3.0 formats a text as one, so it always has exactly one run with
-   * nothing changed, but the layout already measures and draws run by run. The
-   * user asked for the ground to be laid for words formatted one by one later,
-   * and this is it: that becomes splitting runs, not changing what a text is.
+   * change. 3.2's editor formats words one by one; a text formatted all alike
+   * is one run with nothing changed, the shape every 3.0 and 3.1 text has.
    *
    * There is always at least one run, even for no text, so there is always a
    * style to measure an empty line with.
@@ -331,6 +333,22 @@ const timelineModel = (() => {
   }
 
   /**
+   * A shape: which one, its colour, and the box it fills, in pixels at
+   * refHeight. That is all a shape has, the user's "colored, scaled and
+   * positioned". A null box is the shape's own default, centred and a third of
+   * the frame high, which only the drawing can place because only it knows
+   * the frame; like a text's null box it follows the frame through a change.
+   */
+  function shapeOf(v) {
+    const src = v && typeof v === 'object' ? v : {};
+    return {
+      kind: oneOf(src.kind, SHAPE_KINDS, 'circle'),
+      color: colourOf(src.color, '#ffffffff'),
+      box: boxOf(src.box),
+    };
+  }
+
+  /**
    * A generated layer's settings, whole. Anything missing or broken comes out
    * as its default, and a form this version does not know comes out as text,
    * because a layer that opens as the wrong kind of generated media can still
@@ -344,6 +362,7 @@ const timelineModel = (() => {
     const form = oneOf(src.form, GEN_FORMS, 'text');
     const refHeight = Math.round(within(src.refHeight, 1, 100000, GEN_REF_HEIGHT));
     if (form === 'bar') return { form, refHeight, bar: barOf(src.bar) };
+    if (form === 'shape') return { form, refHeight, shape: shapeOf(src.shape) };
     return { form, refHeight, text: textOf(src.text) };
   }
 
@@ -1126,9 +1145,10 @@ const timelineModel = (() => {
    * down to 600 leaves a title the size it was rather than shrinking it by a
    * sixth. Only refHeight has to change for that: every size is kept at it.
    * Where things go depends on what they are stuck to. A text with a box is
-   * pinned like a video, so the box moves with the picture. A text with no box
-   * is laid out in the whole frame and a bar sticks to its side, and both of
-   * those follow the new frame.
+   * pinned like a video, so the box moves with the picture, and so is a shape.
+   * A text with no box is laid out in the whole frame, a shape with none sits
+   * in the middle and a bar sticks to its side, and all of those follow the
+   * new frame.
    *
    * refHeight is a whole number, so the size can be off by the rounding of
    * that, well under a pixel; the box is worked out from the rounded height, so
@@ -1138,12 +1158,13 @@ const timelineModel = (() => {
     const g = genOf(gen);
     const oldScale = fromHeight / g.refHeight;
     const refHeight = Math.max(1, Math.round(toHeight / (oldScale * k)));
-    if (g.form !== 'text' || !g.text.box) return genOf({ ...g, refHeight });
+    const own = g.form === 'text' || g.form === 'shape' ? g[g.form] : null;
+    if (!own || !own.box) return genOf({ ...g, refHeight });
     const scale = toHeight / refHeight;
-    const b = g.text.box;
+    const b = own.box;
     const at = (v, off) => round((off + v * oldScale * k) / scale);
     const box = { x: at(b.x, dx), y: at(b.y, dy), w: at(b.w, 0), h: at(b.h, 0) };
-    return genOf({ ...g, refHeight, text: { ...g.text, box } });
+    return genOf({ ...g, refHeight, [g.form]: { ...own, box } });
   }
 
   /**
@@ -1488,6 +1509,8 @@ const timelineModel = (() => {
     GEN_REF_HEIGHT,
     GEN_EFFECT_MAX,
     GEN_FONT_MAX,
+    RUN_FIELDS,
+    SHAPE_KINDS,
     DEFAULT_FONT,
     colourOf,
     genOf,

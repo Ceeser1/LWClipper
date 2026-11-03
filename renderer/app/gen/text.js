@@ -11,8 +11,11 @@
 // instead, because moving the reference would mean rescaling the outline and
 // the shadow alongside the size, and every rescale is a rounding.
 //
-// 3.0 edits a text as one run. A text from a later version with several is
-// shown joined, and is only written back as one run if it is changed.
+// 3.2 formats words one by one. The words are edited as expanded runs
+// (textRuns.js), every run with its whole style, and written back into the
+// draft in the file's form after each change. Outline and shadow are the whole
+// text's and go through changeTextStyle; everything a run may carry goes
+// through formatText, onto the selection.
 
 const textModal = el('textModal');
 const textFontCombo = el('textFontCombo');
@@ -45,6 +48,25 @@ let textDraft = null;    // { refHeight, text }, the words in text.runs
 let textOpened = null;   // textGenOf of the draft as it opened, as JSON
 let textMode = 'edit';   // or 'render'
 
+// 3.2. The words as expanded runs, the last selection made in the box (kept
+// while the focus is in a toolbar box or the colour picker), and the pending
+// style: what a toolbar change at a bare caret sets for the next letters typed
+// there, dropped when the caret moves.
+let textFull = null;
+let textSel = { from: 0, to: 0 };
+let textPending = null;
+let textPendingAt = -1;
+
+// The box's own undo. A rerender of the box wipes Chromium's, so the words and
+// their formatting keep a stack here: expanded runs and the selection, with a
+// burst of typing going in as one step.
+let textUndo = [];
+let textRedo = [];
+let textTyping = null;   // { end, time } of the burst being typed
+let textFontShown = '';  // the font the toolbar last showed, '' when mixed
+const TEXT_UNDO_MAX = 200;
+const TEXT_TYPING_GAP = 1500;
+
 // The sizes under the size box, in project pixels, which is what the box shows.
 const TEXT_SIZES = [12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 48, 56, 64, 72, 80, 96,
   112, 128, 144, 160, 192, 240, 288];
@@ -58,15 +80,35 @@ function textScale() {
   return projectFrame().height / textDraft.refHeight;
 }
 
-// The style the words are drawn in: the text's, with the first run's changes
-// over it, which in 3.0 are none.
-function textStyleNow() {
-  const run = textDraft.text.runs[0];
-  return textLayout.styleOf(textDraft.text.style, run && run.style);
+function textLength() {
+  return textRuns.textOf(textFull).length;
 }
 
-function textSizeShown() {
-  return Math.max(1, Math.round(textDraft.text.style.size * textScale()));
+// What the toolbar acts on: the selection, or in Render Preview, where no
+// selection shows, the whole text.
+function textTarget() {
+  if (textMode === 'render') return { from: 0, to: textLength() };
+  return textSel;
+}
+
+// What the toolbar shows: the pending style at a bare caret, else the target's
+// first letter, with the fields in which the rest of it differs.
+function textShown() {
+  const { from, to } = textTarget();
+  if (textPending && from === to && from === textPendingAt) return { style: textPending, mixed: [] };
+  return textRuns.selectionStyle(textFull, from, to);
+}
+
+function textSizeShown(style) {
+  return Math.max(1, Math.round(style.size * textScale()));
+}
+
+// The expanded runs written into the draft in the file's form, and taken back
+// from it, so the two never drift and neighbours alike are always one run.
+function setTextRuns(full) {
+  const c = textRuns.compress(full, textDraft.text.style);
+  textDraft.text = { ...textDraft.text, runs: c.runs, style: c.style };
+  textFull = textRuns.expand(c.runs, c.style);
 }
 
 // ---- the fonts on this PC ----
@@ -81,20 +123,21 @@ const FALLBACK_FAMILIES = ['Arial', 'Arial Black', 'Bahnschrift', 'Calibri', 'Ca
   'Palatino Linotype', 'Segoe Print', 'Segoe Script', 'Segoe UI', 'Tahoma',
   'Times New Roman', 'Trebuchet MS', 'Verdana'];
 let fontFamilies = null;
+let fontFamilyList = null;   // the same, once it has arrived
 
 function loadFontFamilies() {
   if (!fontFamilies) {
     fontFamilies = (async () => {
+      let found = null;
       try {
         const faces = await window.queryLocalFonts();
         const names = [...new Set(faces.map((f) => f.family).filter(Boolean))];
-        if (names.length) {
-          return names.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
-        }
+        if (names.length) found = names.sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
       } catch {
         // Falls through to the list below.
       }
-      return FALLBACK_FAMILIES.filter(fontInstalled);
+      fontFamilyList = found || FALLBACK_FAMILIES.filter(fontInstalled);
+      return fontFamilyList;
     })();
   }
   return fontFamilies;
@@ -210,7 +253,9 @@ const fontCombo = bindCombo(textFontCombo, {
   async openAll(api) {
     const families = await loadFontFamilies();
     if (!textDraft) return;
-    const at = families.findIndex((f) => f.toLowerCase() === textDraft.text.style.font.toLowerCase());
+    const shown = textShown();
+    const font = shown.mixed.includes('font') ? '' : shown.style.font.toLowerCase();
+    const at = families.findIndex((f) => f.toLowerCase() === font);
     api.open(families, at < 0 ? undefined : at);
   },
   // What has been typed so far narrows the list: names that start with it
@@ -227,21 +272,23 @@ const fontCombo = bindCombo(textFontCombo, {
     const has = families.filter((f) => !f.toLowerCase().startsWith(want) && f.toLowerCase().includes(want));
     api.open([...starts, ...has], 0);
   },
-  pick: (family) => changeTextStyle({ font: family }, null),
+  pick: (family) => formatText({ font: family }, null),
   // A name typed out in full counts when the box is left; anything else goes
-  // back to the font in force.
-  async left(text) {
+  // back to the font in force. Only a name that was edited: leaving the box by
+  // clicking into the words must not put the shown font onto a selection that
+  // is about to change, and must answer at once, before that selection does.
+  left(text) {
     if (!textDraft) return;
-    const families = await loadFontFamilies();
-    const found = families.find((f) => f.toLowerCase() === text.trim().toLowerCase());
-    if (found && found !== textDraft.text.style.font) changeTextStyle({ font: found }, null);
-    else showTextDraft(null);
+    const typed = text.trim().toLowerCase();
+    const found = (fontFamilyList || []).find((f) => f.toLowerCase() === typed);
+    if (found && typed !== textFontShown.toLowerCase()) formatText({ font: found }, null);
+    else showTextTools(null);
   },
 });
 
 const sizeCombo = bindCombo(textSizeCombo, {
   openAll(api) {
-    const now = textSizeShown();
+    const now = textSizeShown(textShown().style);
     let at = 0;
     TEXT_SIZES.forEach((s, i) => {
       if (Math.abs(s - now) < Math.abs(TEXT_SIZES[at] - now)) at = i;
@@ -254,33 +301,42 @@ const sizeCombo = bindCombo(textSizeCombo, {
     setTextSize(parseInt(text, 10), textSizeBox);
   },
   pick: (n) => setTextSize(n, null),
-  left: () => showTextDraft(null),
+  left: () => showTextTools(null),
 });
 
 // A size in project pixels, kept in the draft's own. The same number as the
 // box shows already is no change, which matters when the two heights do not
-// divide evenly and the round trip would move the size by a fraction.
-function setTextSize(shown, except) {
+// divide evenly and the round trip would move the size by a fraction. A
+// selection of mixed sizes takes any number, the one shown included.
+function setTextSize(value, except) {
   if (!textDraft) return;
   const scale = textScale();
-  const n = Math.min(Math.floor(timelineModel.GEN_FONT_MAX * scale), Math.max(1, shown));
-  if (n === textSizeShown()) {
-    showTextDraft(except);
+  const n = Math.min(Math.floor(timelineModel.GEN_FONT_MAX * scale), Math.max(1, value));
+  const shown = textShown();
+  if (n === textSizeShown(shown.style) && !shown.mixed.includes('size')) {
+    showTextTools(except);
     return;
   }
   const size = Math.min(timelineModel.GEN_FONT_MAX, Math.max(1, Math.round(n / scale * 100) / 100));
-  changeTextStyle({ size }, except);
+  formatText({ size }, except);
 }
 
 // ---- the edit box ----
+//
+// 3.2. One span per run, each dressed in its run's style. The box stays
+// `plaintext-only`, so Chromium never writes formatting of its own into it:
+// typing, Enter, a dead key's letter or a paste only ever change text. After
+// each change the box's text is compared with the model's, the difference is
+// put into the runs (textRuns.textChange and splice), and the spans are drawn
+// again only when they no longer say what the runs say.
 
-// The words as typed. Chromium's plaintext-only box keeps a line break as a
-// newline in the text, and holds an empty last line open with a second one:
-// Enter after "World" gives two newlines, and Backspace then leaves one, which
-// shows as no empty line at all (measured). So one newline at the end is only
-// ever the placeholder, and is dropped. A <br> or a <div> from a paste counts
-// as a break too.
-function editBoxText() {
+// Elements a paste or Chromium itself may leave that start a line of their own.
+const TEXT_BLOCKS = new Set(['DIV', 'P', 'LI', 'PRE', 'BLOCKQUOTE']);
+
+// The text under a node, a <br> or the start of a block counting as a break.
+// By the element's name rather than its computed style, since it is also asked
+// of a detached copy of part of the box, which has no style.
+function boxTextOf(root) {
   let out = '';
   const walk = (node) => {
     for (const c of node.childNodes) {
@@ -289,46 +345,230 @@ function editBoxText() {
       } else if (c.nodeName === 'BR') {
         out += '\n';
       } else if (c.nodeType === Node.ELEMENT_NODE) {
-        if (out && !out.endsWith('\n') && getComputedStyle(c).display !== 'inline') out += '\n';
+        if (out && !out.endsWith('\n') && TEXT_BLOCKS.has(c.nodeName)) out += '\n';
         walk(c);
       }
     }
   };
-  walk(textEditBox);
+  walk(root);
+  return out;
+}
+
+// The words as typed. Chromium's plaintext-only box keeps a line break as a
+// newline in the text, and holds an empty last line open with a second one:
+// Enter after "World" gives two newlines, and Backspace then leaves one, which
+// shows as no empty line at all (measured). So one newline at the end is only
+// ever the placeholder, and is dropped.
+function editBoxText() {
+  const out = boxTextOf(textEditBox);
   return out.endsWith('\n') ? out.slice(0, -1) : out;
 }
 
-// The same form the box writes itself, placeholder and all.
-function setEditBoxText(text) {
-  textEditBox.textContent = text.endsWith('\n') ? text + '\n' : text;
+// The runs that get a span: all but an empty text's one empty run.
+function editRuns() {
+  return textFull.filter((r) => r.text);
+}
+
+function styleKey(style) {
+  return timelineModel.RUN_FIELDS.map((f) => style[f]).join('|');
+}
+
+// The spans, one per run, the last one carrying the placeholder newline when
+// the text ends in a break, the same form the box writes itself.
+function renderEditBox() {
+  const runs = editRuns();
+  textEditBox.replaceChildren(...runs.map((r, i) => {
+    const span = document.createElement('span');
+    span.textContent = r.text + (i === runs.length - 1 && r.text.endsWith('\n') ? '\n' : '');
+    span.dataset.key = styleKey(r.style);
+    return span;
+  }));
+  styleTextEdit();
+}
+
+// Whether the box still holds exactly the spans renderEditBox would make.
+// Typing into a span keeps it so; a letter in a new style, a span Chromium
+// emptied and dropped, or text outside every span does not.
+function editBoxMatches() {
+  const runs = editRuns();
+  const kids = textEditBox.childNodes;
+  if (kids.length !== runs.length) return false;
+  return runs.every((r, i) => {
+    const node = kids[i];
+    if (node.nodeName !== 'SPAN' || node.dataset.key !== styleKey(r.style)) return false;
+    if (node.childNodes.length !== 1 || node.firstChild.nodeType !== Node.TEXT_NODE) return false;
+    return node.firstChild.data === r.text + (i === runs.length - 1 && r.text.endsWith('\n') ? '\n' : '');
+  });
+}
+
+// Where a point in the box is, as an offset into its text.
+function boxOffset(node, offset) {
+  const range = document.createRange();
+  range.setStart(textEditBox, 0);
+  range.setEnd(node, offset);
+  return boxTextOf(range.cloneContents()).length;
+}
+
+// The selection in the box as offsets, or null when it is somewhere else.
+function boxSelection() {
+  const sel = window.getSelection();
+  if (!sel.rangeCount || !textEditBox.contains(sel.anchorNode) || !textEditBox.contains(sel.focusNode)) {
+    return null;
+  }
+  const len = editBoxText().length;
+  const anchor = Math.min(len, boxOffset(sel.anchorNode, sel.anchorOffset));
+  const focus = Math.min(len, boxOffset(sel.focusNode, sel.focusOffset));
+  return { from: Math.min(anchor, focus), to: Math.max(anchor, focus), anchor, focus };
+}
+
+// An offset as a point in the box's text nodes. On the line between two
+// spans it is the end of the first, so a letter typed there goes into the
+// span whose style it takes.
+function boxPoint(at) {
+  const walker = document.createTreeWalker(textEditBox, NodeFilter.SHOW_TEXT);
+  let acc = 0;
+  let last = null;
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (at <= acc + node.data.length) return [node, at - acc];
+    acc += node.data.length;
+    last = node;
+  }
+  return last ? [last, last.data.length] : [textEditBox, 0];
+}
+
+function setBoxSelection(anchor, focus) {
+  const [an, ao] = boxPoint(anchor);
+  const [fn, fo] = boxPoint(focus);
+  window.getSelection().setBaseAndExtent(an, ao, fn, fo);
+  textSel = { from: Math.min(anchor, focus), to: Math.max(anchor, focus), anchor, focus };
+}
+
+// The spans drawn again if they have gone out of step with the runs. The
+// selection is put back only while the box has the focus: setting it moves the
+// focus into the box, which would take it from a toolbar box being typed in.
+function refreshEditBox() {
+  if (editBoxMatches()) {
+    styleTextEdit();
+    return;
+  }
+  renderEditBox();
+  if (document.activeElement === textEditBox) {
+    setBoxSelection(textSel.anchor ?? textSel.from, textSel.focus ?? textSel.to);
+  }
+}
+
+/**
+ * A step onto the box's undo stack, taken before a change. A letter typed
+ * straight after the last one, soon after it, joins that step, so undo takes
+ * back a word or a burst rather than a letter at a time.
+ */
+function recordTextUndo(change) {
+  const now = Date.now();
+  const typed = !!(change && change.text && change.from === change.to && !change.text.includes('\n'));
+  if (typed && textTyping && textTyping.end === change.from && now - textTyping.time < TEXT_TYPING_GAP) {
+    textTyping = { end: change.from + change.text.length, time: now };
+    return;
+  }
+  textUndo.push({ full: textFull, sel: { ...textSel } });
+  if (textUndo.length > TEXT_UNDO_MAX) textUndo.shift();
+  textRedo = [];
+  textTyping = typed ? { end: change.from + change.text.length, time: now } : null;
+}
+
+function stepTextUndo(redo) {
+  if (!textDraft) return;
+  const from = redo ? textRedo : textUndo;
+  const to = redo ? textUndo : textRedo;
+  if (!from.length) return;
+  to.push({ full: textFull, sel: { ...textSel } });
+  const step = from.pop();
+  textPending = null;
+  textTyping = null;
+  setTextRuns(step.full);
+  renderEditBox();
+  if (textMode === 'edit') setBoxSelection(step.sel.from, step.sel.to);
+  else textSel = { ...step.sel };
+  showTextDraft(null);
+  paintTextPreview();
+}
+
+/**
+ * What the box did, put into the runs. The caret says where a doubled letter
+ * went; a pending style, when there is one, is what the new letters get.
+ */
+function readEditBox() {
+  if (!textDraft) return;
+  const after = editBoxText();
+  const sel = boxSelection();
+  const caret = sel ? sel.focus : after.length;
+  const change = textRuns.textChange(textRuns.textOf(textFull), after, caret);
+  if (change.from === change.to && !change.text) {
+    refreshEditBox();
+    return;
+  }
+  recordTextUndo(change);
+  const text = change.text.replace(/\r\n?/g, '\n');
+  const style = text && textPending && textPendingAt === change.from ? textPending : undefined;
+  textPending = null;
+  setTextRuns(textRuns.splice(textFull, change.from, change.to, text, style));
+  const at = change.from + text.length;
+  textSel = { from: at, to: at, anchor: at, focus: at };
+  refreshEditBox();
+  showTextTools(null);
 }
 
 // Line height as the drawing has it: the font's own ascent and descent, which
 // is what textLayout stacks lines by. Measured at 100px and handed to CSS as a
-// ratio, so the box's lines sit where the render's do.
+// ratio, so the box's lines sit where the render's do. Kept per font, since a
+// text now has as many as it has runs.
 let lineProbe = null;
+const lineRatios = new Map();
 function lineRatio(style) {
   if (!lineProbe) lineProbe = document.createElement('canvas').getContext('2d');
-  lineProbe.font = textLayout.fontString({ ...style, size: 100 });
-  const m = lineProbe.measureText('');
-  const r = (m.fontBoundingBoxAscent + m.fontBoundingBoxDescent) / 100;
-  return Number.isFinite(r) && r > 0 ? r : 1.15;
+  const font = textLayout.fontString({ ...style, size: 100 });
+  if (!lineRatios.has(font)) {
+    lineProbe.font = font;
+    const m = lineProbe.measureText('');
+    const r = (m.fontBoundingBoxAscent + m.fontBoundingBoxDescent) / 100;
+    lineRatios.set(font, Number.isFinite(r) && r > 0 ? r : 1.15);
+  }
+  return lineRatios.get(font);
+}
+
+// CSS pixels on the stage per pixel of the draft's own.
+function textEditScale() {
+  return (parseFloat(textCanvas.style.height) || 0) / textDraft.refHeight;
+}
+
+// One span in its run's style. Each has its own line height, from its own
+// font, so a line is as tall as its tallest run, the way textLayout has it.
+function dressSpan(span, style, k) {
+  const s = span.style;
+  s.font = textLayout.fontString(style, k);
+  s.lineHeight = String(lineRatio(style));
+  s.color = style.color;
+  const lines = [style.underline && 'underline', style.strike && 'line-through'].filter(Boolean);
+  s.textDecorationLine = lines.length ? lines.join(' ') : 'none';
+  s.textDecorationThickness = textLayout.DECORATION_WIDTH + 'em';
+  s.textUnderlineOffset = textLayout.UNDERLINE_OFFSET + 'em';
 }
 
 /**
  * The edit box dressed from the draft, over the frame at the size the stage
- * shows it. Everything genDraw draws has its CSS twin here: the outline as a
- * stroke painted under the fill, the way genDraw strokes every line before it
- * fills any, and the shadow as a text-shadow, which is only an approximation
- * of the distance field 30g draws.
+ * shows it. Everything genDraw draws has its CSS twin here: each run as its
+ * span, the outline as a stroke painted under the fill, the way genDraw
+ * strokes every line before it fills any, and the shadow as a text-shadow,
+ * which is only an approximation of the distance field 30g draws. Outline and
+ * shadow are the whole text's, so they are set on the box and the spans
+ * inherit them.
  */
 function styleTextEdit() {
   const d = textDraft;
   if (!d) return;
-  const s = textStyleNow();
+  const base = d.text.style;
   const left = parseFloat(textCanvas.style.left) || 0;
   const top = parseFloat(textCanvas.style.top) || 0;
-  const k = (parseFloat(textCanvas.style.height) || 0) / d.refHeight;
+  const k = textEditScale();
   const box = d.text.box;
   textFrame.style.left = (left + (box ? box.x * k : 0)) + 'px';
   textFrame.style.top = (top + (box ? box.y * k : 0)) + 'px';
@@ -345,24 +585,26 @@ function styleTextEdit() {
   textFrame.style.opacity = String(own ? timelineModel.alphaOf(own) : 1);
 
   const e = textEditBox.style;
-  // The shorthand first, since it resets the line height.
-  e.font = textLayout.fontString(s, k);
-  e.lineHeight = String(lineRatio(s));
-  e.color = s.color;
+  // The box's own font is what an empty text's caret stands in. With words in
+  // it, its line height is none at all, so only the spans give a line its
+  // height: the box's own would otherwise hold every line to at least its size.
+  e.font = textLayout.fontString(base, k);
+  e.lineHeight = editRuns().length ? '0' : String(lineRatio(base));
+  e.color = base.color;
   e.textAlign = d.text.align.h;
-  const lines = [s.underline && 'underline', s.strike && 'line-through'].filter(Boolean);
-  e.textDecorationLine = lines.length ? lines.join(' ') : 'none';
-  e.textDecorationThickness = textLayout.DECORATION_WIDTH + 'em';
-  e.textUnderlineOffset = textLayout.UNDERLINE_OFFSET + 'em';
-  e.webkitTextStroke = s.outline ? (s.outline.width * k * 2) + 'px ' + s.outline.color : '';
-  if (s.shadow) {
-    const a = s.shadow.angle * Math.PI / 180;
-    const dist = s.shadow.distance * k;
+  e.webkitTextStroke = base.outline ? (base.outline.width * k * 2) + 'px ' + base.outline.color : '';
+  if (base.shadow) {
+    const a = base.shadow.angle * Math.PI / 180;
+    const dist = base.shadow.distance * k;
     e.textShadow = (Math.cos(a) * dist) + 'px ' + (Math.sin(a) * dist) + 'px '
-      + (s.shadow.size * k) + 'px ' + s.shadow.color;
+      + (base.shadow.size * k) + 'px ' + base.shadow.color;
   } else {
     e.textShadow = 'none';
   }
+  const runs = editRuns();
+  textEditBox.childNodes.forEach((node, i) => {
+    if (node.nodeName === 'SPAN' && runs[i]) dressSpan(node, runs[i].style, k);
+  });
 }
 
 // ---- the modal ----
@@ -396,24 +638,25 @@ function openTextSettings(layer, first) {
   // A copy of its own, so nothing typed reaches the layer before Accept.
   textDraft = { refHeight: layer.gen.refHeight, text: JSON.parse(JSON.stringify(layer.gen.text)) };
   textOpened = JSON.stringify(textGenOf(textDraft));
+  textFull = textRuns.expand(textDraft.text.runs, textDraft.text.style);
+  textPending = null;
+  textUndo = [];
+  textRedo = [];
+  textTyping = null;
   textMode = 'edit';
   textBackground.checked = genBackdropOn;
   titleTextTools();
-  setEditBoxText(textDraft.text.runs.map((r) => r.text).join(''));
   textModal.hidden = false;
-  showTextDraft(null);
   sizeTextStage();
-  paintTextPreview();
-  loadFontFamilies();
+  renderEditBox();
   // Straight into typing. A new text has its placeholder word selected so
   // the first key replaces it; an old one has the caret at its end.
   textEditBox.focus();
-  const range = document.createRange();
-  range.selectNodeContents(textEditBox);
-  if (!first) range.collapse(false);
-  const sel = window.getSelection();
-  sel.removeAllRanges();
-  sel.addRange(range);
+  const len = textLength();
+  setBoxSelection(first ? 0 : len, len);
+  showTextDraft(null);
+  paintTextPreview();
+  loadFontFamilies();
 }
 
 function closeTextSettings() {
@@ -429,18 +672,26 @@ function closeTextSettings() {
   textDraft = null;
   textOpened = null;
   textFirst = false;
+  textFull = null;
+  textPending = null;
+  textUndo = [];
+  textRedo = [];
+  textTyping = null;
   textEditBox.textContent = '';
 }
 
-function showTextDraft(except) {
+// The toolbar from what it acts on: the selection's style, a field that is
+// mixed across it shown blank or unlit.
+function showTextTools(except) {
   const d = textDraft;
   if (!d) return;
-  const s = d.text.style;
-  if (except !== textFontBox) textFontBox.value = s.font;
-  if (except !== textSizeBox) textSizeBox.value = String(textSizeShown());
-  paintSwatch(textColorBtn, s.color);
+  const { style, mixed } = textShown();
+  textFontShown = mixed.includes('font') ? '' : style.font;
+  if (except !== textFontBox) textFontBox.value = textFontShown;
+  if (except !== textSizeBox) textSizeBox.value = mixed.includes('size') ? '' : String(textSizeShown(style));
+  paintSwatch(textColorBtn, style.color);
   for (const b of textFlags.querySelectorAll('button')) {
-    b.classList.toggle('btn--active', !!s[b.dataset.flag]);
+    b.classList.toggle('btn--active', !!style[b.dataset.flag] && !mixed.includes(b.dataset.flag));
   }
   for (const b of textAlignH.querySelectorAll('button')) {
     b.classList.toggle('btn--active', b.dataset.h === d.text.align.h);
@@ -449,8 +700,14 @@ function showTextDraft(except) {
     b.classList.toggle('btn--active', b.dataset.v === d.text.align.v);
   }
   // Lit when the effect is on, which is the user's green.
-  textOutlineBtn.classList.toggle('btn--active', !!s.outline);
-  textShadowBtn.classList.toggle('btn--active', !!s.shadow);
+  textOutlineBtn.classList.toggle('btn--active', !!d.text.style.outline);
+  textShadowBtn.classList.toggle('btn--active', !!d.text.style.shadow);
+}
+
+function showTextDraft(except) {
+  const d = textDraft;
+  if (!d) return;
+  showTextTools(except);
   for (const b of textModes.querySelectorAll('button')) {
     b.classList.toggle('btn--active', b.dataset.mode === textMode);
   }
@@ -645,17 +902,57 @@ function paintTextPreview() {
     textMode === 'render' ? textGenOf(textDraft) : null);
 }
 
+// A font that is not loaded yet draws as the fallback, so the preview is drawn
+// again once it is.
+function loadTextFonts() {
+  const id = textLayerId;
+  loadGenFonts(textGenOf(textDraft)).then((loaded) => {
+    if (loaded && textLayerId === id) paintTextPreview();
+  });
+}
+
+// The whole text's style, which since 3.2 means the outline and the shadow:
+// what a run may carry goes through formatText.
 function changeTextStyle(props, except) {
   if (!textDraft) return;
   textDraft.text = { ...textDraft.text, style: { ...textDraft.text.style, ...props } };
+  textFull = textRuns.expand(textDraft.text.runs, textDraft.text.style);
+  refreshEditBox();
   showTextDraft(except);
   paintTextPreview();
-  if (props.font) {
-    const id = textLayerId;
-    loadGenFonts(textGenOf(textDraft)).then((loaded) => {
-      if (loaded && textLayerId === id) paintTextPreview();
-    });
+}
+
+/**
+ * `props` onto what the toolbar acts on. A selection, or the whole text in
+ * Render Preview, is formatted, one step on the box's undo. A bare caret in
+ * words sets the pending style instead, for the letters about to be typed
+ * there, as every word processor does. An empty text takes it straight into
+ * its one empty run, which is where the next letter's style comes from.
+ *
+ * `start`, when given, is the runs to lay the change over rather than the
+ * ones in force, with no undo step: the colour picker's live preview, which
+ * starts over from the runs as they were for every colour it shows.
+ */
+function formatText(props, except, start) {
+  if (!textDraft) return;
+  const base = start || textFull;
+  const { from, to } = textTarget();
+  const len = textRuns.textOf(base).length;
+  if (from === to && len) {
+    const now = textPending && textPendingAt === from ? textPending : textRuns.styleAt(base, from);
+    textPending = { ...now, ...props };
+    textPendingAt = from;
+    showTextTools(except);
+    return;
   }
+  if (!start) recordTextUndo(null);
+  setTextRuns(len
+    ? textRuns.applyStyle(base, from, to, props)
+    : [{ text: '', style: { ...base[0].style, ...props } }]);
+  refreshEditBox();
+  showTextDraft(except);
+  paintTextPreview();
+  if (props.font) loadTextFonts();
 }
 
 function changeTextAlign(props) {
@@ -665,26 +962,118 @@ function changeTextAlign(props) {
   paintTextPreview();
 }
 
+// On unless all of it is on already, so a mixed selection is made all bold
+// first, the way Word does it.
 function toggleTextFlag(flag) {
   if (!textDraft) return;
-  changeTextStyle({ [flag]: !textDraft.text.style[flag] }, null);
+  const { style, mixed } = textShown();
+  formatText({ [flag]: !(style[flag] && !mixed.includes(flag)) }, null);
 }
 
-textEditBox.addEventListener('input', () => {
-  if (!textDraft) return;
-  const run = textDraft.text.runs[0];
-  textDraft.text = { ...textDraft.text, runs: [{ text: editBoxText(), style: run ? run.style : {} }] };
+// While a dead key or an input method is still composing a letter the box is
+// left alone, since drawing it again would end the composition; its end
+// reads the box instead.
+textEditBox.addEventListener('input', (evt) => {
+  if (!evt.isComposing) readEditBox();
+});
+textEditBox.addEventListener('compositionend', () => readEditBox());
+
+// The box's own undo, from the menu Chromium would otherwise answer from its
+// own stack, which a rerender has made meaningless.
+textEditBox.addEventListener('beforeinput', (evt) => {
+  if (evt.inputType === 'historyUndo' || evt.inputType === 'historyRedo') {
+    evt.preventDefault();
+    stepTextUndo(evt.inputType === 'historyRedo');
+  }
 });
 
-// Ctrl+B, I and U, which is where every editor has them. The whole text,
-// since 3.0 has one style for it.
+// Ctrl+B, I and U on the selection, which is where every editor has them, and
+// Ctrl+Z with Ctrl+Y or Ctrl+Shift+Z as the box's undo and redo. By the key,
+// not the physical position, so a German keyboard's Z is Z.
 textEditBox.addEventListener('keydown', (evt) => {
-  if (!(evt.ctrlKey || evt.metaKey) || evt.altKey || evt.shiftKey) return;
-  const flag = { b: 'bold', i: 'italic', u: 'underline' }[String(evt.key).toLowerCase()];
+  if (!(evt.ctrlKey || evt.metaKey) || evt.altKey) return;
+  const key = String(evt.key).toLowerCase();
+  if (key === 'z' || key === 'y') {
+    evt.preventDefault();
+    stepTextUndo(key === 'y' || evt.shiftKey);
+    return;
+  }
+  if (evt.shiftKey) return;
+  const flag = { b: 'bold', i: 'italic', u: 'underline' }[key];
   if (!flag) return;
   evt.preventDefault();
   toggleTextFlag(flag);
 });
+
+// The selection, followed while it is in the box and kept while it is not, so
+// the font box, the size box and the colour picker act on the words that were
+// selected before they took the focus. A caret moved off the pending style's
+// place drops it.
+document.addEventListener('selectionchange', () => {
+  if (!textDraft || textModal.hidden || textMode !== 'edit') return;
+  const s = boxSelection();
+  if (!s) return;
+  textSel = s;
+  if (textPending && !(s.from === s.to && s.from === textPendingAt)) textPending = null;
+  showTextTools(null);
+});
+
+// Words copied inside the box keep their formatting, in a type of the app's
+// own beside the plain text. Anything else is pasted by the box as plain text
+// and styled like typing.
+const TEXT_RUNS_TYPE = 'application/x-lwclipper-runs';
+
+function copyEditBox(evt, cut) {
+  const s = boxSelection();
+  if (!textDraft || !s || s.from === s.to) return;
+  evt.preventDefault();
+  const part = textRuns.slice(textFull, s.from, s.to);
+  const own = part.map((r) => ({
+    text: r.text,
+    style: Object.fromEntries(timelineModel.RUN_FIELDS.map((f) => [f, r.style[f]])),
+  }));
+  evt.clipboardData.setData('text/plain', textRuns.textOf(part));
+  evt.clipboardData.setData(TEXT_RUNS_TYPE, JSON.stringify(own));
+  if (cut) replaceEditRange(s.from, s.to, []);
+}
+
+textEditBox.addEventListener('copy', (evt) => copyEditBox(evt, false));
+textEditBox.addEventListener('cut', (evt) => copyEditBox(evt, true));
+
+textEditBox.addEventListener('paste', (evt) => {
+  const s = boxSelection();
+  if (!textDraft || !s) return;
+  const plain = evt.clipboardData.getData('text/plain').replace(/\r\n?/g, '\n');
+  let raw = null;
+  try {
+    raw = JSON.parse(evt.clipboardData.getData(TEXT_RUNS_TYPE) || 'null');
+  } catch {
+    raw = null;
+  }
+  // Only ours, and only while it still goes with the plain text beside it.
+  if (!Array.isArray(raw) || raw.map((r) => (r && r.text) || '').join('') !== plain) return;
+  evt.preventDefault();
+  const clean = timelineModel.genOf({ form: 'text', text: { runs: raw } }).text.runs;
+  replaceEditRange(s.from, s.to, textRuns.expand(clean, textDraft.text.style));
+  loadTextFonts();
+});
+
+// Dragging words about would be a delete and an insert far apart, which the
+// read-back would take as one replacement of everything between. Cut and
+// paste does the same job.
+textEditBox.addEventListener('dragstart', (evt) => evt.preventDefault());
+textEditBox.addEventListener('drop', (evt) => evt.preventDefault());
+
+function replaceEditRange(from, to, pieces) {
+  recordTextUndo(null);
+  textPending = null;
+  setTextRuns(textRuns.replaceRuns(textFull, from, to, pieces));
+  renderEditBox();
+  const at = from + textRuns.textOf(pieces).length;
+  setBoxSelection(at, at);
+  showTextTools(null);
+  paintTextPreview();
+}
 
 // A press on the frame around the words puts the caret at their end, rather
 // than doing nothing because the box is only as tall as its lines.
@@ -692,12 +1081,8 @@ textFrame.addEventListener('mousedown', (evt) => {
   if (evt.target !== textFrame) return;
   evt.preventDefault();
   textEditBox.focus();
-  const range = document.createRange();
-  range.selectNodeContents(textEditBox);
-  range.collapse(false);
-  const sel = window.getSelection();
-  sel.removeAllRanges();
-  sel.addRange(range);
+  const len = textLength();
+  setBoxSelection(len, len);
 });
 
 // The tools keep the caret where it was, so a word can be typed, made bold and
@@ -722,19 +1107,44 @@ for (const b of textModes.querySelectorAll('button')) {
     textMode = b.dataset.mode;
     showTextDraft(null);
     paintTextPreview();
-    if (textMode === 'edit') textEditBox.focus();
+    if (textMode === 'edit') {
+      textEditBox.focus();
+      setBoxSelection(textSel.anchor ?? textSel.from, textSel.focus ?? textSel.to);
+    }
   });
 }
 
+// The colour onto the selection. Every colour the picker shows is laid over
+// the runs as they were when it opened, and a Cancel puts those back, so a
+// selection of several colours keeps them all.
 textColorBtn.addEventListener('click', async () => {
   if (!textDraft) return;
-  const was = textDraft.text.style.color;
   const id = textLayerId;
-  const picked = await pickColor(was, (color) => {
-    if (textLayerId === id) changeTextStyle({ color }, null);
+  const start = textFull;
+  const pending = textPending;
+  const pendingAt = textPendingAt;
+  const put = (color) => {
+    textPending = pending;
+    textPendingAt = pendingAt;
+    formatText({ color }, null, start);
+  };
+  const picked = await pickColor(textShown().style.color, (color) => {
+    if (textLayerId === id) put(color);
   });
   if (textLayerId !== id) return;
-  changeTextStyle({ color: picked || was }, null);
+  textPending = pending;
+  textPendingAt = pendingAt;
+  setTextRuns(start);
+  refreshEditBox();
+  if (picked) formatText({ color: picked }, null);
+  else {
+    showTextDraft(null);
+    paintTextPreview();
+  }
+  if (textMode === 'edit') {
+    textEditBox.focus();
+    setBoxSelection(textSel.anchor ?? textSel.from, textSel.focus ?? textSel.to);
+  }
 });
 
 textBackground.addEventListener('change', () => {

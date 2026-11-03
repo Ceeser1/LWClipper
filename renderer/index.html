@@ -659,6 +659,43 @@
     </div>
   </div>
 
+  <!-- Shape Settings: the colour, and the shape's box on the render preview.
+       Sides stretch it, corners scale it keeping its proportions, Shift keeps
+       the centre, inside moves it. -->
+  <div id="shapeModal" class="modal" hidden>
+    <div class="modal__panel modal__panel--crop" role="dialog" aria-modal="true"
+      aria-labelledby="shapeTitle">
+      <div id="shapeTitle" class="modal__title">Shape Settings</div>
+      <div class="gen-grid gen-grid--one">
+        <div class="gen-field">
+          <span class="gen-field__caption">Color:</span>
+          <button id="shapeColorBtn" class="color-swatch"><span class="color-swatch__fill"></span></button>
+        </div>
+      </div>
+      <div id="shapeStage" class="gen-stage">
+        <canvas id="shapeCanvas" class="gen-canvas"></canvas>
+        <div id="shapeGuideX" class="text-guide text-guide--x" hidden></div>
+        <div id="shapeGuideY" class="text-guide text-guide--y" hidden></div>
+        <div id="shapeBoxEl" class="crop-box text-box">
+          <div class="crop-grip crop-grip--left" data-edge="left"></div>
+          <div class="crop-grip crop-grip--right" data-edge="right"></div>
+          <div class="crop-grip crop-grip--top" data-edge="top"></div>
+          <div class="crop-grip crop-grip--bottom" data-edge="bottom"></div>
+          <div class="crop-corner crop-corner--tl" data-corner="tl"></div>
+          <div class="crop-corner crop-corner--tr" data-corner="tr"></div>
+          <div class="crop-corner crop-corner--bl" data-corner="bl"></div>
+          <div class="crop-corner crop-corner--br" data-corner="br"></div>
+        </div>
+      </div>
+      <div class="hint-label crop-hint">Drag the sides to stretch the shape, a corner to scale it and inside it to move it, hold Shift to keep its centre</div>
+      <label class="gen-check"><input id="shapeBackground" type="checkbox" /> Enable Background</label>
+      <div class="crop-actions">
+        <button id="shapeAcceptBtn" class="crop-accept-btn">Accept</button>
+        <button id="shapeCancelBtn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <!-- V3, 30f. The Edit Text modal. A toolbar over the frame, and the frame in
        one of two modes: Edit, where the words are typed into a box styled from
        the same settings, and Render Preview, which is the picture genDraw makes
@@ -870,6 +907,7 @@
        be kept agreeing. -->
   <script src="../src/timeline.js"></script>
   <script src="../src/textLayout.js"></script>
+  <script src="../src/textRuns.js"></script>
   <script src="../src/genDraw.js"></script>
   <script src="../src/colorModel.js"></script>
   <script src="../src/geometry.js"></script>
@@ -896,6 +934,7 @@
   <script src="app/gen/colorPicker.js"></script>
   <script src="app/gen/preview.js"></script>
   <script src="app/gen/bar.js"></script>
+  <script src="app/gen/shape.js"></script>
   <script src="app/gen/text.js"></script>
   <script src="app/gen/effects.js"></script>
   <script src="app/export.js"></script>

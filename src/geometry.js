@@ -839,6 +839,41 @@ const layerGeometry = (() => {
     return { box: { ...box, x: x.p, y: y.p }, snapX: x.line, snapY: y.line };
   }
 
+  /**
+   * A shape's box scaled from one corner, keeping its proportions: the corner
+   * `corner` ('tl', 'tr', 'bl', 'br') moved by `dx, dy` project pixels, the
+   * corner opposite staying put, or with `mirrored` the centre. The pointer is
+   * taken along the box's diagonal, so the corner follows it smoothly outwards
+   * and inwards whichever way it strays. Held to the frame and to
+   * TEXT_BOX_MIN on the shorter side.
+   */
+  function boxCornerScale(box, corner, dx, dy, mirrored, frame) {
+    const left = corner === 'tl' || corner === 'bl';
+    const top = corner === 'tl' || corner === 'tr';
+    const ax = mirrored ? box.x + box.w / 2 : (left ? box.x + box.w : box.x);
+    const ay = mirrored ? box.y + box.h / 2 : (top ? box.y + box.h : box.y);
+    const cx = (left ? box.x : box.x + box.w) + dx;
+    const cy = (top ? box.y : box.y + box.h) + dy;
+    const k = mirrored ? 2 : 1;
+    const ux = left ? ax - cx : cx - ax;
+    const uy = top ? ay - cy : cy - ay;
+    const w0 = box.w / k;
+    const h0 = box.h / k;
+    const along = (ux * w0 + uy * h0) / (w0 * w0 + h0 * h0);
+    const roomX = mirrored ? Math.min(ax, frame.width - ax) * 2 : (left ? ax : frame.width - ax);
+    const roomY = mirrored ? Math.min(ay, frame.height - ay) * 2 : (top ? ay : frame.height - ay);
+    const most = Math.min(roomX / box.w, roomY / box.h);
+    const least = Math.min(most, TEXT_BOX_MIN / Math.min(box.w, box.h));
+    const s = Math.min(most, Math.max(least, along));
+    const w = Math.max(1, Math.round(box.w * s));
+    const h = Math.max(1, Math.round(box.h * s));
+    let x = mirrored ? Math.round(ax - w / 2) : (left ? Math.round(ax) - w : Math.round(ax));
+    let y = mirrored ? Math.round(ay - h / 2) : (top ? Math.round(ay) - h : Math.round(ay));
+    x = Math.min(Math.max(0, frame.width - w), Math.max(0, x));
+    y = Math.min(Math.max(0, frame.height - h), Math.max(0, y));
+    return { x, y, w, h };
+  }
+
   /** Whether a box is the whole frame, which is the same as having none. */
   function isWholeBox(box, frame) {
     return !box || (Math.round(box.x) === 0 && Math.round(box.y) === 0
@@ -849,6 +884,7 @@ const layerGeometry = (() => {
     TEXT_BOX_MIN,
     textBoxEdge,
     textBoxMove,
+    boxCornerScale,
     isWholeBox,
     TEXT_TURN_SNAP,
     textTurn,

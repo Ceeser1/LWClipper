@@ -323,23 +323,53 @@ let clipMenu = null;
 /**
  * V3. "Add Media" and the submenu it opens, the user's A1: "Only usable on a
  * video layer, greyed out on audio. Hovering it reveals the next menu". Shapes
- * are not in it until they exist.
+ * open a second one of their own beside it, "another right arrow sub menu".
+ */
+function addMediaEntry(menu, enabled, at) {
+  subMenuEntry(menu, t('Add Media'), enabled, (sub) => {
+    for (const [form, kind] of Object.entries(GEN_KINDS)) {
+      if (kind.variants) {
+        subMenuEntry(sub, kind.label(), true, (inner) => {
+          for (const v of kind.variants()) menuItem(inner, v.label, () => addGenMedia(form, at, v.id));
+        });
+      } else {
+        menuItem(sub, kind.label(), () => addGenMedia(form, at));
+      }
+    }
+  });
+}
+
+function menuItem(menu, label, act) {
+  const b = document.createElement('button');
+  b.className = 'clip-menu__item';
+  b.setAttribute('role', 'menuitem');
+  b.textContent = label;
+  b.addEventListener('click', () => {
+    closeClipMenu();
+    act();
+  });
+  menu.appendChild(b);
+}
+
+/**
+ * An entry with a right arrow that opens a submenu, filled by `fill`.
  *
  * The submenu opens beside the entry, on the right, and on the left when the
  * right would run it off the window. It lives inside the menu's element even
  * though it is placed outside its box, so the one outside-click test the menu
  * already has covers it, and so moving the pointer from the entry into it
- * never counts as leaving. It closes a moment after the pointer leaves, which
- * is what lets a pointer cut the corner on the way to Bar.
+ * never counts as leaving; a submenu inside a submenu is inside both. It
+ * closes a moment after the pointer leaves, which is what lets a pointer cut
+ * the corner on the way to the last item.
  */
-function addMediaEntry(menu, enabled, at) {
+function subMenuEntry(menu, label, enabled, fill) {
   const wrap = document.createElement('div');
   wrap.className = 'clip-menu__sub';
   const entry = document.createElement('button');
   entry.className = 'clip-menu__item clip-menu__item--more';
   entry.setAttribute('role', 'menuitem');
   entry.setAttribute('aria-haspopup', 'menu');
-  entry.textContent = t('Add Media');
+  entry.textContent = label;
   entry.disabled = !enabled;
   wrap.appendChild(entry);
 
@@ -347,17 +377,7 @@ function addMediaEntry(menu, enabled, at) {
   sub.className = 'clip-menu clip-menu--sub';
   sub.setAttribute('role', 'menu');
   sub.hidden = true;
-  for (const [form, kind] of Object.entries(GEN_KINDS)) {
-    const b = document.createElement('button');
-    b.className = 'clip-menu__item';
-    b.setAttribute('role', 'menuitem');
-    b.textContent = kind.label();
-    b.addEventListener('click', () => {
-      closeClipMenu();
-      addGenMedia(form, at);
-    });
-    sub.appendChild(b);
-  }
+  fill(sub);
   wrap.appendChild(sub);
   menu.appendChild(wrap);
   if (!enabled) return;
@@ -388,15 +408,15 @@ function addMediaEntry(menu, enabled, at) {
 }
 
 /**
- * V3. A new text or bar at `at`, on the row the user's rule gives it: the
+ * V3. A new generated layer at `at`, on the row the user's rule gives it: the
  * topmost empty video row, or a new one on top. Ten seconds, like an image.
  * Its settings open straight away, and until they are accepted the new layer
  * is not a step of its own: adding it and the first Accept are one undo step,
  * and Cancel on that first opening takes it off again.
  */
-function addGenMedia(form, at) {
+function addGenMedia(form, at, variant) {
   if (!timelineDriving() || busy) return;
-  const gen = GEN_KINDS[form].starter();
+  const gen = GEN_KINDS[form].starter(variant);
   const rows = rowsOf('video');
   genAddBefore = { layers, rows: laneRows.video, selected: selectedLayerId };
   const added = timelineModel.addGen(layers, gen, at, rows);

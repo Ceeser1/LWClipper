@@ -3399,6 +3399,12 @@ button.color-swatch:hover:not(:disabled) {
   margin-bottom: 12px;
 }
 
+/* One field on its own, the Shape Settings colour, centred rather than sat in
+   the left of two columns. */
+.gen-grid--one {
+  grid-template-columns: max-content;
+}
+
 .gen-field {
   display: flex;
   align-items: center;
@@ -3665,7 +3671,8 @@ button.color-swatch:hover:not(:disabled) {
 
 /* The grips sit astride the box's lines, and a box on the frame's edge puts
    them half off the frame, so the stage lets them show past its own edge. */
-#textStage {
+#textStage,
+#shapeStage {
   overflow: visible;
 }
 
