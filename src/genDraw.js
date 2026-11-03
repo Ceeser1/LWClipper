@@ -15,6 +15,7 @@
 
 const genDraw = (() => {
   const layout = typeof textLayout !== 'undefined' ? textLayout : require('./textLayout');
+  const model = typeof timelineModel !== 'undefined' ? timelineModel : require('./timeline');
 
   /**
    * The factor from the pixels a generated layer was set in to the pixels of
@@ -491,6 +492,107 @@ const genDraw = (() => {
     if (draw) draw(ctx, gen, width, height, surface);
   }
 
+  // ---- V3.3. Generated media between keyframes ----
+  //
+  // A generated layer with keyframes is, at any moment, its own settings with
+  // the keyed ones blended between the two keyframes either side, and then
+  // drawn exactly as it always is. So the preview and the export, which both
+  // draw through drawGen, show one picture at every moment, and a text whose
+  // box narrows re-wraps the way it would if the box had been set there.
+  //
+  // A box nobody set, a text laid out in the whole frame or a shape on its
+  // default, is worked out to the rect it means before it is blended with one
+  // that was set; two unset boxes stay unset. A turn takes the short way
+  // round, so 170 to -170 degrees is twenty degrees and not three hundred and
+  // forty. A colour blends every channel, alpha included, which is a fade.
+
+  function hexByte(v) {
+    return Math.round(Math.min(255, Math.max(0, v))).toString(16).padStart(2, '0');
+  }
+
+  function blendColour(a, b, u) {
+    const ch = (s, i) => parseInt(s.slice(1 + i * 2, 3 + i * 2), 16);
+    let out = '#';
+    for (let i = 0; i < 4; i++) {
+      const p = ch(a, i);
+      const q = ch(b, i);
+      out += hexByte(p + (q - p) * u);
+    }
+    return out;
+  }
+
+  // A box in pixels at refHeight, or the one an unset box stands for.
+  function keyedBox(gen, width, height) {
+    const own = gen.form === 'shape' ? gen.shape : gen.text;
+    if (own.box) return own.box;
+    const k = scaleOf(gen, height);
+    if (gen.form === 'shape') {
+      const b = shapeBox(gen, width, height);
+      return { x: b.x / k, y: b.y / k, w: b.w / k, h: b.h / k };
+    }
+    return { x: 0, y: 0, w: width / k, h: height / k };
+  }
+
+  function blendGen(a, b, u, width, height) {
+    const lerp = (p, q) => p + (q - p) * u;
+    if (a.form === 'bar') {
+      return {
+        ...a,
+        bar: {
+          ...a.bar,
+          thickness: lerp(a.bar.thickness, b.bar.thickness),
+          span: lerp(a.bar.span, b.bar.span),
+          color: blendColour(a.bar.color, b.bar.color, u),
+        },
+      };
+    }
+    const own = a.form === 'shape' ? 'shape' : 'text';
+    let box = null;
+    if (a[own].box || b[own].box) {
+      const p = keyedBox(a, width, height);
+      const q = keyedBox(b, width, height);
+      box = { x: lerp(p.x, q.x), y: lerp(p.y, q.y), w: lerp(p.w, q.w), h: lerp(p.h, q.h) };
+    }
+    if (own === 'shape') return { ...a, shape: { ...a.shape, box } };
+    const turn = ((((b.text.rotation - a.text.rotation) % 360) + 540) % 360) - 180;
+    return { ...a, text: { ...a.text, box, rotation: a.text.rotation + turn * u } };
+  }
+
+  /**
+   * A generated layer's settings at `t`, the clip's own seconds, in a frame of
+   * this size. Without keyframes, its settings as they are.
+   */
+  function genAt(layer, t, width, height) {
+    const list = model.keyframesFor(layer);
+    if (!list.length) return layer.gen;
+    const at = Number.isFinite(Number(t)) ? Number(t) : 0;
+    if (at <= list[0].t) return model.withKeyed(layer.gen, list[0]);
+    const last = list[list.length - 1];
+    if (at >= last.t) return model.withKeyed(layer.gen, last);
+    let i = 0;
+    while (list[i + 1].t <= at) i += 1;
+    const a = list[i];
+    const b = list[i + 1];
+    return blendGen(model.withKeyed(layer.gen, a), model.withKeyed(layer.gen, b),
+      (at - a.t) / (b.t - a.t), width, height);
+  }
+
+  /**
+   * The stretch of the clip, in its own seconds, over which its picture
+   * changes, or null when it never does: no keyframes, one, or several that
+   * all say the same. Before it and after it the picture holds still.
+   */
+  function genMotion(layer) {
+    const list = model.keyframesFor(layer);
+    if (list.length < 2) return null;
+    const fields = model.GEN_KEYED[layer.gen.form] || [];
+    const same = (k) => fields.every((f) => JSON.stringify(k[f]) === JSON.stringify(list[0][f]));
+    if (list.every(same)) return null;
+    const from = Math.max(0, list[0].t);
+    const to = Math.min(layer.duration, list[list.length - 1].t);
+    return to > from ? { from, to } : null;
+  }
+
   /**
    * Everything the picture depends on, as one string: the settings and the
    * frame. Two layers with the same key draw the same pixels, which is what
@@ -527,6 +629,8 @@ const genDraw = (() => {
     shapeBox,
     fillShape,
     drawGen,
+    genAt,
+    genMotion,
     distanceField,
     shadowFalloff,
     shadowPixels,

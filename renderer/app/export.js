@@ -125,6 +125,48 @@ function exportName() {
  * Answers in the shape a job does, so a picture that could not be saved is
  * reported the way a failed encode is.
  */
+/**
+ * V3.3. A generated layer that moves between keyframes, drawn frame by frame
+ * at the project's rate for the stretch where it changes, through genAt and
+ * drawGen like the preview. Each frame is the moment at its start, the moment
+ * the preview shows when the playhead stands on that frame.
+ *
+ * Cached like the single PNGs, by everything the frames depend on, so a second
+ * export of the same project draws nothing.
+ */
+async function exportGenFrames(l, motion, frame) {
+  const fps = Number(frame.fps) || 30;
+  const total = Math.max(1, Math.round(l.duration * fps));
+  const first = Math.min(total - 1, Math.max(0, Math.floor(motion.from * fps)));
+  const last = Math.min(total - 1, Math.max(first, Math.ceil(motion.to * fps)));
+  const key = JSON.stringify(['frames', l.gen, l.keyframes, l.duration, fps, frame.width, frame.height, first, last]);
+  const begun = await window.lwclipper.genFrames(key, { start: true });
+  if (!begun.ok) return { ok: false, error: begun.error || 'no folder for the frames' };
+  if (!begun.have) {
+    const canvas = document.createElement('canvas');
+    canvas.width = frame.width;
+    canvas.height = frame.height;
+    const ctx = canvas.getContext('2d');
+    for (let i = first; i <= last; i += 1) {
+      genDraw.drawGen(ctx, genDraw.genAt(l, i / fps, frame.width, frame.height), frame.width, frame.height);
+      const blob = await new Promise((done) => canvas.toBlob(done, 'image/png'));
+      if (!blob) return { ok: false, error: 'canvas toBlob gave no PNG' };
+      const wrote = await window.lwclipper.genFrame(key, i - first, new Uint8Array(await blob.arrayBuffer()));
+      if (!wrote.ok) return { ok: false, error: wrote.error };
+    }
+    const done = await window.lwclipper.genFrames(key, { finish: true });
+    if (!done.ok) return { ok: false, error: done.error };
+  }
+  return {
+    ok: true,
+    frames: {
+      pattern: begun.dir.replace(/\\/g, '/') + '/%05d.png',
+      lead: first / fps,
+      tail: Math.max(0, l.duration - (last + 1) / fps),
+    },
+  };
+}
+
 async function exportLayers() {
   const frame = projectFrame();
   const out = [];
@@ -138,7 +180,18 @@ async function exportLayers() {
       entry = { el: document.createElement('canvas'), width: 0, height: 0, gen: true, key: null };
     }
     if (await loadGenFonts(l.gen)) entry.key = null;
-    paintGen(l, entry);
+    // V3.3. One that moves goes as the frames of its move.
+    const motion = genDraw.genMotion(l);
+    if (motion) {
+      const seq = await exportGenFrames(l, motion, frame);
+      if (!seq.ok) return seq;
+      out.push({ ...l, src: seq.frames.pattern, frames: seq.frames,
+        sourceWidth: frame.width, sourceHeight: frame.height });
+      continue;
+    }
+    // One that holds still is drawn once, as its keyframe has it when it has
+    // keyframes: at its start, which is every moment of it.
+    paintGen(l, entry, timelineModel.keyframesFor(l).length ? l.start : null);
     const key = entry.key;
     let saved = await window.lwclipper.genImage(key, null);
     if (saved.ok && !saved.path) {

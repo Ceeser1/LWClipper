@@ -57,6 +57,10 @@ const CROP_HINT_IDLE = cropHint.textContent;
 // Held rather than re-read from the selection on every call, so that a row
 // selected behind an open popup cannot move the crop onto it halfway through.
 let cropLayerId = null;
+// V3.3. The keyframe the popup is editing on a layer that has keyframes, as a
+// draft { id, t, crop, render, anchor }, id null for one that Accept makes.
+// Null on a layer without any, which the popup edits as it always did.
+let cropKeyframe = null;
 // The zoom and pan each layer's crop was accepted at, keyed by layer id. Out of
 // the model on purpose: it is where the popup was looking from, not part of the
 // document, and the project file has no business carrying it.
@@ -127,7 +131,15 @@ function layerSource(layer) {
  */
 function cropTargetLayer() {
   if (!timelineDriving()) return null;
-  if (cropLayerId) return timelineModel.layerById(layers, cropLayerId);
+  if (cropLayerId) {
+    const open = timelineModel.layerById(layers, cropLayerId);
+    // V3.3. On a keyframe, the layer as that keyframe has it, so everything
+    // the popup reads, the crop, the placement, the ring and the fit, is the
+    // keyframe's without any of it having to know.
+    return open && cropKeyframe
+      ? { ...open, crop: cropKeyframe.crop, render: cropKeyframe.render, anchor: cropKeyframe.anchor }
+      : open;
+  }
   const l = selectedLayerId ? timelineModel.layerById(layers, selectedLayerId) : null;
   return l && l.type === 'video' ? l : null;
 }

@@ -241,7 +241,7 @@ async function download(videoId, sourceUrl, title, format, cookies, onProgress, 
     return {
       path: cached, title, duration: info.duration, videoId,
       cacheKey: format.cacheKey, isAudio: format.isAudio, hasAudio: info.hasAudio,
-      width: info.width, height: info.height,
+      width: info.width, height: info.height, fps: info.fps,
       videoCodec: info.videoCodec, audioCodec: info.audioCodec,
       ...outputHints(cached, format.isAudio, info.audioBitrate),
     };
@@ -299,11 +299,13 @@ async function download(videoId, sourceUrl, title, format, cookies, onProgress, 
   const finalPath = findCachedFile(videoId, format);
   if (!finalPath) throw new Error('The download finished but no output file turned up in the cache.');
 
-  const { duration, hasAudio, width, height, videoCodec, audioCodec, audioBitrate } =
+  const { duration, hasAudio, width, height, fps, videoCodec, audioCodec, audioBitrate } =
     probeMedia(finalPath);
   return {
     path: finalPath, title, duration, videoId,
-    cacheKey: format.cacheKey, isAudio: format.isAudio, hasAudio, width, height,
+    // Advanced editing seeds the project's frame rate from its first source,
+    // the same as a file opened from disk, so a download has to carry it too.
+    cacheKey: format.cacheKey, isAudio: format.isAudio, hasAudio, width, height, fps,
     videoCodec, audioCodec,
     ...outputHints(finalPath, format.isAudio, audioBitrate),
   };

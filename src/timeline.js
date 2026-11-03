@@ -437,6 +437,15 @@ const timelineModel = (() => {
       // it is a string and not which string it is. null is a picture that was
       // put somewhere by hand and sticks to nothing.
       anchor: kind !== 'gen' && typeof props.anchor === 'string' && props.anchor ? props.anchor : null,
+      // V3.3. The crop, placement and ring at moments of the clip, and empty on
+      // everything written before them. See "Keyframes" below. Declared here
+      // for the reason render is: a field createLayer does not name is a field
+      // the project open path drops.
+      keyframes: keyframesOf(props.keyframes, {
+        type: props.type === 'audio' && kind !== 'gen' ? 'audio' : 'video',
+        kind,
+        gen: kind === 'gen' ? props.gen : null,
+      }),
       // V2.1's Render Position tab owns this one: where the cropped picture is
       // placed and scaled inside the project frame, in project pixels. null
       // means centre and fit, which is what placeLayer works out for itself.
@@ -1092,6 +1101,9 @@ const timelineModel = (() => {
           // in-point behind it to go negative.
           sourceIn: round(Math.max(0, l.sourceIn + shift)),
           duration: round(l.duration - shift),
+          // V3.3. Held where they are on the timeline while the start moves
+          // under them, which on the clip's own clock is back by the shift.
+          keyframes: shiftKeyframes(l, -shift),
         };
       }
       const latest = round(l.start + sourceRemaining(l));
@@ -1124,6 +1136,255 @@ const timelineModel = (() => {
 
   function setLayer(layers, id, props) {
     return replace(layers, id, (l) => ({ ...l, ...props }));
+  }
+
+  // ---- V3.3. Keyframes ----
+  //
+  // The user, 2026-11-03: "each video track should have keyframes that can be
+  // positioned along the track. Each keyframe should have its own
+  // crop/scale/position setting." A keyframe is a moment of the clip and the
+  // three things the crop popup sets: the crop, the Render Position rect and the
+  // ring it is stuck to. Between two of them the picture moves smoothly, and
+  // that is the only way it moves: "If the user want jumps they can put 2
+  // keyframes very close to each other on the timeline."
+  //
+  // **A keyframe's time is the clip's own**, seconds from its start, so moving
+  // the clip takes its keyframes along. Trimming the start edge moves the start
+  // and not the keyframes, which is why trimLayer shifts them back by what it
+  // moved: they stay where they are on the timeline. A trim that passes one does
+  // not delete it, the user's rule: "If a trim is moving past a keyframe the
+  // program should remember it (outside of the view) so the transition can
+  // still go on." So a time below zero or past the duration is a keyframe out
+  // of view, and still steers the part that shows.
+  //
+  // An empty list is today's layer, crop and render and anchor as they always
+  // were, and that is what every project written before this opens with. Once
+  // there are keyframes they are the whole of the placement and the layer's own
+  // three fields are what the last one hands back when it is deleted.
+  //
+  // Video and image layers hold the crop popup's three; a generated one holds
+  // what its settings window places, GEN_KEYED below. An audio layer never has
+  // any, by the user's word: "audio doesnt need any".
+
+  /** A rectangle, a copy of it, or null for anything that is not one. */
+  function rectOf(v) {
+    if (!v || typeof v !== 'object') return null;
+    const r = {
+      x: Number(v.x),
+      y: Number(v.y),
+      width: Number(v.width),
+      height: Number(v.height),
+    };
+    return Object.values(r).every(Number.isFinite) && r.width > 0 && r.height > 0 ? r : null;
+  }
+
+  function newKeyframeId() {
+    return 'k' + Math.random().toString(36).slice(2, 10);
+  }
+
+  /**
+   * Whether this layer has keyframes at all, by what it is: every picture,
+   * never a sound. Stage 2 of 3.3 added the generated ones, the user's "For
+   * text and shapes media as well", and bars "to animate in/out".
+   */
+  function keyframable(layer) {
+    return !!layer && layer.type === 'video';
+  }
+
+  // V3.3, stage 2. What a keyframe holds on a generated layer, by form: what
+  // that form's settings window places and sizes. A text's box and rotation,
+  // which is its Render Preview; a shape's box; a bar's thickness, span and
+  // colour, the colour so a bar can fade in and out by its alpha. Everything
+  // else, the words, the font, the outline, the shape's kind and the bar's
+  // side, stays the layer's own and is the same at every moment. In pixels at
+  // the layer's refHeight like the settings they stand for, so a Crop Render
+  // Frame carries both the same way.
+  const GEN_KEYED = {
+    text: ['box', 'rotation'],
+    shape: ['box'],
+    bar: ['thickness', 'span', 'color'],
+  };
+
+  function genKeyOf(v, form) {
+    const src = v && typeof v === 'object' ? v : {};
+    if (form === 'bar') {
+      return {
+        thickness: within(src.thickness, 1, 100000, 40),
+        span: within(src.span, 0.01, 1, 1),
+        color: colourOf(src.color, '#ffffffff'),
+      };
+    }
+    if (form === 'shape') return { box: boxOf(src.box) };
+    return { box: boxOf(src.box), rotation: rotationOf(src.rotation) };
+  }
+
+  /** The keyed settings a generated layer has now, as a keyframe holds them. */
+  function keyedOfGen(gen) {
+    const g = genOf(gen);
+    return genKeyOf(g[g.form], g.form);
+  }
+
+  /** A generated layer's settings with a keyframe's keyed ones in place. */
+  function withKeyed(gen, keyframe) {
+    const g = genOf(gen);
+    const own = {};
+    for (const f of GEN_KEYED[g.form]) {
+      if (keyframe && Object.prototype.hasOwnProperty.call(keyframe, f)) own[f] = keyframe[f];
+    }
+    return genOf({ ...g, [g.form]: { ...g[g.form], ...own } });
+  }
+
+  /**
+   * One keyframe as a file or a caller may hand it over, held to the shape its
+   * layer's keyframes have. Null for one without a usable time.
+   */
+  function keyframeOf(v, layer) {
+    if (!v || typeof v !== 'object') return null;
+    const t = Number(v.t);
+    if (!Number.isFinite(t)) return null;
+    const base = { id: typeof v.id === 'string' && v.id ? v.id : newKeyframeId(), t: round(t) };
+    if (layer && layer.kind === 'gen') {
+      return { ...base, ...genKeyOf(v, genOf(layer.gen).form) };
+    }
+    return {
+      ...base,
+      crop: rectOf(v.crop),
+      render: rectOf(v.render),
+      anchor: typeof v.anchor === 'string' && v.anchor ? v.anchor : null,
+    };
+  }
+
+  /**
+   * A layer's keyframes, in time order, one to a moment and one to an id. Two at
+   * the same time would leave the picture two answers for that moment, so the
+   * later in the list wins, which is the one a caller has just put there.
+   */
+  function keyframesOf(list, layer) {
+    if (!Array.isArray(list) || !keyframable(layer)) return [];
+    const byTime = new Map();
+    const ids = new Set();
+    for (const raw of list) {
+      const k = keyframeOf(raw, layer);
+      if (!k) continue;
+      if (ids.has(k.id)) k.id = newKeyframeId();
+      ids.add(k.id);
+      byTime.set(k.t, k);
+    }
+    return [...byTime.values()].sort((a, b) => a.t - b.t);
+  }
+
+  function keyframesFor(layer) {
+    return layer && Array.isArray(layer.keyframes) ? layer.keyframes : [];
+  }
+
+  /**
+   * The keyframe on the clip at `t`, its own seconds, within `reach` either
+   * side. The nearest when there are several, null when none is that close.
+   */
+  function keyframeNear(layer, t, reach = 0) {
+    let best = null;
+    for (const k of keyframesFor(layer)) {
+      const d = Math.abs(k.t - t);
+      if (d <= reach && (!best || d < Math.abs(best.t - t))) best = k;
+    }
+    return best;
+  }
+
+  /**
+   * Puts a keyframe on a layer, a new one or a changed one by its id. One that
+   * was at the same moment already gives way to it.
+   */
+  function putKeyframe(layers, id, keyframe) {
+    return replace(layers, id, (l) => {
+      if (!keyframable(l)) return l;
+      const k = keyframeOf(keyframe, l);
+      if (!k) return l;
+      const rest = keyframesFor(l).filter((o) => o.id !== k.id && o.t !== k.t);
+      return { ...l, keyframes: keyframesOf([...rest, k], l) };
+    });
+  }
+
+  /**
+   * Takes a keyframe off. The last one leaves its own crop and placement on the
+   * layer, so deleting it does not throw the picture back to whatever the
+   * layer held before it had any.
+   */
+  function removeKeyframe(layers, id, keyId) {
+    return replace(layers, id, (l) => {
+      const list = keyframesFor(l);
+      const gone = list.find((k) => k.id === keyId);
+      if (!gone) return l;
+      const keyframes = list.filter((k) => k !== gone);
+      if (keyframes.length) return { ...l, keyframes };
+      if (l.kind === 'gen') return { ...l, keyframes, gen: withKeyed(l.gen, gone) };
+      return { ...l, keyframes, crop: gone.crop, render: gone.render, anchor: gone.anchor };
+    });
+  }
+
+  /**
+   * A keyframe dragged along its clip. It stays on the part of the clip that is
+   * showing, since that is where it can be seen and grabbed, and it does not
+   * land on another one's moment: it stops a millisecond short instead, which
+   * is the closest two may be and still be two.
+   */
+  function moveKeyframe(layers, id, keyId, t) {
+    return replace(layers, id, (l) => {
+      const list = keyframesFor(l);
+      const k = list.find((o) => o.id === keyId);
+      if (!k) return l;
+      let at = clamp(round(Number(t)), 0, round(l.duration));
+      const taken = (v) => list.some((o) => o !== k && Math.abs(o.t - v) < 0.0005);
+      if (taken(at)) at = round(at + (at >= k.t ? -0.001 : 0.001));
+      if (taken(at)) return l;
+      return { ...l, keyframes: keyframesOf(list.map((o) => (o === k ? { ...o, t: at } : o)), l) };
+    });
+  }
+
+  /**
+   * Keyed settings measured at one refHeight, measured at another: the boxes
+   * and a bar's thickness are pixels and scale, a span, a turn and a colour do
+   * not.
+   */
+  function keyedAt(keyed, k) {
+    const out = { ...keyed };
+    if (out.box) out.box = { x: out.box.x * k, y: out.box.y * k, w: out.box.w * k, h: out.box.h * k };
+    if (Number.isFinite(out.thickness)) out.thickness = out.thickness * k;
+    return out;
+  }
+
+  /**
+   * A generated layer's keyframes measured at `refHeight` instead of the
+   * layer's own. A settings window hands its Accept back at the project's
+   * height, which need not be the height the keyframes were set at, and a
+   * keyframe read at the wrong one is a bar the wrong thickness.
+   */
+  function keyframesAtRef(layer, refHeight) {
+    const from = genOf(layer.gen).refHeight;
+    const k = refHeight / from;
+    if (k === 1) return keyframesFor(layer);
+    return keyframesFor(layer).map((kf) => ({ ...kf, ...keyedAt(kf, k) }));
+  }
+
+  /**
+   * A generated layer's keyframes carried through a Crop Render Frame change
+   * the way reframeGen carries its settings, each as the picture it stands for,
+   * so every stop of a move is pinned where it was. Hands back the layer.
+   */
+  function reframeKeyed(layer, fromHeight, toHeight, k, dx, dy) {
+    if (!layer || layer.kind !== 'gen') return layer;
+    const gen = reframeGen(layer.gen, fromHeight, toHeight, k, dx, dy);
+    const keyframes = keyframesFor(layer).map((kf) => ({
+      ...kf,
+      ...keyedOfGen(reframeGen(withKeyed(layer.gen, kf), fromHeight, toHeight, k, dx, dy)),
+    }));
+    return { ...layer, gen, keyframes };
+  }
+
+  /** Every keyframe of a layer moved by `dt` of its own seconds. */
+  function shiftKeyframes(layer, dt) {
+    const list = keyframesFor(layer);
+    if (!list.length || !dt) return list;
+    return list.map((k) => ({ ...k, t: round(k.t + dt) }));
   }
 
   /**
@@ -1316,6 +1577,11 @@ const timelineModel = (() => {
       fadeIn: 0,
       fadeOut: round(Math.min(layer.fadeOut || 0, rest)),
       groupId,
+      // V3.3. Both halves keep every keyframe, the right one on its own clock,
+      // so a movement that ran across the cut runs on across it. The ones each
+      // half cannot show are out of view and still steer it, the same as after
+      // a trim.
+      keyframes: shiftKeyframes(layer, -kept),
     };
     return [left, right];
   }
@@ -1545,6 +1811,19 @@ const timelineModel = (() => {
     moveLayer,
     trimLayer,
     setLayer,
+    keyframable,
+    GEN_KEYED,
+    keyedOfGen,
+    withKeyed,
+    reframeKeyed,
+    keyedAt,
+    keyframesAtRef,
+    keyframesOf,
+    keyframesFor,
+    keyframeNear,
+    putKeyframe,
+    removeKeyframe,
+    moveKeyframe,
     setFade,
     fadeGroup,
     setAlpha,

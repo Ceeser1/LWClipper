@@ -52,6 +52,147 @@ function chain(parts) {
   return parts.filter(Boolean).join(',');
 }
 
+// ---- V3.3. A picture that moves between keyframes ----
+//
+// crop cannot do it: its width and height are worked out once, when the graph
+// is built, and so is drawbox's box. Measured on 2026-11-03 with the bundled
+// ffmpeg, and so was the obvious second try, sendcmd with one command per frame,
+// which raced: overlay looks a frame ahead and took the next frame's place,
+// scale held some values for two frames. What does work is the expressions
+// scale and overlay evaluate on every frame, against that frame's own t:
+//
+//   1. the source cut once to the rect every keyframe's crop lies inside, a
+//      fixed crop like any other, so a deep zoom does not scale the whole frame
+//   2. scaled per frame so the moment's crop comes out the moment's size
+//   3. laid on a clear canvas per frame so that crop lands where it goes
+//   4. everything outside the moment's destination masked off, by a white
+//      square scaled and laid the same way on black, through alphamerge
+//
+// Against the fixed crop, scale and overlay at the same numbers that gave SSIM
+// 0.98 to 0.99 between keyframes and an identical first frame. The canvases are
+// only as big as the frame the picture ever covers and only as long as the
+// clip, so a small moving inset costs a small amount.
+
+/**
+ * A drawn frame sequence held still before its first frame and after its last,
+ * for as long as the clip runs on either side of the move. Null when it covers
+ * the whole clip.
+ */
+function holdFrames(frames) {
+  const lead = Math.max(0, Number(frames.lead) || 0);
+  const tail = Math.max(0, Number(frames.tail) || 0);
+  if (!lead && !tail) return null;
+  return 'tpad=' + [
+    lead ? 'start_mode=clone:start_duration=' + fixed(lead) : null,
+    tail ? 'stop_mode=clone:stop_duration=' + fixed(tail) : null,
+  ].filter(Boolean).join(':');
+}
+
+/** An ffmpeg expression of t: the values at the times, blended between them. */
+function piecewise(times, values) {
+  const num = (v) => fixed(v);
+  const seg = (i) => {
+    const a = values[i];
+    const b = values[i + 1];
+    if (a === b) return num(a);
+    const span = times[i + 1] - times[i];
+    return '(' + num(a) + '+' + num(b - a) + '*clip((t-' + num(times[i]) + ')/' + num(span) + '\\,0\\,1))';
+  };
+  let expr = seg(values.length - 2);
+  for (let i = values.length - 3; i >= 0; i -= 1) {
+    expr = 'if(lt(t\\,' + num(times[i + 1]) + ')\\,' + seg(i) + '\\,' + expr + ')';
+  }
+  return '(' + expr + ')';
+}
+
+const evenDown = (v) => Math.floor(v / 2) * 2;
+const evenUp = (v) => Math.ceil(v / 2) * 2;
+
+function unionOf(rects) {
+  const x0 = Math.min(...rects.map((r) => r.x));
+  const y0 = Math.min(...rects.map((r) => r.y));
+  const x1 = Math.max(...rects.map((r) => r.x + r.width));
+  const y1 = Math.max(...rects.map((r) => r.y + r.height));
+  return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+}
+
+/**
+ * The filters for one moving layer, composited onto `prev`. Hands back the
+ * label of what it made, the next layer's `prev`.
+ */
+function movingLayer(graph, l, n, motion, prev, { input, fps, source, projW, projH }) {
+  const times = motion.map((k) => l.start + k.t);
+  const at = (pick) => piecewise(times, motion.map(pick));
+  // 1. The fixed cut. Every crop is even and inside the source already, so
+  // their union is too.
+  const cut = unionOf(motion.map((k) => k.src));
+  const whole = source && cut.x === 0 && cut.y === 0
+    && cut.width >= evenDown(Number(source.width)) && cut.height >= evenDown(Number(source.height));
+  // The part of the frame the picture ever covers, which is all the canvases
+  // need to be. Even, for yuva420p.
+  const reach = unionOf(motion.map((k) => k.dest));
+  const bx = Math.max(0, evenDown(reach.x));
+  const by = Math.max(0, evenDown(reach.y));
+  const bw = Math.max(2, Math.min(projW, evenUp(reach.x + reach.width)) - bx);
+  const bh = Math.max(2, Math.min(projH, evenUp(reach.y + reach.height)) - by);
+
+  const sx = at((k) => k.src.x);
+  const sy = at((k) => k.src.y);
+  const sw = at((k) => k.src.width);
+  const sh = at((k) => k.src.height);
+  const dx = at((k) => k.dest.x);
+  const dy = at((k) => k.dest.y);
+  const dw = at((k) => k.dest.width);
+  const dh = at((k) => k.dest.height);
+  const kx = '(' + dw + '/' + sw + ')';
+  const ky = '(' + dh + '/' + sh + ')';
+
+  const shift = 'setpts=PTS-STARTPTS+' + fixed(l.start) + '/TB';
+  // A source as long as the clip and on the timeline's clock, which is what the
+  // expressions read t against.
+  const canvas = (colour, w, h, format) => 'color=c=' + colour + ':s=' + w + 'x' + h
+    + ':r=' + fps + ':d=' + fixed(l.duration) + ',' + shift + ',format=' + format;
+  const tag = (s) => s + n;
+
+  // 2 and 3. The picture, scaled for the moment and laid where its crop goes.
+  graph.push('[' + input + ':v]' + chain([
+    'fps=' + fps,
+    whole ? null : 'crop=' + cut.width + ':' + cut.height + ':' + cut.x + ':' + cut.y,
+    shift,
+    'format=yuva420p',
+    "scale=w='max(2\\,round(" + cut.width + '*' + kx + "))':h='max(2\\,round(" + cut.height + '*' + ky
+      + "))':eval=frame",
+  ]) + '[' + tag('mv') + ']');
+  graph.push(canvas('black@0', bw, bh, 'yuva420p') + '[' + tag('mc') + ']');
+  graph.push('[' + tag('mc') + '][' + tag('mv') + "]overlay=x='" + dx + '-' + bx + '-(' + sx + '-' + cut.x + ')*' + kx
+    + "':y='" + dy + '-' + by + '-(' + sy + '-' + cut.y + ')*' + ky
+    + "':eval=frame:eof_action=pass:format=yuv420[" + tag('mp') + ']');
+  // 4. The mask: the moment's destination, white on black.
+  graph.push(canvas('white', 16, 16, 'gray')
+    + ",scale=w='max(1\\,round(" + dw + "))':h='max(1\\,round(" + dh + "))':eval=frame[" + tag('mw') + ']');
+  graph.push(canvas('black', bw, bh, 'gray') + '[' + tag('md') + ']');
+  graph.push('[' + tag('md') + '][' + tag('mw') + "]overlay=x='round(" + dx + '-' + bx + ")':y='round(" + dy + '-' + by
+    + ")':eval=frame:eof_action=pass[" + tag('mm') + ']');
+
+  // Then the fades and the ceiling, the same as a still picture's, on the alpha
+  // the mask has just given it.
+  const fades = timeline.fadesOf(l);
+  const alpha = timeline.alphaOf(l);
+  const label = 'v' + n;
+  graph.push('[' + tag('mp') + '][' + tag('mm') + ']' + chain([
+    'alphamerge',
+    fades.in > 0 ? 'fade=t=in:st=' + fixed(l.start) + ':d=' + fixed(fades.in) + ':alpha=1' : null,
+    fades.out > 0
+      ? 'fade=t=out:st=' + fixed(l.start + l.duration - fades.out) + ':d=' + fixed(fades.out) + ':alpha=1'
+      : null,
+    alpha < 1 ? 'colorchannelmixer=aa=' + fixed(alpha) : null,
+  ]) + '[' + label + ']');
+  const next = 'bg' + n;
+  graph.push('[' + prev + '][' + label + ']overlay=' + bx + ':' + by
+    + ':eof_action=pass:' + enableExpr(l.start, timeline.endOf(l)) + '[' + next + ']');
+  return next;
+}
+
 /**
  * Works out the span of timeline the output covers. `trim` is the project's in
  * and out markers; without them the output is everything up to the last layer's
@@ -118,7 +259,13 @@ function buildComposeArgs({
     //
     // V3. A generated layer arrives here as the PNG the window drew it into,
     // at the project's size, so it is a still like any image from this point.
-    if (timeline.isStill(l)) {
+    // V3.3. A generated layer that moves between keyframes arrives as the
+    // frames the window drew it into, numbered from 0, covering only the
+    // stretch where it changes. tpad below holds the first and the last of
+    // them for the rest of the clip.
+    if (l.frames) {
+      args.push('-framerate', String(fps), '-start_number', '0', '-i', l.frames.pattern);
+    } else if (timeline.isStill(l)) {
       args.push('-loop', '1', '-framerate', String(fps), '-t', fixed(l.duration), '-i', l.src);
     } else {
       args.push('-ss', fixed(l.sourceIn), '-t', fixed(l.duration), '-i', l.src);
@@ -142,12 +289,17 @@ function buildComposeArgs({
     const order = videoLayers.slice().reverse();
     let prev = 'base';
     order.forEach((l, n) => {
-      const placement = geometry.placeLayer({
-        source: sources[l.src] || null,
-        crop: l.crop || null,
-        render: l.render || null,
-        project,
-      });
+      // V3.3. A picture that moves between keyframes takes the road of its
+      // own below. One that does not is placed once, as it always was, from
+      // its keyframe when it has a single one.
+      const motion = geometry.motionOf(l, sources[l.src] || null, project);
+      if (motion) {
+        prev = movingLayer(graph, l, n, motion, prev, {
+          input: indexOf.get(l.id), fps, source: sources[l.src] || null, projW, projH,
+        });
+        return;
+      }
+      const placement = geometry.placementAt(l, 0, sources[l.src] || null, project);
       const parts = geometry.filterParts(placement, sources[l.src] || null);
       const label = 'v' + n;
 
@@ -173,6 +325,7 @@ function buildComposeArgs({
       const needsAlpha = fades.in > 0 || fades.out > 0 || alpha < 1;
       graph.push('[' + indexOf.get(l.id) + ':v]'
         + chain([
+          l.frames ? holdFrames(l.frames) : null,
           'fps=' + fps,
           parts && parts.crop,
           parts && parts.scale,

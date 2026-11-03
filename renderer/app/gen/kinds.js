@@ -79,8 +79,18 @@ function genWords(gen) {
 function openGenSettings(id, first) {
   const layer = timelineModel.layerById(layers, id);
   if (!layer || layer.kind !== 'gen') return;
-  genKind(layer.gen).open(layer, first);
+  // V3.3. On a layer with keyframes the modal edits the one at the playhead,
+  // or a new one there, the same rule as the crop popup. It is handed the
+  // layer as that keyframe has it, so no modal has to know about keyframes;
+  // acceptGenSettings sorts what comes back.
+  genKeyframe = first ? null : genKeyframeToEdit(layer);
+  const shown = genKeyframe ? { ...layer, gen: timelineModel.withKeyed(layer.gen, genKeyframe) } : layer;
+  genKind(layer.gen).open(shown, first);
 }
+
+// V3.3. The keyframe the open settings modal is editing, as a draft with the
+// layer's id, or null when the layer has none.
+let genKeyframe = null;
 
 /** What a generated layer is called where it has to be named. */
 function genLabel(layer) {
@@ -124,6 +134,12 @@ function openClipMenu(evt, track) {
     menu.appendChild(b);
   };
   addMediaEntry(menu, type === 'video', at);
+  // V3.3. Keyframes, on a clip that can have them and within it. On anything
+  // else they are there and greyed, so the menu keeps its shape.
+  const keyEl = evt.target.closest('.clip-key');
+  const keyable = !!layer && timelineModel.keyframable(layer) && timelineModel.covers(layer, at);
+  item(t('Add Keyframe'), keyable, () => addKeyframeAt(layer.id, at - layer.start));
+  item(t('Delete Keyframe'), !!layer && !!keyEl, () => deleteKeyframe(layer.id, keyEl.dataset.keyId));
   item(t('Split here'), !!layer && timelineModel.canSplitAt(layer, at),
     () => splitSelected(at));
   item(t('Copy'), !!layer, () => copySelected());

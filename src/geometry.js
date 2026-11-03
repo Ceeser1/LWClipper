@@ -521,6 +521,75 @@ const layerGeometry = (() => {
     return { src, dest };
   }
 
+  // ---- V3.3. Placement between keyframes ----
+  //
+  // Each keyframe is placed exactly as a layer without any is, through
+  // placeLayer, and the picture between two of them is the straight blend of
+  // the two placements: the source rect and the destination rect, every edge
+  // moving at its own even pace. Blending the placements rather than the stored
+  // fields is what lets a keyframe with no crop of its own, or one left on
+  // centre and fit, sit beside one that has them: null is worked out to the
+  // rect it means first. The result stays fractional, the way drawImageArgs
+  // already is, so a slow move glides instead of stepping a pixel at a time.
+  //
+  // One sum for both renderers. The preview asks placementAt for the frame it
+  // draws, and composer.js asks motionOf for the keyframes it turns into
+  // ffmpeg expressions of t, whose blend is this blend.
+
+  function blendRect(a, b, u) {
+    return {
+      x: a.x + (b.x - a.x) * u,
+      y: a.y + (b.y - a.y) * u,
+      width: a.width + (b.width - a.width) * u,
+      height: a.height + (b.height - a.height) * u,
+    };
+  }
+
+  function keyedPlacements(layer, source, project) {
+    const list = layer && Array.isArray(layer.keyframes) ? layer.keyframes : [];
+    const out = [];
+    for (const k of list) {
+      const p = placeLayer({ source, crop: k.crop, render: k.render, project });
+      if (p) out.push({ t: k.t, src: p.src, dest: p.dest });
+    }
+    return out;
+  }
+
+  /**
+   * Where a layer's picture is at `t`, the clip's own seconds: its source rect
+   * and its destination rect. Before the first keyframe it is the first's,
+   * after the last the last's, so a trimmed-off keyframe still pulls on the
+   * part of the clip that shows. Without keyframes it is placeLayer.
+   */
+  function placementAt(layer, t, source, project) {
+    const keyed = keyedPlacements(layer, source, project);
+    if (!keyed.length) {
+      return placeLayer({ source, crop: layer && layer.crop, render: layer && layer.render, project });
+    }
+    const at = finite(t, 0);
+    if (at <= keyed[0].t) return { src: keyed[0].src, dest: keyed[0].dest };
+    const last = keyed[keyed.length - 1];
+    if (at >= last.t) return { src: last.src, dest: last.dest };
+    let i = 0;
+    while (keyed[i + 1].t <= at) i += 1;
+    const a = keyed[i];
+    const b = keyed[i + 1];
+    const u = (at - a.t) / (b.t - a.t);
+    return { src: blendRect(a.src, b.src, u), dest: blendRect(a.dest, b.dest, u) };
+  }
+
+  /**
+   * The keyframes as placements, for the export: null when the picture never
+   * moves, which is no keyframes, one, or several that all say the same.
+   */
+  function motionOf(layer, source, project) {
+    const keyed = keyedPlacements(layer, source, project);
+    if (keyed.length < 2) return null;
+    const same = (a, b) => a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+    const still = keyed.every((k) => same(k.src, keyed[0].src) && same(k.dest, keyed[0].dest));
+    return still ? null : keyed;
+  }
+
   /**
    * Where something of this size sits along an axis of this length, anchored at
    * the near edge, the middle, or the far edge.
@@ -924,6 +993,8 @@ const layerGeometry = (() => {
     scaleFromSlider,
     sliderFromScale,
     placeLayer,
+    placementAt,
+    motionOf,
     previewCanvasSize,
     drawImageArgs,
     filterParts,

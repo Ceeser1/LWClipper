@@ -284,6 +284,8 @@ function pasteAt(at, type, lane) {
  */
 function deleteSelected() {
   if (!timelineDriving() || busy || !selectedLayerId) return false;
+  // V3.3. A chosen keyframe goes before its clip does.
+  if (selectedKeyframe) return deleteSelectedKeyframe();
   const next = timelineModel.removeLayer(layers, selectedLayerId);
   if (next.length === layers.length) return false;
   setLayers(next);

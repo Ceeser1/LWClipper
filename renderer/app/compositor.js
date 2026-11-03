@@ -249,14 +249,18 @@ function addGenDecoder(layer) {
  * The layer drawn into its canvas, unless the canvas already holds exactly
  * that. Cheap to ask every frame: the key is one JSON string of a small object.
  */
-function paintGen(layer, entry) {
+function paintGen(layer, entry, at = null) {
   const frame = projectFrame();
-  const key = genDraw.keyOf(layer.gen, frame.width, frame.height);
+  // V3.3. At a moment, a layer with keyframes is its settings blended there;
+  // without one, or without keyframes, it is its settings. The key is the
+  // blended settings', so a picture that holds still is not redrawn.
+  const gen = at === null ? layer.gen : genDraw.genAt(layer, at - layer.start, frame.width, frame.height);
+  const key = genDraw.keyOf(gen, frame.width, frame.height);
   if (entry.key === key) return;
   const canvas = entry.el;
   if (canvas.width !== frame.width) canvas.width = frame.width;
   if (canvas.height !== frame.height) canvas.height = frame.height;
-  genDraw.drawGen(canvas.getContext('2d'), layer.gen, frame.width, frame.height);
+  genDraw.drawGen(canvas.getContext('2d'), gen, frame.width, frame.height);
   entry.width = frame.width;
   entry.height = frame.height;
   entry.key = key;
@@ -403,25 +407,34 @@ function syncDecoders() {
  * piece of arithmetic for both, which is the same reason paintLayers itself is
  * shared with the two trim frames.
  */
-function drawLayerInto(ctx, canvas, layer, crop = layer.crop, render = layer.render) {
+function drawLayerInto(ctx, canvas, layer, crop = layer.crop, render = layer.render, at = null) {
   const entry = decoders.get(layer.id);
-  if (entry && entry.gen) paintGen(layer, entry);
+  if (entry && entry.gen) paintGen(layer, entry, at);
   if (!entry || !entry.width) return;
   const source = layerSource(layer);
   if (!source) return;
   const frame = projectFrame();
-  const placement = layerGeometry.placeLayer({
-    source,
-    // The two drafts the popup is editing, when it is the one drawing. Defaulted
-    // to what the layer says, which is what every other caller wants.
-    crop,
-    // V2.1. composer.js has read this since Step 3 and the preview never did,
-    // so a positioned layer would have been shown in the middle of the frame
-    // and written somewhere else. The two renderers are not allowed to
-    // disagree, which is the rule the whole of Step 4 existed to establish.
-    render,
-    project: frame,
-  });
+  // V3.3. At a moment of the timeline, a layer with keyframes is wherever they
+  // put it then: the same placementAt composer.js turns into its expressions.
+  // The popup's drafts come without a moment, because a draft is one keyframe.
+  // A generated layer's keyframes move what is drawn on its canvas, above,
+  // and the canvas itself always covers the frame.
+  const keyed = at !== null && layer.kind !== 'gen' && timelineModel.keyframesFor(layer).length;
+  const placement = keyed
+    ? layerGeometry.placementAt(layer, at - layer.start, source, frame)
+    : layerGeometry.placeLayer({
+      source,
+      // The two drafts the popup is editing, when it is the one drawing.
+      // Defaulted to what the layer says, which is what every other caller
+      // wants.
+      crop,
+      // V2.1. composer.js has read this since Step 3 and the preview never
+      // did, so a positioned layer would have been shown in the middle of the
+      // frame and written somewhere else. The two renderers are not allowed to
+      // disagree, which is the rule the whole of Step 4 existed to establish.
+      render,
+      project: frame,
+    });
   const d = layerGeometry.drawImageArgs(placement, frame, canvas);
   if (!d) return;
   // drawImage measures its source rectangle in the element's own intrinsic
@@ -469,7 +482,7 @@ function paintLayers(ctx, canvas, at, only, skip) {
     const alpha = timelineModel.layerAlphaAt(l, at);
     if (alpha <= 0) continue;
     ctx.globalAlpha = alpha;
-    drawLayerInto(ctx, canvas, l);
+    drawLayerInto(ctx, canvas, l, undefined, undefined, at);
     ctx.globalAlpha = 1;
   }
 }

@@ -994,6 +994,53 @@ ipcMain.handle('gen:image', (_event, { key, png }) => {
   }
 });
 
+/**
+ * V3.3. A generated layer that moves between keyframes, as numbered frames for
+ * the export, in a folder of its own named like the single PNGs are, by a hash
+ * of everything the frames depend on.
+ *
+ * Asked with `start`: a finished folder is handed back as it is; otherwise an
+ * empty `.part` folder is made beside it to draw into. Each frame then comes
+ * through gen:frame, and `finish` renames the folder into place, so a sequence
+ * an export gave up on halfway is never found and trusted by the next one.
+ */
+function genFramesDirs(key) {
+  const name = 'seq-' + crypto.createHash('sha1').update(String(key)).digest('hex').slice(0, 24);
+  const dir = path.join(genImageDir(), name);
+  return { dir, part: dir + '.part' };
+}
+
+ipcMain.handle('gen:frames', (_event, { key, start, finish }) => {
+  const { dir, part } = genFramesDirs(key);
+  try {
+    if (start) {
+      if (fs.existsSync(dir)) return { ok: true, dir, have: true };
+      fs.rmSync(part, { recursive: true, force: true });
+      fs.mkdirSync(part, { recursive: true });
+      return { ok: true, dir, have: false };
+    }
+    if (finish) {
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.renameSync(part, dir);
+      return { ok: true, dir };
+    }
+    return { ok: false, error: 'gen:frames needs start or finish' };
+  } catch (e) {
+    return { ok: false, error: String(e.message || e) };
+  }
+});
+
+ipcMain.handle('gen:frame', (_event, { key, index, png }) => {
+  const { part } = genFramesDirs(key);
+  try {
+    const n = Math.max(0, Math.floor(Number(index) || 0));
+    fs.writeFileSync(path.join(part, String(n).padStart(5, '0') + '.png'), Buffer.from(png));
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e.message || e) };
+  }
+});
+
 ipcMain.handle('shell:fileUrl', (_event, filePath) => {
   // pathToFileURL escapes spaces, #, % and unicode; hand-building the string
   // silently truncated any path containing a #.

@@ -482,6 +482,10 @@ timelinePlayhead.addEventListener('pointerdown', (evt) => {
 // The whole document, and the only thing an undo snapshot would need to hold.
 let layers = [];
 let selectedLayerId = null;
+// V3.3. The keyframe last clicked, as { layerId, id }, or null. Its own
+// selection beside the clip's: Delete takes the keyframe while one is chosen
+// and the clip once it is not. See renderer/app/keyframes.js.
+let selectedKeyframe = null;
 
 // A trailing empty row of each type is always on offer, so there is somewhere
 // to drop a file and somewhere to press Open File. Filling it puts a real layer

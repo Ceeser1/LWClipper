@@ -84,7 +84,8 @@ function paintGenPreview(stage, canvas, id, gen, quick) {
     const alpha = timelineModel.layerAlphaAt(l, compositeAt);
     if (alpha <= 0) continue;
     ctx.globalAlpha = alpha;
-    drawLayerInto(ctx, canvas, l);
+    // V3.3. At the playhead, so a layer with keyframes is where it is then.
+    drawLayerInto(ctx, canvas, l, undefined, undefined, compositeAt);
     ctx.globalAlpha = 1;
   }
 }
@@ -111,9 +112,56 @@ function cancelGenAdd() {
  * step at all; any other Accept that changed nothing writes nothing, so opening
  * and closing a modal never leaves an undo step behind.
  */
+/**
+ * V3.3. Whether two sets of keyed settings are the same picture. The modals
+ * round what they show to whole project pixels and degrees, so a keyframe
+ * opened between two others comes back off by a fraction it was never told to
+ * move: within under a pixel, or a degree, or a half percent of span, is the
+ * same.
+ */
+function sameKeyed(a, b) {
+  const close = (p, q, reach) => Math.abs(p - q) <= reach;
+  if ('color' in a && a.color !== b.color) return false;
+  if ('span' in a && !close(a.span, b.span, 0.005)) return false;
+  if ('thickness' in a && !close(a.thickness, b.thickness, 0.75)) return false;
+  if ('rotation' in a && !close(a.rotation, b.rotation, 0.75)) return false;
+  if ('box' in a) {
+    if (!a.box !== !b.box) return false;
+    if (a.box && !['x', 'y', 'w', 'h'].every((f) => close(a.box[f], b.box[f], 0.75))) return false;
+  }
+  return true;
+}
+
 function acceptGenSettings(id, gen, changed, first) {
   genAddBefore = null;
-  if (!timelineModel.layerById(layers, id)) return;
+  const layer = timelineModel.layerById(layers, id);
+  if (!layer) return;
+  // V3.3. On a keyframe: what the keyframe holds goes to the keyframe, made
+  // here if it is new, and only when it changed, so editing a text's words
+  // with the playhead between two keyframes does not leave a third behind.
+  // Everything else goes to the layer, its own keyed settings untouched.
+  const k = genKeyframe && genKeyframe.layerId === id ? genKeyframe : null;
+  genKeyframe = null;
+  if (k) {
+    if (!changed) return;
+    // The modal hands back its settings at the project's height, so the layer's
+    // keyframes, the one it opened on and its own keyed settings are all
+    // brought to that height first, to be compared and kept in one measure.
+    const ref = timelineModel.genOf(gen).refHeight;
+    const scale = ref / timelineModel.genOf(layer.gen).refHeight;
+    const keyed = timelineModel.keyedOfGen(gen);
+    const opened = timelineModel.keyedAt(timelineModel.keyedOfGen(timelineModel.withKeyed(layer.gen, k)), scale);
+    const rest = timelineModel.withKeyed(gen, timelineModel.keyedAt(timelineModel.keyedOfGen(layer.gen), scale));
+    let next = timelineModel.setGen(layers, id, rest);
+    next = timelineModel.setLayer(next, id, { keyframes: timelineModel.keyframesAtRef(layer, ref) });
+    const keyId = k.id || newKeyframeId();
+    const moved = !sameKeyed(keyed, opened);
+    if (moved) next = timelineModel.putKeyframe(next, id, { ...k, ...keyed, id: keyId });
+    setLayers(next);
+    if (moved) selectKeyframe(id, keyId);
+    commitHistory();
+    return;
+  }
   if (changed) setLayers(timelineModel.setGen(layers, id, gen));
   if (changed || first) commitHistory();
 }

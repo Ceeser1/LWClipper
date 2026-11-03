@@ -1054,12 +1054,16 @@ function openCrop(layerId) {
     // V3. Nothing to crop out of a generated layer, whose picture is the frame.
     if (!target || target.type !== 'video' || target.kind === 'gen') return;
     cropLayerId = target.id;
+    // V3.3. Before anything reads the crop, since what it reads is this.
+    cropKeyframe = keyframeToEdit(target);
   } else {
     cropLayerId = null;
+    cropKeyframe = null;
   }
   const size = sourceSize();
   if (!size) {
     cropLayerId = null;
+    cropKeyframe = null;
     return;
   }
   const accepted = currentCrop();
@@ -1127,6 +1131,7 @@ function closeCrop() {
   // Back to following the selection. Cleared after the modal is hidden and
   // before anything redraws, so nothing reads it as still open on a layer.
   cropLayerId = null;
+  cropKeyframe = null;
   setCropHint(false);
   updateCropArrows();
 }
@@ -1148,6 +1153,16 @@ cropRemoveBtn.addEventListener('click', () => {
   // position it puts the layer back to centre and fit. One button rather than
   // two, because the tabs are two views of one layer and Remove means "take
   // back what this tab does".
+  // V3.3. On a keyframe it is that keyframe's crop or placement that goes,
+  // and a keyframe the popup was about to make is made without it.
+  if (cropKeyframe && cropLayerId) {
+    saveCropKeyframe(cropTab === 'place' ? { render: null } : { crop: null });
+    commitHistory();
+    closeCrop();
+    updateCropOverlays();
+    updateCropBtn();
+    return;
+  }
   if (cropTab === 'place') {
     if (cropLayerId) {
       setLayers(timelineModel.setLayer(layers, cropLayerId, { render: null }));
@@ -1183,6 +1198,19 @@ cropAcceptBtn.addEventListener('click', () => {
   const render = (placeDraft && !sameRect(placeDraft, placeFitRect(cropTargetLayer())))
     ? { ...placeDraft }
     : null;
+  // V3.3. On a layer with keyframes the popup was editing one, the one at the
+  // playhead, and Accept writes that keyframe or makes it there: the user's
+  // rule for an edit between two of them.
+  if (cropKeyframe && cropLayerId) {
+    if (rect) cropViews.set(cropLayerId, { zoom: viewZoom, panX: viewPanX, panY: viewPanY });
+    else cropViews.delete(cropLayerId);
+    saveCropKeyframe({ crop: rect, render, anchor: placeAnchor });
+    commitHistory();
+    closeCrop();
+    updateCropOverlays();
+    updateCropBtn();
+    return;
+  }
   setCurrentCrop(rect, rect ? { zoom: viewZoom, panX: viewPanX, panY: viewPanY } : null);
   // After the crop, and through the id rather than the layer object: setLayers
   // has just replaced the array that object came out of.

@@ -311,6 +311,16 @@ async function onFormatClicked(format, btn) {
       reportFailure(result);
       return;
     }
+    // The same rule Open File and the drop zone follow: in advanced editing
+    // there is no single media file for the window to be a view of, so a
+    // download becomes a track. Handed to onMediaReady instead, it loaded into
+    // simple editing's media, which this mode does not show, and the download
+    // looked like it had gone nowhere.
+    if (timelineDriving()) {
+      addLayerFromMedia(result.data.isAudio ? 'audio' : 'video', result.data);
+      setProgress(1.0, t('Ready: {name}', { name: result.data.path.split(/[\\/]/).pop() }));
+      return;
+    }
     onMediaReady(result.data);
   });
 }

@@ -438,6 +438,15 @@ function buildLayerClip(track, layer) {
   const art = document.createElement('canvas');
   art.className = 'layer-clip__art';
   clip.appendChild(art);
+  // V3.3. The keyframes' own strip along the bottom of every picture clip, the
+  // user's: "shorten the height of videos by 10%, make that bottom 10% black and
+  // show the keyframes in that sub-bar". Sized in positionLayerClips; it takes
+  // no presses, so the clip under it still drags and trims.
+  if (layer.type === 'video') {
+    const strip = document.createElement('div');
+    strip.className = 'layer-clip__keys';
+    clip.appendChild(strip);
+  }
   // The grips, over the art. Their width is set in
   // positionLayerClips, which is the only place that knows how wide the clip
   // has ended up on screen.
@@ -493,7 +502,10 @@ function buildLayerClip(track, layer) {
     });
     // Lit when this layer is actually cropped, so the row says so without
     // anything having to be opened to find out.
-    crop.classList.toggle('clip-mark--on', !!layer.crop);
+    // V3.3. Or any of its keyframes is, since those are its crop now.
+    crop.classList.toggle('clip-mark--on', timelineModel.keyframesFor(layer).length
+      ? timelineModel.keyframesFor(layer).some((k) => !!k.crop)
+      : !!layer.crop);
     marks.appendChild(crop);
     // There was a second mark here for the Render Position tab, added in 21a so
     // each layer could be opened straight onto it. Removed on 2026-09-23: the
@@ -535,6 +547,10 @@ function buildLayerClip(track, layer) {
     // and redraw it from the corner.
     bindFadeDrag(line, layer.id, which, false);
   }
+
+  // V3.3. The keyframes, last of all, so a press on a diamond is the
+  // diamond's even where it sits over a grip or a fade line.
+  buildClipKeyframes(clip, layer);
 
   bindClipDrag(clip, layer.id);
   track.appendChild(clip);
@@ -1021,7 +1037,8 @@ function bindAlphaDrag(node, layerId) {
     // many rows between its first and its last.
     const track = node.closest('.layer-track');
     const clip = track && track.querySelector('.layer-clip[data-layer-id="' + layerId + '"]');
-    const span = Math.max(1, clip ? clip.offsetHeight - 1 : 1);
+    // V3.3. The picture's part of it, above the keyframe strip.
+    const span = Math.max(1, clip ? clipPictureHeight(clip) - 1 : 1);
     const rect = timelineLane.getBoundingClientRect();
     const drag = { y: evt.clientY, from: timelineModel.alphaOf(layer), moved: false };
     document.body.classList.add('layer-alpha');
@@ -1247,13 +1264,50 @@ function positionLayerClips() {
     const visible = Math.max(0, to - from);
     art.style.left = from + 'px';
     art.style.width = visible + 'px';
+    // V3.3. The keyframe strip's tenth of the clip, in whole pixels so the
+    // picture above it and everything measured on the picture agree on where
+    // it ends.
+    const strip = clip.querySelector('.layer-clip__keys');
+    const stripH = strip ? keyStripHeight(clip.clientHeight) : 0;
+    clip.dataset.keyStrip = String(stripH);
+    if (strip) {
+      strip.style.height = stripH + 'px';
+      clip.style.setProperty('--key-strip', stripH + 'px');
+    }
+    art.style.height = stripH ? (clip.clientHeight - stripH) + 'px' : '';
     // Before the marks, which inset themselves past the fade handle once they
     // know whether it is on show.
     placeFadeGrips(clip, layer, x0, width, gripW);
+    placeClipKeyframes(clip, layer, x0);
     placeClipMarks(clip, width, from, visible, gripW);
     placeAlphaLine(track, clip, layer, x0, from, visible, gripW);
-    drawClipArt(layer, art, x0 + from, visible, clip.clientHeight);
+    drawClipArt(layer, art, x0 + from, visible, clip.clientHeight - stripH);
   }
+}
+
+// V3.3. A tenth of the clip's inside for the keyframe strip, and never less
+// than the six pixels a diamond can still be seen and caught in.
+function keyStripHeight(inner) {
+  return Math.max(6, Math.round(inner * 0.1));
+}
+
+/**
+ * The height the picture part of a clip has, its top border included: the
+ * whole clip less its keyframe strip and the bottom border under that, which
+ * belongs to the strip now. The alpha line, its bar's drag and the fade ramps
+ * are all measured on this, so at nothing they all stop on the picture's last
+ * row and not on the strip.
+ */
+function clipPictureHeight(clip) {
+  const strip = Number(clip.dataset.keyStrip) || 0;
+  return clip.offsetHeight - (strip ? strip + CLIP_BORDER : 0);
+}
+
+// The same measure from the art canvas's side, which is the clip's content
+// box: the picture's rows above the strip on a picture clip, the whole clip on
+// a sound one.
+function artAlphaSpan(layer, height) {
+  return height + (layer.type === 'video' ? CLIP_BORDER : 2 * CLIP_BORDER);
 }
 
 // How wide one clip mark is, and the gap between two, matching the stylesheet.
@@ -1357,7 +1411,7 @@ function placeAlphaLine(track, clip, layer, x0, from, visible, gripW) {
   const line = track.querySelector('.clip-alpha-line' + mine);
   if (!line) return;
   const alpha = timelineModel.alphaOf(layer);
-  const row = clip.offsetTop + layerGeometry.alphaRow(clip.offsetHeight, alpha);
+  const row = clip.offsetTop + layerGeometry.alphaRow(clipPictureHeight(clip), alpha);
 
   // V2.8. The line runs between the fades rather than under them: "Hide the max
   // alpha horizontal line inside the fade in/out areas, there is already the
@@ -1662,7 +1716,7 @@ function drawClipFades(layer, ctx, leftX, width, height) {
   // The canvas is the clip's content box and the row is measured in its border
   // box, so the border comes back off. An audio layer has no alpha and reads as
   // 1, which puts the top of its ramp where it has been since V2.2.
-  const top = layerGeometry.alphaRow(height + 2 * CLIP_BORDER,
+  const top = layerGeometry.alphaRow(artAlphaSpan(layer, height),
     timelineModel.alphaOf(layer)) - CLIP_BORDER;
   ctx.save();
   ctx.strokeStyle = 'rgba(224, 228, 238, 0.85)';
@@ -1692,7 +1746,7 @@ function drawClipFades(layer, ctx, leftX, width, height) {
   if (cross && Math.abs(fades.in - cross.overlap) < 1e-6) {
     const under = timelineModel.layerById(layers, cross.from);
     const underTop = under
-      ? layerGeometry.alphaRow(height + 2 * CLIP_BORDER, timelineModel.alphaOf(under)) - CLIP_BORDER
+      ? layerGeometry.alphaRow(artAlphaSpan(layer, height), timelineModel.alphaOf(under)) - CLIP_BORDER
       : top;
     ctx.moveTo(xAt(layer.start), underTop);
     ctx.lineTo(xAt(layer.start + cross.overlap), height);
@@ -1713,8 +1767,12 @@ function drawClipFades(layer, ctx, leftX, width, height) {
 function cropWindow(layer) {
   const whole = { x: 0, y: 0, w: 1, h: 1 };
   const source = layerSource(layer);
-  if (!layer.crop || !source) return whole;
-  const rect = layerGeometry.sourceRect(source, layer.crop);
+  // V3.3. A layer with keyframes is cropped by them; the strip shows the
+  // first one's, which is where the clip opens.
+  const keyed = timelineModel.keyframesFor(layer);
+  const crop = keyed.length ? keyed[0].crop : layer.crop;
+  if (!crop || !source) return whole;
+  const rect = layerGeometry.sourceRect(source, crop);
   if (!rect) return whole;
   // Against the even-down frame sourceRect clamps to, not against the raw
   // numbers, so the fractions describe the rectangle it actually returned.

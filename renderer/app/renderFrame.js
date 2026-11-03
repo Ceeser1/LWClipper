@@ -88,6 +88,12 @@ function canRenderCrop() {
     && layers.some((l) => l.type === 'video'));
 }
 
+// V3.3. A keyframe's pin, in the same map as the layers' and moved with them.
+// A layer id never has a colon in it, so the two kinds of key cannot meet.
+function keyframePinKey(layerId, keyId) {
+  return layerId + ':' + keyId;
+}
+
 // Where a layer stands right now, placed or fitted, in the frame the window
 // opened on. Not placeFitRect, which reads cropDraft: that is the other
 // popup's draft and means nothing here.
@@ -547,6 +553,13 @@ function openRenderCrop() {
     if (l.type !== 'video' || l.kind === 'gen') continue;
     const pin = renderPinOf(l);
     if (pin) renderPins.set(l.id, pin);
+    // V3.3. And each of its keyframes, pinned the same way under a key of its
+    // own, so a moving picture is carried into the new frame whole: every
+    // stop of the move lands where that stop was.
+    for (const k of timelineModel.keyframesFor(l)) {
+      const kpin = renderPinOf({ ...l, crop: k.crop, render: k.render });
+      if (kpin) renderPins.set(keyframePinKey(l.id, k.id), kpin);
+    }
   }
   renderAspect = null;
   renderAspectBtn = null;
@@ -598,18 +611,24 @@ renderAcceptBtn.addEventListener('click', () => {
     // V3, 31a. A generated layer has no pin, but its sizes follow the picture
     // and a text box moves with it. See timelineModel.reframeGen.
     if (l.kind === 'gen') {
-      return { ...l, gen: timelineModel.reframeGen(l.gen, from.height, out.height, k, base.x - dx, base.y - dy) };
+      // V3.3. With its keyframes, each pinned the same way.
+      return timelineModel.reframeKeyed(l, from.height, out.height, k, base.x - dx, base.y - dy);
     }
     const pin = pins.get(l.id);
     if (!pin) return l;
+    const pinned = (p) => ({
+      x: Math.round(p.x - dx),
+      y: Math.round(p.y - dy),
+      width: Math.round(p.width),
+      height: Math.round(p.height),
+    });
     return {
       ...l,
-      render: {
-        x: Math.round(pin.x - dx),
-        y: Math.round(pin.y - dy),
-        width: Math.round(pin.width),
-        height: Math.round(pin.height),
-      },
+      render: pinned(pin),
+      keyframes: timelineModel.keyframesFor(l).map((k) => {
+        const kpin = pins.get(keyframePinKey(l.id, k.id));
+        return kpin ? { ...k, render: pinned(kpin) } : k;
+      }),
     };
   }));
   commitHistory();

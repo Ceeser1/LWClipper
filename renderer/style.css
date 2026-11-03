@@ -1799,6 +1799,54 @@ body.layer-trimming .playhead--timeline {
   color: #ffffff;
 }
 
+/* V3.3. The keyframe strip: the bottom tenth of a picture clip, black, under
+   the picture rather than over it. Its height is set by positionLayerClips,
+   which also hands it to the diamonds as --key-strip; the 10% here is only
+   what it is before that has run. It takes no presses, so a drag that starts
+   on it still moves or trims the clip. */
+.layer-clip__keys {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 10%;
+  background: #000;
+  pointer-events: none;
+}
+
+/* A keyframe: a diamond in the strip at its moment. Ten wide, which is
+   CLIP_KEY_HALF twice in keyframes.js, so its point sits on the second it
+   stands for. The element reaches a few pixels up into the picture so a strip
+   of six can still be caught; only the diamond is drawn. */
+.clip-key {
+  position: absolute;
+  bottom: 0;
+  width: 10px;
+  height: calc(var(--key-strip, 6px) + 4px);
+  z-index: 5;
+  cursor: ew-resize;
+}
+
+.clip-key::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--key-strip, 6px) * 0.5);
+  width: calc(var(--key-strip, 6px) * 0.7);
+  height: calc(var(--key-strip, 6px) * 0.7);
+  transform: translate(-50%, 50%) rotate(45deg);
+  background: #e8c860;
+  box-sizing: border-box;
+}
+
+.clip-key:hover::before {
+  background: #fff0b8;
+}
+
+.clip-key--selected::before {
+  background: #78c88c;
+}
+
 .clip-fade-dot[hidden] {
   display: none;
 }

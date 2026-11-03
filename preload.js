@@ -72,6 +72,8 @@ contextBridge.exposeInMainWorld('lwclipper', {
   // V3. Where the export finds a generated layer's picture: the path when it
   // is already written, and null when the window has to send it.
   genImage: (key, png) => ipcRenderer.invoke('gen:image', { key, png }),
+  genFrames: (key, step) => ipcRenderer.invoke('gen:frames', { key, ...step }),
+  genFrame: (key, index, png) => ipcRenderer.invoke('gen:frame', { key, index, png }),
   onProgress: (callback) => {
     ipcRenderer.removeAllListeners('job:progress');
     ipcRenderer.on('job:progress', (_event, payload) => callback(payload));
