@@ -1,0 +1,15 @@
+V3 Update plan:
+
+A. Generated Media:
+A1. On the right click menu add an entry "Add Media" with an right arrow. Only usable on a video layer, greyed out on audio. Hovering it reveals the next menu below to select which media to add to the video layer: Text, Bar, Shapes (another right arrow sub menu): Circle, Square, Triangle, Star, Ring.
+A1.1 Adding any generated media puts the new media in the track where the click happened and immediatly opens its settings once its ready. If this first opening gets canceled by the button at the end the media gets removed again.
+A2. Text media (tracks) have a cogwheel button on the right, use the one from settings, which opens an text modal.
+A2.1 Modal layout: "Edit Text" title, below that a menu (Font dropdown, Size editbox with a dropdown arrow, Colorpicker, Format (bold, italic, underlined, struck through), Horizontal alignment left/center/right, Vertical alignment top/center/bottom, Outline button, Shadow button), below the menu will be the text preview, at the bottom accept/cancel buttons.
+A2.2 Text preview: Its generally ratio 16:9 and split into 2 modes changeable by a 2-way button selector at the bottom of it: Edit Mode and Render Preview Mode.
+A2.2.1 Edit Mode: Just an editbox showing the text rendered with its attributes (font, size, alignment, etc) inside the editbox-frame.
+A2.2.2 Render Preview Mode: Shows the whole render frame with black background by default. Below it is a checkbox "Enable Background" which draws the frame at the playheads position with the text ontop of it. Preview mode also handles as cropping of the text - You can drag sides (again shift to mirror) and the texts repositions itself depending on its settings. The corners (circles again) are for rotating here. Clicking inside the frame lets you drag the text across the render frame.
+A3. Bar media is a simple addition, adding it simply adds a sticky bar to the top of the render frame.
+A3.1 Bar Settings modal: "Bar Settings" title, below that i want a 2x2 grid for settings, next the render frame preview, again a "enable background" checkbox below it and finally the accept/cancel buttons.
+3.2 The 2x2 settings grid: A1 = a 4-way selector button "Stick to: Top/Right/Bottom/Left", A2 = Color [color picker bar, displaying selected color], B1 = a Slider "Thickness:" ranging from 1px to 1/4 render frame height (if top/bottom is selected) or to 1/4 width (if left/right is selected), B2= a Slider "Span 1-100%" which defines how long the bar is (render frame width if top/bottom selected, height if left/right selected)
+
+Shadow has more settings and they are more complex: Position (a slider from -180 to +180) with an arrow facing the direction the slider says, Distance (1px to 64px, how far off the text should the shadow start), Size (1px - 64px, how much extra size should be added around each letter), Fade-out (0-100%, default 100%, how much the shadow alpha should reduce going outwards - 0% means always stay at the alpha from shadow's color picker, 100% means reach alpha 0 at [size])
