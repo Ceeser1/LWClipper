@@ -13,6 +13,9 @@
 // between two makes a new one there; a trim that passes one keeps it, out of
 // view, still steering the part that shows.
 
+// The header's readout of the chosen keyframe.
+const keyframeReadout = el('keyframeReadout');
+
 // How near the playhead has to be for an edit to change the keyframe that is
 // there rather than make a new one beside it: half a frame of the project
 // either side, which is every moment that frame stands for.
@@ -37,13 +40,46 @@ function selectedKeyframeOf(layer) {
 }
 
 function paintKeyframeSelection() {
+  // A keyframe that has gone, by an undo or with its clip, is not chosen.
+  if (selectedKeyframe) {
+    const layer = timelineModel.layerById(layers, selectedKeyframe.layerId);
+    if (!selectedKeyframeOf(layer)) selectedKeyframe = null;
+  }
   for (const el of timelineStack.querySelectorAll('.clip-key')) {
-    const clip = el.closest('.layer-clip');
-    const on = !!selectedKeyframe && !!clip
-      && clip.dataset.layerId === selectedKeyframe.layerId
+    const on = !!selectedKeyframe
+      && el.dataset.layerId === selectedKeyframe.layerId
       && el.dataset.keyId === selectedKeyframe.id;
     el.classList.toggle('clip-key--selected', on);
   }
+  updateKeyframeReadout();
+}
+
+/**
+ * The header's "Selected Keyframe: Video X Keyframe Y / Z", the user's words:
+ * X the layer's number, Y the chosen one's place among all the keyframes on
+ * that layer and Z how many there are. A layer is a row here, the user's sense
+ * of the word, so a row holding two clips counts the keyframes of both, in
+ * the order they stand on the timeline. Only the ones in view are counted,
+ * since a keyframe trimmed off a clip cannot be chosen. Hidden while none is
+ * chosen.
+ */
+function updateKeyframeReadout() {
+  const layer = selectedKeyframe && timelineModel.layerById(layers, selectedKeyframe.layerId);
+  const k = selectedKeyframeOf(layer);
+  keyframeReadout.hidden = !k;
+  if (!k) return;
+  const onRow = layers
+    .filter((l) => l.type === 'video' && l.lane === layer.lane)
+    .flatMap((l) => timelineModel.keyframesFor(l)
+      .filter((o) => o.t >= 0 && o.t <= l.duration)
+      .map((o) => ({ layerId: l.id, id: o.id, at: l.start + o.t })))
+    .sort((a, b) => a.at - b.at);
+  const n = onRow.findIndex((o) => o.layerId === layer.id && o.id === k.id) + 1;
+  keyframeReadout.textContent = t('Selected Keyframe: {layer} Keyframe {n} / {total}', {
+    layer: layerLabel('video', layerOrdinal(layer)),
+    n,
+    total: onRow.length,
+  });
 }
 
 // Whole pixels, and even ones for a crop, which is what every crop the popup
@@ -156,7 +192,15 @@ function addKeyframeAt(layerId, t) {
     return;
   }
   const id = newKeyframeId();
-  setLayers(timelineModel.putKeyframe(layers, layer.id, { id, t: local, ...keyframeSeed(layer, local) }));
+  // The user: "If a first keyframe gets added anywhere, always put #1 keyframe
+  // at the very start of the track." Both start as the clip is, so neither
+  // moves anything until one of them is edited. One added at the start is
+  // that keyframe already.
+  let next = layers;
+  if (!timelineModel.keyframesFor(layer).length && local > keyframeReach()) {
+    next = timelineModel.putKeyframe(next, layer.id, { id: newKeyframeId(), t: 0, ...keyframeSeed(layer, 0) });
+  }
+  setLayers(timelineModel.putKeyframe(next, layer.id, { id, t: local, ...keyframeSeed(layer, local) }));
   commitHistory();
   const added = timelineModel.keyframesFor(timelineModel.layerById(layers, layer.id)).find((k) => k.id === id);
   if (added) goToKeyframe(layer, added);
@@ -170,6 +214,22 @@ function deleteKeyframe(layerId, id) {
   selectKeyframe(null, null);
   updateCropBtn();
   return true;
+}
+
+/**
+ * The right click's Crop Keyframe: that keyframe chosen, the playhead on it,
+ * and the window that edits it opened there. On a video or an image that is
+ * the crop popup; a text, a shape or a bar has nothing to crop and its
+ * keyframes are edited in its own settings, so that is what opens.
+ */
+function editKeyframe(layerId, id) {
+  const layer = timelineModel.layerById(layers, layerId);
+  const k = layer && timelineModel.keyframesFor(layer).find((o) => o.id === id);
+  if (!k || busy) return;
+  selectLayer(layer.id);
+  goToKeyframe(layer, k);
+  if (layer.kind === 'gen') openGenSettings(layer.id, false);
+  else openCrop(layer.id);
 }
 
 /** Del or Backspace with a keyframe chosen. */
@@ -188,35 +248,53 @@ function goToKeyframe(layer, k) {
 
 // ---- the diamonds ----
 
-/** One diamond per keyframe, on a clip that can have them. */
-function buildClipKeyframes(clip, layer) {
+/**
+ * One diamond per keyframe of a clip that can have them, in the clip's track:
+ * a diamond reaches a little above and below the clip's strip, and inside the
+ * clip its edge would cut that off. Each says whose it is, since the track
+ * holds every clip of the row.
+ */
+function buildClipKeyframes(track, layer) {
   if (!timelineModel.keyframable(layer)) return;
   for (const k of timelineModel.keyframesFor(layer)) {
     const key = document.createElement('div');
     key.className = 'clip-key';
+    key.dataset.layerId = layer.id;
     key.dataset.keyId = k.id;
     key.title = t('Keyframe, click to go to it, drag to move it');
-    clip.appendChild(key);
+    track.appendChild(key);
     bindKeyframeDrag(key, layer.id, k.id);
   }
   paintKeyframeSelection();
 }
 
-// Half the diamond's drawn width, from the stylesheet, so its point sits on the
-// keyframe's moment.
-const CLIP_KEY_HALF = 5;
+// How far a diamond reaches past the strip, above and below alike: "so they
+// stick a little bit above and below even".
+const CLIP_KEY_REACH = 2;
 
 /**
- * Each diamond at its moment of the clip, measured from the clip's left edge.
- * One trimmed off the clip is hidden and kept, the user's rule.
+ * Each diamond at its moment of the clip and on the middle of its strip, in
+ * the track's pixels. One trimmed off the clip is hidden and kept, the user's
+ * rule.
  */
-function placeClipKeyframes(clip, layer, x0) {
-  for (const el of clip.querySelectorAll('.clip-key')) {
+function placeClipKeyframes(clip, layer) {
+  const track = clip.parentElement;
+  if (!track) return;
+  const strip = Number(clip.dataset.keyStrip) || 0;
+  // From point to point, the strip and the reach either side of it.
+  const tall = strip + 2 * CLIP_KEY_REACH;
+  const middle = clip.offsetTop + CLIP_BORDER + clip.clientHeight - strip / 2;
+  const mine = '.clip-key[data-layer-id="' + layer.id + '"]';
+  for (const el of track.querySelectorAll(mine)) {
     const k = timelineModel.keyframesFor(layer).find((o) => o.id === el.dataset.keyId);
-    const shown = !!k && k.t >= 0 && k.t <= layer.duration;
+    const shown = !!k && k.t >= 0 && k.t <= layer.duration && strip > 0;
     el.hidden = !shown;
     if (!shown) continue;
-    el.style.left = (timelineView.timeToX(tlView, layer.start + k.t) - x0 - CLIP_KEY_HALF) + 'px';
+    el.style.width = tall + 'px';
+    el.style.height = tall + 'px';
+    el.style.setProperty('--key-side', (tall / Math.SQRT2) + 'px');
+    el.style.left = (timelineView.timeToX(tlView, layer.start + k.t) - tall / 2) + 'px';
+    el.style.top = (middle - tall / 2) + 'px';
   }
 }
 
@@ -254,8 +332,9 @@ function bindKeyframeDrag(node, layerId, keyId) {
       const now = timelineModel.layerById(layers, layerId);
       const moved = now && timelineModel.keyframesFor(now).find((o) => o.id === keyId);
       if (!moved) return;
-      const clip = node.closest('.layer-clip');
-      if (clip) placeClipKeyframes(clip, now, timelineView.timeToX(tlView, now.start));
+      const clip = node.parentElement
+        && node.parentElement.querySelector('.layer-clip[data-layer-id="' + layerId + '"]');
+      if (clip) placeClipKeyframes(clip, now);
       seekComposite(now.start + moved.t);
       updatePlayhead();
     };
@@ -271,8 +350,43 @@ function bindKeyframeDrag(node, layerId, keyId) {
 // A press anywhere on the timeline that is not on a diamond lets the chosen
 // keyframe go, so Delete is back to meaning the clip. Captured, so it is seen
 // before a clip's own drag takes the press.
+//
+// It also remembers where each press was, for the double click below.
+let lastPress = null;
+let prevPress = null;
 timelineStack.addEventListener('pointerdown', (evt) => {
+  prevPress = lastPress;
+  lastPress = { x: evt.clientX, y: evt.clientY };
   if (!selectedKeyframe) return;
   if (evt.target.closest && evt.target.closest('.clip-key')) return;
   selectKeyframe(null, null);
 }, true);
+
+// How far apart the two presses of a double click may be and still be "at
+// exact the same position": the pixel the user aims at, and one either side
+// for a hand that is not a machine.
+const KEY_DOUBLE_REACH = 1;
+
+/**
+ * A double click on a picture clip adds a keyframe where it was, the user's
+ * "Double-clicking a track twice at exact the same position should add a
+ * keyframe at that position". Not on the clip's own controls, the marks, the
+ * fade handles and lines or the trim grips, which a double click on means
+ * nothing new, and not when the two presses landed apart, which is two
+ * clicks rather than one place clicked twice.
+ */
+timelineStack.addEventListener('dblclick', (evt) => {
+  if (!timelineDriving() || busy) return;
+  const clip = evt.target.closest && evt.target.closest('.layer-clip[data-layer-id]');
+  if (!clip) return;
+  if (evt.target.closest('.layer-clip__marks, .clip-fade-dot, .clip-fade-line, .layer-clip__edge')) return;
+  if (!prevPress || !lastPress
+    || Math.abs(prevPress.x - lastPress.x) > KEY_DOUBLE_REACH
+    || Math.abs(prevPress.y - lastPress.y) > KEY_DOUBLE_REACH) return;
+  const layer = timelineModel.layerById(layers, clip.dataset.layerId);
+  if (!layer || !timelineModel.keyframable(layer)) return;
+  const rect = timelineLane.getBoundingClientRect();
+  const at = timelineView.xToTime(tlView, evt.clientX - rect.left);
+  if (!timelineModel.covers(layer, at)) return;
+  addKeyframeAt(layer.id, at - layer.start);
+});

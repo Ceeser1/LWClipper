@@ -157,16 +157,58 @@ test('putting a keyframe adds it, changes it by its id, and replaces one at the 
   assert.deepEqual(layers[0].keyframes.map((k) => k.id), ['a', 'c']);
 });
 
-test('the last keyframe deleted leaves its placement on the layer', () => {
-  let layers = [vid({ keyframes: [{ id: 'a', t: 1, crop: CROP, render: INSET, anchor: 'br' }, { id: 'b', t: 3 }] })];
+test('deleting the second-to-last keyframe takes the last with it, its placement going to the whole clip', () => {
+  let layers = [vid({ keyframes: [{ id: 'a', t: 0, crop: CROP, render: INSET, anchor: 'br' }, { id: 'b', t: 3 }, { id: 'c', t: 5 }] })];
+  layers = T.removeKeyframe(layers, 'v', 'c');
+  assert.equal(layers[0].keyframes.length, 2, 'two still move the picture');
+  assert.equal(layers[0].crop, null, 'the layer is untouched while they do');
   layers = T.removeKeyframe(layers, 'v', 'b');
-  assert.equal(layers[0].keyframes.length, 1);
-  assert.equal(layers[0].crop, null, 'the layer is untouched while one is left');
-  layers = T.removeKeyframe(layers, 'v', 'a');
-  assert.deepEqual(layers[0].keyframes, []);
+  assert.deepEqual(layers[0].keyframes, [], 'the one left alone goes too');
   assert.deepEqual(layers[0].crop, CROP);
   assert.deepEqual(layers[0].render, INSET);
   assert.equal(layers[0].anchor, 'br');
+});
+
+test('whichever of the two is deleted, the clip keeps the first, never the modified second', () => {
+  const two = [vid({ keyframes: [{ id: 'a', t: 0, render: INSET }, { id: 'b', t: 3, crop: CROP }] })];
+  for (const gone of ['a', 'b']) {
+    const [l] = T.removeKeyframe(two, 'v', gone);
+    assert.deepEqual(l.keyframes, []);
+    assert.deepEqual(l.render, INSET, 'deleting ' + gone);
+    assert.equal(l.crop, null, 'deleting ' + gone);
+  }
+});
+
+test('deleting #1 of three gives the start #2 settings and leaves #2 where it is', () => {
+  const three = [vid({ keyframes: [
+    { id: 'a', t: 0, render: INSET },
+    { id: 'b', t: 2, crop: CROP, anchor: 'tl' },
+    { id: 'c', t: 5 },
+  ] })];
+  const [l] = T.removeKeyframe(three, 'v', 'a');
+  assert.deepEqual(l.keyframes.map((k) => [k.id, k.t]), [['a', 0], ['b', 2], ['c', 5]]);
+  assert.deepEqual(l.keyframes[0].crop, CROP);
+  assert.equal(l.keyframes[0].render, null);
+  assert.equal(l.keyframes[0].anchor, 'tl');
+  assert.deepEqual(G.placementAt(l, 1, SRC, HD), G.placementAt(l, 2, SRC, HD), 'it holds still until #2');
+  assert.equal(l.crop, null, 'the clip itself is untouched while keyframes remain');
+});
+
+test('a generated layer deleting #1 of three takes #2 values the same way', () => {
+  const l = T.createLayer({ id: 'g', kind: 'gen', duration: 10, gen: { form: 'bar' }, keyframes: [
+    { id: 'a', t: 0, thickness: 10 }, { id: 'b', t: 2, thickness: 90, span: 0.5 }, { id: 'c', t: 5, thickness: 20 },
+  ] });
+  const [after] = T.removeKeyframe([l], 'g', 'a');
+  assert.equal(after.keyframes.length, 3);
+  assert.equal(after.keyframes[0].thickness, 90);
+  assert.equal(after.keyframes[0].span, 0.5);
+  assert.equal(after.keyframes[0].t, 0);
+});
+
+test('a lone keyframe deleted leaves its placement on the layer', () => {
+  const [l] = T.removeKeyframe([vid({ keyframes: [{ id: 'a', t: 1, crop: CROP }] })], 'v', 'a');
+  assert.deepEqual(l.keyframes, []);
+  assert.deepEqual(l.crop, CROP);
 });
 
 test('a dragged keyframe stays on the clip and never lands on another', () => {

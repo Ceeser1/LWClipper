@@ -94,9 +94,10 @@ test('the placement in the graph is the one geometry worked out', () => {
 });
 
 test('a cropped layer crops before it scales', () => {
+  // Into a project twice the source's size, so the crop is scaled after it.
   const layers = [vid({ id: 'v', duration: 10, crop: { x: 100, y: 50, width: 960, height: 540 } })];
   const graph = graphOf(buildComposeArgs({
-    layers, project: HD, output: 'out.mp4', sources: SOURCES,
+    layers, project: { width: 3840, height: 2160, fps: 30 }, output: 'out.mp4', sources: SOURCES,
   }));
   const line = find(graph, 'crop=')[0];
   assert.ok(line.indexOf('crop=960:540:100:50') < line.indexOf('scale=1920:1080'),

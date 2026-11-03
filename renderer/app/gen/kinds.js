@@ -114,8 +114,12 @@ function openClipMenu(evt, track) {
   const at = Math.max(0, timelineView.xToTime(tlView, evt.clientX - rect.left));
   const type = track.dataset.type;
   const lane = Number(track.dataset.lane);
+  // V3.3. A diamond stands in the track beside its clip, not inside it, and
+  // names its clip itself.
+  const keyEl = evt.target.closest('.clip-key');
   const clipEl = evt.target.closest('.layer-clip[data-layer-id]');
-  const layer = clipEl && timelineModel.layerById(layers, clipEl.dataset.layerId);
+  const layerId = keyEl ? keyEl.dataset.layerId : clipEl && clipEl.dataset.layerId;
+  const layer = layerId && timelineModel.layerById(layers, layerId);
   if (layer) selectLayer(layer.id);
 
   const menu = document.createElement('div');
@@ -136,10 +140,10 @@ function openClipMenu(evt, track) {
   addMediaEntry(menu, type === 'video', at);
   // V3.3. Keyframes, on a clip that can have them and within it. On anything
   // else they are there and greyed, so the menu keeps its shape.
-  const keyEl = evt.target.closest('.clip-key');
   const keyable = !!layer && timelineModel.keyframable(layer) && timelineModel.covers(layer, at);
   item(t('Add Keyframe'), keyable, () => addKeyframeAt(layer.id, at - layer.start));
   item(t('Delete Keyframe'), !!layer && !!keyEl, () => deleteKeyframe(layer.id, keyEl.dataset.keyId));
+  item(t('Crop Keyframe'), !!layer && !!keyEl, () => editKeyframe(layer.id, keyEl.dataset.keyId));
   item(t('Split here'), !!layer && timelineModel.canSplitAt(layer, at),
     () => splitSelected(at));
   item(t('Copy'), !!layer, () => copySelected());

@@ -1195,6 +1195,13 @@ cropAcceptBtn.addEventListener('click', () => {
   // and fit is stored as null, for the same reason the whole frame is not a
   // crop: it is what the geometry works out on its own, and writing it down
   // would freeze it against a crop or a project frame that changes later.
+  // V3.3. An untouched placement follows the crop, but it was only brought up
+  // to date when the Render Position tab was opened. Cropping and accepting on
+  // the crop tab alone left it at the rect the popup opened on, the whole
+  // frame, and that was stored as a placement: the crop stretched over the
+  // frame, which is what the user saw. Brought up to date here, it is the fit
+  // again and stored as none.
+  if (!placeTouched) rebuildPlaceDraft();
   const render = (placeDraft && !sameRect(placeDraft, placeFitRect(cropTargetLayer())))
     ? { ...placeDraft }
     : null;

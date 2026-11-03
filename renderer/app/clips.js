@@ -106,6 +106,9 @@ function setLayers(next, restoring) {
   }
   dropUnusedStrips();
   renderLayerRows();
+  // V3.3. A chosen keyframe the change took away, an undo say, is chosen no
+  // longer, and the header's readout follows either way.
+  paintKeyframeSelection();
   syncComposite();
   // Before the redraw: the markers are placed from the slider, so the slider
   // has to know how long the project is first.
@@ -438,11 +441,13 @@ function buildLayerClip(track, layer) {
   const art = document.createElement('canvas');
   art.className = 'layer-clip__art';
   clip.appendChild(art);
-  // V3.3. The keyframes' own strip along the bottom of every picture clip, the
+  // V3.3. The keyframes' own strip along the bottom of a picture clip, the
   // user's: "shorten the height of videos by 10%, make that bottom 10% black and
-  // show the keyframes in that sub-bar". Sized in positionLayerClips; it takes
-  // no presses, so the clip under it still drags and trims.
-  if (layer.type === 'video') {
+  // show the keyframes in that sub-bar", and then "only show the vertical
+  // keyframe layer zone once a keyframe is added. Else just show the normal
+  // track at its 100% height". Sized in positionLayerClips; it takes no
+  // presses, so the clip under it still drags and trims.
+  if (hasKeyStrip(layer)) {
     const strip = document.createElement('div');
     strip.className = 'layer-clip__keys';
     clip.appendChild(strip);
@@ -548,12 +553,13 @@ function buildLayerClip(track, layer) {
     bindFadeDrag(line, layer.id, which, false);
   }
 
-  // V3.3. The keyframes, last of all, so a press on a diamond is the
-  // diamond's even where it sits over a grip or a fade line.
-  buildClipKeyframes(clip, layer);
-
   bindClipDrag(clip, layer.id);
   track.appendChild(clip);
+
+  // V3.3. The keyframes, in the track beside the clip like the alpha bar, so
+  // a diamond can reach past the strip above and below without the clip's
+  // edge cutting it off.
+  buildClipKeyframes(track, layer);
 
   // V2.4. The maximum alpha: a line across the clip at the height it is set to,
   // and a bar to take hold of. Video only, unlike the fades: alpha is a thing
@@ -1278,17 +1284,18 @@ function positionLayerClips() {
     // Before the marks, which inset themselves past the fade handle once they
     // know whether it is on show.
     placeFadeGrips(clip, layer, x0, width, gripW);
-    placeClipKeyframes(clip, layer, x0);
+    placeClipKeyframes(clip, layer);
     placeClipMarks(clip, width, from, visible, gripW);
     placeAlphaLine(track, clip, layer, x0, from, visible, gripW);
     drawClipArt(layer, art, x0 + from, visible, clip.clientHeight - stripH);
   }
 }
 
-// V3.3. A tenth of the clip's inside for the keyframe strip, and never less
-// than the six pixels a diamond can still be seen and caught in.
+// V3.3. The keyframe strip's share of the clip's inside: a tenth first, then
+// half as high again at the user's word, "make the keyframes line 50% higher".
+// Never less than nine pixels.
 function keyStripHeight(inner) {
-  return Math.max(6, Math.round(inner * 0.1));
+  return Math.max(9, Math.round(inner * 0.15));
 }
 
 /**
@@ -1304,10 +1311,15 @@ function clipPictureHeight(clip) {
 }
 
 // The same measure from the art canvas's side, which is the clip's content
-// box: the picture's rows above the strip on a picture clip, the whole clip on
-// a sound one.
+// box: the picture's rows above the strip on a clip that has one, the whole
+// clip on any other.
 function artAlphaSpan(layer, height) {
-  return height + (layer.type === 'video' ? CLIP_BORDER : 2 * CLIP_BORDER);
+  return height + (hasKeyStrip(layer) ? CLIP_BORDER : 2 * CLIP_BORDER);
+}
+
+/** Whether a clip shows the keyframe strip: a picture with keyframes. */
+function hasKeyStrip(layer) {
+  return layer.type === 'video' && timelineModel.keyframesFor(layer).length > 0;
 }
 
 // How wide one clip mark is, and the gap between two, matching the stylesheet.

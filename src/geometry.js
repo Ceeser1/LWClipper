@@ -515,10 +515,39 @@ const layerGeometry = (() => {
         height: h,
       };
     } else {
-      dest = fitRect(src.width, src.height, project);
+      dest = cropInPlace(source, src, project);
     }
     if (!dest) return null;
     return { src, dest };
+  }
+
+  /**
+   * Where a crop with no placement of its own goes: exactly where that part of
+   * the picture was before it was cropped, at the same size. The whole source
+   * is centred and fitted, the way it always has been, and the crop is the part
+   * of that fit it covers; what was cut away shows the black every layer sits
+   * on. With no crop it is the fit itself.
+   *
+   * V3.3, the user, 2026-11-03: "When cropping the video track #1 it shouldnt
+   * stretch on the render/preview ... Cropping a track in that render frame
+   * shouldnt stretch it, instead show it cropped. The background that is not
+   * filled stays black." Until then a crop was refitted to the frame on its
+   * own, so cropping a strip off the side zoomed the rest up to fill it.
+   */
+  function cropInPlace(source, src, project) {
+    const srcW = evenDown(Math.max(0, finite(source && source.width, 0)));
+    const srcH = evenDown(Math.max(0, finite(source && source.height, 0)));
+    const full = fitRect(srcW, srcH, project);
+    if (!full || srcW < 2 || srcH < 2) return null;
+    if (src.x === 0 && src.y === 0 && src.width >= srcW && src.height >= srcH) return full;
+    const sx = full.width / srcW;
+    const sy = full.height / srcH;
+    return {
+      x: evenDown(Math.round(full.x + src.x * sx)),
+      y: evenDown(Math.round(full.y + src.y * sy)),
+      width: Math.max(2, evenDown(Math.round(src.width * sx))),
+      height: Math.max(2, evenDown(Math.round(src.height * sy))),
+    };
   }
 
   // ---- V3.3. Placement between keyframes ----

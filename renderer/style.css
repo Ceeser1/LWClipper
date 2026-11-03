@@ -1814,16 +1814,14 @@ body.layer-trimming .playhead--timeline {
   pointer-events: none;
 }
 
-/* A keyframe: a diamond in the strip at its moment. Ten wide, which is
-   CLIP_KEY_HALF twice in keyframes.js, so its point sits on the second it
-   stands for. The element reaches a few pixels up into the picture so a strip
-   of six can still be caught; only the diamond is drawn. */
+/* A keyframe: a diamond on the middle of the strip at its moment, standing in
+   the clip's track rather than in the clip so it can reach CLIP_KEY_REACH past
+   the strip above and below. placeClipKeyframes sets the box, point to point,
+   and --key-side, the side of the square that turned a quarter fills it. Over
+   the alpha bar and its line, which can sit just above the strip. */
 .clip-key {
   position: absolute;
-  bottom: 0;
-  width: 10px;
-  height: calc(var(--key-strip, 6px) + 4px);
-  z-index: 5;
+  z-index: 7;
   cursor: ew-resize;
 }
 
@@ -1831,12 +1829,31 @@ body.layer-trimming .playhead--timeline {
   content: '';
   position: absolute;
   left: 50%;
-  bottom: calc(var(--key-strip, 6px) * 0.5);
-  width: calc(var(--key-strip, 6px) * 0.7);
-  height: calc(var(--key-strip, 6px) * 0.7);
-  transform: translate(-50%, 50%) rotate(45deg);
+  top: 50%;
+  width: var(--key-side, 9px);
+  height: var(--key-side, 9px);
+  transform: translate(-50%, -50%) rotate(45deg);
   background: #e8c860;
+  border: 1px solid rgba(0, 0, 0, 0.7);
   box-sizing: border-box;
+}
+
+/* The header's readout of the chosen keyframe, centred on the row the way the
+   preview's resolution is. */
+.keyframe-readout {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  color: #c8c8d2;
+  font-size: 12px;
+  font-weight: bold;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.keyframe-readout[hidden] {
+  display: none;
 }
 
 .clip-key:hover::before {

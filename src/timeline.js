@@ -1305,19 +1305,35 @@ const timelineModel = (() => {
   }
 
   /**
-   * Takes a keyframe off. The last one leaves its own crop and placement on the
-   * layer, so deleting it does not throw the picture back to whatever the
-   * layer held before it had any.
+   * Takes a keyframe off. One keyframe alone moves nothing, so when a delete
+   * leaves one, it goes too and what it held becomes the whole clip's: the
+   * user, "if the second-to-last keyframe gets deleted, the first should also
+   * be removed and the crop/position/etc of the first keyframe should be
+   * applied to all of the track". The first, whichever of the two was
+   * deleted, even when it is the first itself: "the track shouldnt start with
+   * the settings of the modified 2nd keyframe". The first is the clip as it was
+   * before anything was keyed, which is what it goes back to. The last one
+   * deleted on its own leaves itself, so the picture never jumps back to
+   * whatever the layer held before it had any.
    */
   function removeKeyframe(layers, id, keyId) {
     return replace(layers, id, (l) => {
       const list = keyframesFor(l);
       const gone = list.find((k) => k.id === keyId);
       if (!gone) return l;
+      // The first deleted while two or more stay after it: the start keeps a
+      // keyframe, taking the second's settings, and the second stays where it
+      // is. The user: "If #1 gets deleted #2 settings will become the new #1
+      // keyframe settings but #2 stays where it is."
+      if (gone === list[0] && list.length > 2) {
+        const { id: _id, t: _t, ...settings } = list[1];
+        return { ...l, keyframes: list.map((k) => (k === gone ? { ...k, ...settings } : k)) };
+      }
       const keyframes = list.filter((k) => k !== gone);
-      if (keyframes.length) return { ...l, keyframes };
-      if (l.kind === 'gen') return { ...l, keyframes, gen: withKeyed(l.gen, gone) };
-      return { ...l, keyframes, crop: gone.crop, render: gone.render, anchor: gone.anchor };
+      if (keyframes.length > 1) return { ...l, keyframes };
+      const keep = list[0];
+      if (l.kind === 'gen') return { ...l, keyframes: [], gen: withKeyed(l.gen, keep) };
+      return { ...l, keyframes: [], crop: keep.crop, render: keep.render, anchor: keep.anchor };
     });
   }
 

@@ -95,27 +95,34 @@ test('a taller source is pillarboxed, with equal bars left and right', () => {
   assert.equal(1920 - p.dest.x - p.dest.width, 656, 'the other bar is the same size');
 });
 
-test('a cropped source is fitted by what is left after the crop', () => {
-  // A quarter-frame crop of a 16:9 source is still 16:9, so it fills the
-  // project frame once it is scaled up.
+test('a cropped source stays where that part of it was, at the same size', () => {
+  // V3.3, the user: cropping "shouldnt stretch it, instead show it cropped. The
+  // background that is not filled stays black." A source at the project's own
+  // size is fitted at 1:1, so the crop lands on the very pixels it came from.
   const crop = { x: 100, y: 50, width: 960, height: 540 };
   const p = assertRenderersAgree(HD, HD, crop);
   assert.deepEqual(p.src, { x: 100, y: 50, width: 960, height: 540 });
-  assert.deepEqual(p.dest, { x: 0, y: 0, width: 1920, height: 1080 });
+  assert.deepEqual(p.dest, { x: 100, y: 50, width: 960, height: 540 });
   const parts = G.filterParts(p, HD);
   assert.equal(parts.crop, 'crop=960:540:100:50');
-  assert.equal(parts.scale, 'scale=1920:1080');
+  assert.equal(parts.scale, null, 'nothing to scale: it was never stretched');
 });
 
-test('a crop that changes the shape gets letterboxed like any other source', () => {
-  // Cropping a 16:9 source down to a square means the square is pillarboxed,
-  // because the project ratio rules everywhere, cropping included.
+test('a crop of a source smaller than the frame keeps the scale the whole source is fitted at', () => {
+  // A 960x540 source in a 1920x1080 project is fitted at twice its size, so
+  // its right half lands on the frame's right half, twice as big, and the left
+  // half of the frame is black.
+  const half = { width: 960, height: 540 };
+  const p = G.placeLayer({ source: half, crop: { x: 480, y: 0, width: 480, height: 540 }, project: HD });
+  assert.deepEqual(p.dest, { x: 960, y: 0, width: 960, height: 1080 });
+});
+
+test('a crop that changes the shape is cut out in place, not refitted', () => {
+  // Cropping a 16:9 source down to a square leaves the square where it was in
+  // the frame, with the cut-away sides black, rather than pillarboxing it.
   const crop = { x: 400, y: 0, width: 1080, height: 1080 };
   const p = assertRenderersAgree(HD, HD, crop);
-  assert.equal(p.dest.width, 1080);
-  assert.equal(p.dest.height, 1080);
-  assert.equal(p.dest.x, 420);
-  assert.equal(p.dest.y, 0);
+  assert.deepEqual(p.dest, { x: 400, y: 0, width: 1080, height: 1080 });
 });
 
 test('a crop is clamped inside the frame it is cropping', () => {
