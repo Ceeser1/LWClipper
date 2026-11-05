@@ -1050,6 +1050,43 @@ const layerGeometry = (() => {
     return { x, y, w, h };
   }
 
+  /**
+   * V3.6.2. boxCornerScale for a box turned `rotation` degrees about its
+   * centre: the pointer's travel taken in the box's own axes, and the corner
+   * opposite, or with `mirrored` the centre, held where it is on the screen,
+   * so the box grows away from it along its own diagonal. No holding to the
+   * frame, as a turned side has none: only the least size, and a guard of a
+   * few frames across.
+   */
+  function boxCornerScaleTurned(box, corner, dx, dy, mirrored, rotation, frame) {
+    const a = (Number(rotation) || 0) * Math.PI / 180;
+    const cos = Math.cos(a);
+    const sin = Math.sin(a);
+    const lx = dx * cos + dy * sin;
+    const ly = -dx * sin + dy * cos;
+    const sx = corner === 'tl' || corner === 'bl' ? -1 : 1;
+    const sy = corner === 'tl' || corner === 'tr' ? -1 : 1;
+    const k = mirrored ? 2 : 1;
+    const w0 = box.w / k;
+    const h0 = box.h / k;
+    const along = ((w0 + sx * lx) * w0 + (h0 + sy * ly) * h0) / (w0 * w0 + h0 * h0);
+    const most = Math.max(1, 4 * Math.max(frame.width, frame.height) / Math.max(box.w, box.h));
+    const least = Math.min(most, TEXT_BOX_MIN / Math.min(box.w, box.h));
+    const s = Math.min(most, Math.max(least, along));
+    const w = Math.max(1, Math.round(box.w * s));
+    const h = Math.max(1, Math.round(box.h * s));
+    let cx = box.x + box.w / 2;
+    let cy = box.y + box.h / 2;
+    if (!mirrored) {
+      // The opposite corner's place from the centre, before less after, turned.
+      const rx = -sx * (box.w - w) / 2;
+      const ry = -sy * (box.h - h) / 2;
+      cx += rx * cos - ry * sin;
+      cy += rx * sin + ry * cos;
+    }
+    return { x: Math.round(cx - w / 2), y: Math.round(cy - h / 2), w, h };
+  }
+
   /** Whether a box is the whole frame, which is the same as having none. */
   function isWholeBox(box, frame) {
     return !box || (Math.round(box.x) === 0 && Math.round(box.y) === 0
@@ -1067,6 +1104,7 @@ const layerGeometry = (() => {
     textBoxEdge,
     textBoxMove,
     boxCornerScale,
+    boxCornerScaleTurned,
     isWholeBox,
     TEXT_TURN_SNAP,
     textTurn,

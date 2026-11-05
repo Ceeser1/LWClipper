@@ -365,6 +365,12 @@ const timelineModel = (() => {
       // points at the golden ratio's share.
       points: Math.round(within(src.points, 3, 12, 5)),
       inner: within(src.inner, 0.1, 0.9, 0.381966),
+      // V3.6.2. The turn about the box's centre, in degrees like a text's,
+      // and a square's rounded corners, their radius in pixels at refHeight.
+      // Both read as what a shape drew before, so a 3.6 project opens as it
+      // was. Keyed, so a shape can spin and a square can round off.
+      rotation: rotationOf(src.rotation),
+      radius: within(src.radius, 0, 100000, 0),
     };
   }
 
@@ -1346,9 +1352,11 @@ const timelineModel = (() => {
   // other new settings, Invert, Outline Only and the ring's and star's
   // figures, are the layer's: a checkbox cannot be halfway on, and a star
   // cannot have five and a half points.
+  // V3.6.2. A shape's turn and a square's rounded corners as well, numbers
+  // that blend like the box.
   const GEN_KEYED = {
     text: ['box', 'rotation'],
-    shape: ['box', 'soft'],
+    shape: ['box', 'soft', 'rotation', 'radius'],
     bar: ['thickness', 'span', 'color'],
   };
 
@@ -1361,7 +1369,14 @@ const timelineModel = (() => {
         color: colourOf(src.color, '#ffffffff'),
       };
     }
-    if (form === 'shape') return { box: boxOf(src.box), soft: within(src.soft, 0, 100000, 0) };
+    if (form === 'shape') {
+      return {
+        box: boxOf(src.box),
+        soft: within(src.soft, 0, 100000, 0),
+        rotation: rotationOf(src.rotation),
+        radius: within(src.radius, 0, 100000, 0),
+      };
+    }
     return { box: boxOf(src.box), rotation: rotationOf(src.rotation) };
   }
 
@@ -1527,6 +1542,7 @@ const timelineModel = (() => {
     if (out.box) out.box = { x: out.box.x * k, y: out.box.y * k, w: out.box.w * k, h: out.box.h * k };
     if (Number.isFinite(out.thickness)) out.thickness = out.thickness * k;
     if (Number.isFinite(out.soft)) out.soft = out.soft * k;
+    if (Number.isFinite(out.radius)) out.radius = out.radius * k;
     return out;
   }
 

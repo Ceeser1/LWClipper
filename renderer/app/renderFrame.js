@@ -557,11 +557,13 @@ function openRenderCrop() {
     focusPopOut(renderModal);
     return;
   }
-  if (!cropModal.hidden || !maskModal.hidden) {
+  // V3.6.2. And so does a media window, which shows its draft in the same
+  // preview this one outlines the frame over.
+  if (!cropModal.hidden || genWindowOpen()) {
     confirmPopoutConflict([!cropModal.hidden && {
       message: t('Another crop window is open. Going on closes it and discards what it has not accepted.'),
       close: closeCrop,
-    }, maskWindowConflict()], openRenderCrop);
+    }, genWindowConflict()], openRenderCrop);
     return;
   }
   renderFromFrame = { ...compositeFrame };

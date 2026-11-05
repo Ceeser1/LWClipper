@@ -52,6 +52,10 @@ contextBridge.exposeInMainWorld('lwclipper', {
     ipcRenderer.invoke('project:save', { filePath, state, previous }),
   projectOpenDialog: () => ipcRenderer.invoke('project:openDialog'),
   openProject: (filePath) => ipcRenderer.invoke('project:open', filePath),
+  // V3.6.1. Auto-save and crash restore. A restore opens through openProject.
+  autosave: (state, origin) => ipcRenderer.invoke('autosave:write', { state, origin }),
+  crashedAutosaves: () => ipcRenderer.invoke('autosave:crashed'),
+  forgetCrashes: () => ipcRenderer.invoke('autosave:forget'),
   // The close guard. The window is held shut until the renderer answers, and
   // allowClose is the answer.
   onClosing: (callback) => {

@@ -119,6 +119,8 @@ function openFx(kind) {
   fx.background.checked = genBackdropOn;
   fontCombo.close();
   sizeCombo.close();
+  // V3.6.2. Over the media window when it is out.
+  carryOver(fx.modal, genWindow && genWindow.modal);
   fx.modal.hidden = false;
   showFx(null);
   sizeGenStage(fx.stage, fx.canvas);
@@ -130,6 +132,7 @@ function closeFx(refocus) {
   if (!fxKind) return;
   settlePick(false);
   FX[fxKind].modal.hidden = true;
+  carryBack(FX[fxKind].modal);
   fxKind = null;
   fxDraft = null;
   fxOpened = null;

@@ -1,26 +1,30 @@
 'use strict';
 
-// V3.6. Edit Mask: a video or image track's mask, in a window of its own.
+// V3.6. A video or image track's mask. V3.6.2: the crop window's third view,
+// Layer Mask, rather than a window of its own.
 //
-// The user: a right click on a video track offers "Add Mask", and once it has
-// one "Edit Mask" with "Remove Mask" below it; "The Masks editor window should
-// show a preview of the masked video track with the selectable shapes above
-// the preview", the last of them "Custom", which opens a file dialog of
-// pictures for a mask of the user's own.
+// The user, for 3.6: a right click on a video track offers "Add Mask", and
+// once it has one "Edit Mask" with "Remove Mask" below it; "The Masks editor
+// window should show a preview of the masked video track with the selectable
+// shapes above the preview", the last of them "Custom", which opens a file
+// dialog of pictures for a mask of the user's own. For 3.6.2: "Crop and Mask
+// should be the same window", reached by the clip's cogwheel, with Video
+// Frame, Layer Mask and Render Position in a menu that cycles.
 //
-// The mask belongs to the picture, so the stage shows the picture alone as it
-// is placed at the playhead, cropped and unturned, fitted and zoomable like
+// The mask belongs to the picture, so the view shows the picture alone as the
+// crop window's drafts make it, cropped and unturned, fitted and zoomable like
 // the other stages, with what the mask hides shown faintly and what it keeps
-// in full. The main window's preview shows the draft in the whole frame while
-// the window is open, the way the crop window's does. The box is edited in
-// the picture's pixels and kept as fractions of it.
+// in full. The box is edited in the picture's pixels and kept as fractions of
+// it, so a crop changed on the Video Frame view keeps the mask where it is on
+// the picture.
 //
-// Add Mask's Accept adds the mask and its Cancel adds nothing, the Add Media
-// rule. Editing on a layer with keyframes follows the crop's rule: the box and
-// the soft edge go to the keyframe at the playhead, made there if there is
-// none, and only when they changed; the rest is the layer's.
+// One Accept for all three views, the crop window's, and one Cancel. A layer
+// with no mask has none in the view until a shape is picked; Add Mask opens
+// it on a circle. On a layer with keyframes the box and the soft edge go to
+// the keyframe the window is editing, the crop's rule, and only when they
+// moved; the rest is the layer's. Remove Mask takes it off outright.
 
-const maskModal = el('maskModal');
+const maskPanel = el('maskPanel');
 const maskShapes = el('maskShapes');
 const maskFileName = el('maskFileName');
 const maskInvert = el('maskInvert');
@@ -40,26 +44,23 @@ const maskCanvas = el('maskCanvas');
 const maskBoxEl = el('maskBoxEl');
 const maskGuideX = el('maskGuideX');
 const maskGuideY = el('maskGuideY');
-const maskAcceptBtn = el('maskAcceptBtn');
-const maskCancelBtn = el('maskCancelBtn');
+const maskHint = el('maskHint');
+const maskZoomHint = el('maskZoomHint');
 
 // How faintly what the mask hides is shown on the stage.
 const MASK_GHOST = 0.25;
 
-let maskLayerId = null;
-// Opened by Add Mask: Accept adds the mask, Cancel adds nothing.
+// The layer had no mask when the window opened: whatever Accept keeps is a
+// new mask, the whole of it the layer's.
 let maskFirst = false;
-// The keyframe being edited, as keyframeToEdit gives it, or null.
-let maskKeyframe = null;
-// The picture the mask belongs to, as placed where the editor opened, in
+// The picture the mask belongs to, as the window's drafts place it, in
 // project pixels: { width, height }.
 let maskPic = null;
 // { kind, invert, soft and box in the picture's whole pixels, ring, points,
-// inner, src, by, aspect }
+// inner, src, by, aspect }, or null for no mask.
 let maskDraft = null;
-let maskOpened = null;    // the draft as it opened, as JSON
-let maskPreviewKey = '';
-let maskOwnsPreview = false;
+// The mask as the window opened on it, in fractions, as JSON, or null.
+let maskOpened = null;
 
 /** The draft from a mask, in the picture's pixels. */
 function maskDraftOf(m) {
@@ -96,141 +97,120 @@ function maskSoftCeiling() {
   return Math.max(1, Math.round((maskPic ? maskPic.height : projectFrame().height) / 2));
 }
 
-/** V3.6. Whether the mask window is open on this layer. */
-function maskWindowOn(layerId) {
-  return !maskModal.hidden && !!maskLayerId && maskLayerId === layerId;
+/**
+ * The picture the mask belongs to, as the crop window's drafts place it at
+ * the moment it is editing: its size in project pixels.
+ */
+function maskPictureSize() {
+  const layer = cropLayerId && timelineModel.layerById(layers, cropLayerId);
+  const source = layer && layerSource(layer);
+  const draft = layer && cropDraftLayer(cropRenderDraft(), false);
+  const t = layer ? (cropKeyframe ? cropKeyframe.t : compositeAt - layer.start) : 0;
+  const p = source && draft && layerGeometry.placementAt(draft, t, source, projectFrame());
+  return p ? { width: Math.max(1, p.dest.width), height: Math.max(1, p.dest.height) } : { width: 1280, height: 720 };
 }
 
-/** V3.6. The open mask window as a conflict confirmPopoutConflict can name, or null. */
-function maskWindowConflict() {
-  if (maskModal.hidden) return null;
-  return {
-    message: t('The mask window is open. Going on closes it and discards what it has not accepted.'),
-    close: cancelMask,
-  };
+/** A new mask of a kind, the largest of its shape that fits the picture. */
+function maskStarting(kind, props = {}) {
+  const m = timelineModel.maskOf({ ...props, kind });
+  return { ...m, box: genDraw.maskStartBox(m, maskPic.width, maskPic.height) };
 }
 
 /**
- * Add Mask or Edit Mask on a layer, from the right click at `at` on the
- * timeline. A crop window or Crop Render Frame open beside it asks first,
- * since only one window at a time can show its draft in the main preview.
+ * V3.6.2. The window has opened on `layer`: its mask at the moment being
+ * edited, or none, or with `add` a circle, as Add Mask has always opened.
  */
-function openMask(layerId, at) {
-  const layer = timelineModel.layerById(layers, layerId);
-  if (!layer || layer.kind === 'gen' || layer.type !== 'video' || busy) return;
-  if (maskWindowOn(layerId)) {
-    focusPopOut(maskModal);
-    return;
-  }
-  confirmPopoutConflict([cropWindowConflict(), renderWindowConflict(), maskWindowConflict()],
-    () => openMaskNow(layerId, at));
-}
-
-function openMaskNow(layerId, at) {
-  const layer = timelineModel.layerById(layers, layerId);
-  if (!layer) return;
-  // On the clip, so its picture is the one shown: where it was clicked, or
-  // its start, when the playhead is somewhere else.
-  if (!timelineModel.covers(layer, compositeAt)) {
-    const fps = projectFrame().fps || 30;
-    const want = Number.isFinite(at) ? at : layer.start;
-    seekComposite(Math.min(Math.max(want, layer.start), timelineModel.endOf(layer) - 1 / fps));
-  }
-  maskLayerId = layer.id;
+function startMaskTab(layer, add) {
   maskFirst = !layer.mask;
-  maskKeyframe = maskFirst ? null : keyframeToEdit(layer);
-  const t = maskKeyframe ? maskKeyframe.t : compositeAt - layer.start;
-  const source = layerSource(layer);
-  const p = source && layerGeometry.placementAt(layer, t, source, projectFrame());
-  maskPic = p ? { width: p.dest.width, height: p.dest.height } : { width: 1280, height: 720 };
+  maskPic = maskPictureSize();
+  const t = cropKeyframe ? cropKeyframe.t : compositeAt - layer.start;
   let mask = layer.mask ? timelineModel.maskAt(layer, t) : null;
-  if (!mask) {
-    mask = timelineModel.maskOf({ kind: 'circle' });
-    mask = { ...mask, box: genDraw.maskStartBox(mask, maskPic.width, maskPic.height) };
-  }
-  maskDraft = maskDraftOf(mask);
-  maskOpened = JSON.stringify(maskDraft);
-  maskModal.hidden = false;
-  recallStageView(maskStage, maskLayerId, maskKeyframe);
-  maskPreviewKey = '';
-  popOut(maskModal, 'mask', {
-    title: maskModal.querySelector('.modal__title').textContent,
-    cancel: cancelMask,
-    relayout: resizeMaskStage,
-    preview: previewMaskDraft,
-  });
-  showMaskDraft(null);
-  resizeMaskStage();
+  if (!mask && add) mask = maskStarting('circle');
+  maskDraft = mask ? maskDraftOf(mask) : null;
+  maskOpened = layer.mask ? JSON.stringify(maskOfDraft(maskDraftOf(timelineModel.maskAt(layer, t)))) : null;
   // A custom mask's picture, so the stage has it to draw.
-  if (mask.kind === 'custom') loadMaskPicture(mask).then(() => paintMaskStage(), () => {});
+  if (mask && mask.kind === 'custom') loadMaskPicture(mask).then(() => paintMaskStage(), () => {});
 }
 
-function closeMask() {
-  if (maskLayerId) rememberStageView(maskStage, maskLayerId, maskKeyframe);
-  popIn(maskModal);
-  maskModal.hidden = true;
-  maskGuideX.hidden = true;
-  maskGuideY.hidden = true;
-  if (maskOwnsPreview) {
-    maskOwnsPreview = false;
-    popoutPreview = null;
-    drawComposite();
-  }
-  maskLayerId = null;
-  maskKeyframe = null;
+/** The window has closed, Accept or Cancel. */
+function stopMaskTab() {
   maskDraft = null;
   maskOpened = null;
   maskPic = null;
+  maskFirst = false;
+  maskGuideX.hidden = true;
+  maskGuideY.hidden = true;
 }
 
-function cancelMask() {
-  closeMask();
+/** A shape button's first press on a layer with no mask. */
+function startMaskDraft(kind) {
+  if (!maskPic) maskPic = maskPictureSize();
+  maskDraft = maskDraftOf(maskStarting(kind));
+  if (cropTab === 'mask') showMaskTab();
 }
 
-/** The layer as Accept would leave it, for the main window's preview. */
-function maskDraftLayer() {
-  const layer = maskLayerId ? timelineModel.layerById(layers, maskLayerId) : null;
-  if (!layer || !maskDraft) return null;
-  const mask = maskOfDraft(maskDraft);
-  if (!maskKeyframe || !layer.mask) return { ...layer, mask };
-  const live = maskKeyframe.id
-    ? timelineModel.keyframesFor(layer).find((k) => k.id === maskKeyframe.id)
-    : null;
-  const base = { ...layer, mask: { ...mask, box: layer.mask.box, soft: layer.mask.soft } };
-  return timelineModel.putKeyframe([base], layer.id, {
-    ...maskKeyframe,
-    ...(live || {}),
-    mask: { box: mask.box, soft: mask.soft },
-    id: maskKeyframe.id || 'draft',
-  })[0];
+/** Remove Mask with nothing on the layer yet: the started draft goes. */
+function dropMaskDraft() {
+  maskDraft = null;
+  showMaskTab();
 }
 
 /**
- * POPOUT_FPS times a second while the window is open: the stage follows the
- * playhead, since the main window stays usable, and the main preview shows the
- * draft. A layer that has gone from under the window takes the window with it.
+ * The Layer Mask view coming up. The crop or the placement may have changed
+ * on the other views, so the picture is measured again and the draft, which
+ * is in its pixels, carried across in fractions.
  */
-function previewMaskDraft() {
-  if (maskModal.hidden || !maskDraft) return;
-  if (!timelineModel.layerById(layers, maskLayerId)) {
-    cancelMask();
-    return;
+function showMaskTab() {
+  const pic = maskPictureSize();
+  if (maskDraft && maskPic && (pic.width !== maskPic.width || pic.height !== maskPic.height)) {
+    const m = maskOfDraft(maskDraft);
+    maskPic = pic;
+    maskDraft = maskDraftOf(m);
+  } else {
+    maskPic = pic;
   }
-  const key = JSON.stringify([maskDraft, compositeAt]);
-  if (key === maskPreviewKey && !compositePlaying) return;
-  maskPreviewKey = key;
-  paintMaskStage();
-  popoutPreview = { layerId: maskLayerId, layerNow: maskDraftLayer };
-  maskOwnsPreview = true;
-  if (!compositePlaying) drawComposite();
+  showMaskDraft(null);
+  resizeMaskStage();
+}
+
+/**
+ * The mask as the drafts make it, for the layer `layer`: `layer` the mask the
+ * layer has, and `keyed` the box and soft edge for the keyframe being edited,
+ * when it has its mask already and the window is on a keyframe. Empty with no
+ * draft.
+ */
+function maskDraftParts(layer) {
+  if (!maskDraft || !maskPic) return {};
+  const mask = maskOfDraft(maskDraft);
+  if (maskFirst || !layer.mask || !cropKeyframe) return { layer: mask };
+  return {
+    layer: { ...mask, box: layer.mask.box, soft: layer.mask.soft },
+    keyed: { box: mask.box, soft: mask.soft },
+  };
+}
+
+/** What Accept writes, as maskDraftParts, less whatever did not change. */
+function maskAcceptPlan() {
+  const layer = cropLayerId && timelineModel.layerById(layers, cropLayerId);
+  if (!layer || !maskDraft || !maskPic) return {};
+  const parts = maskDraftParts(layer);
+  const now = maskOfDraft(maskDraft);
+  if (maskFirst || !layer.mask) return parts;
+  if (JSON.stringify(now) === maskOpened) return {};
+  if (!parts.keyed) return parts;
+  const opened = JSON.parse(maskOpened);
+  const moved = JSON.stringify([now.box, now.soft]) !== JSON.stringify([opened.box, opened.soft]);
+  return moved ? parts : { layer: parts.layer };
 }
 
 // ---- the stage ----
 
 function resizeMaskStage() {
-  if (maskModal.hidden || !maskDraft) return;
-  const panel = maskStage.parentElement;
-  let w = Math.round(panel.clientWidth * CROP_FRAME_SHARE);
+  if (cropModal.hidden || cropTab !== 'mask' || !maskPic) return;
+  // The crop window's whole panel, wherever it is now: out in its own window
+  // it is no longer inside cropModal.
+  const panel = maskStage.closest('.modal__panel') || maskStage.parentElement;
+  let w = Math.round(maskPanel.clientWidth * CROP_FRAME_SHARE);
   let h = Math.round(w * 9 / 16);
   const maxH = popupStageRoom(panel, maskStage, CROP_HEIGHT_SHARE);
   if (h > maxH) {
@@ -257,12 +237,13 @@ function resizeMaskStage() {
 const MASK_STAGE_MAX = 4096;
 
 /**
- * The picture as it is at the playhead, with what the mask hides faint over
- * the checkerboard and what it keeps in full, and outside the picture dimmed.
+ * The picture as the Video Frame view crops it, from the frame the crop
+ * window holds, with what the mask hides faint over the checkerboard and what
+ * it keeps in full, and outside the picture dimmed. With no mask, all of it.
  */
 function paintMaskStage() {
-  if (!maskDraft) return;
-  const layer = timelineModel.layerById(layers, maskLayerId);
+  if (!maskPic || cropTab !== 'mask') return;
+  const layer = cropLayerId && timelineModel.layerById(layers, cropLayerId);
   const ctx = maskCanvas.getContext('2d');
   const r = stageFrameRect(maskStage);
   const dpr = maskCanvas.width / Math.max(1, r.w);
@@ -277,20 +258,21 @@ function paintMaskStage() {
   ctx.fillStyle = checkerPattern(ctx, dpr);
   ctx.fillRect(0, 0, fw, fh);
   ctx.restore();
-  const entry = layer && decoders.get(layer.id);
-  const source = layer && layerSource(layer);
-  if (entry && entry.width && source) {
-    const t = maskKeyframe ? maskKeyframe.t : compositeAt - layer.start;
-    const p = layerGeometry.placementAt(layer, t, source, projectFrame());
-    if (p) {
-      const kx = entry.width / source.width;
-      const ky = entry.height / source.height;
-      const from = [p.src.x * kx, p.src.y * ky, p.src.width * kx, p.src.height * ky];
+  const src = cropFrameSource();
+  const size = sourceSize();
+  if (layer && src && size && cropDraft) {
+    const iw = src.videoWidth || src.naturalWidth || src.width || size.w;
+    const ih = src.videoHeight || src.naturalHeight || src.height || size.h;
+    const from = [cropDraft.x / size.w * iw, cropDraft.y / size.h * ih,
+      cropDraft.width / size.w * iw, cropDraft.height / size.h * ih];
+    if (!maskDraft) {
+      ctx.drawImage(src, ...from, fx, fy, fw, fh);
+    } else {
       ctx.globalAlpha = MASK_GHOST;
-      ctx.drawImage(entry.el, ...from, fx, fy, fw, fh);
+      ctx.drawImage(src, ...from, fx, fy, fw, fh);
       ctx.globalAlpha = 1;
       const k = Math.min(1, MASK_STAGE_MAX / Math.max(fw, fh));
-      const cut = maskedPicture({ ...layer, mask: maskOfDraft(maskDraft), keyframes: [] }, entry.el, from,
+      const cut = maskedPicture({ ...layer, mask: maskOfDraft(maskDraft), keyframes: [] }, src, from,
         { dw: fw * k, dh: fh * k }, layer.start);
       ctx.drawImage(cut.el, ...cut.from, fx, fy, fw, fh);
     }
@@ -299,6 +281,7 @@ function paintMaskStage() {
 }
 
 function placeMaskBox() {
+  maskBoxEl.hidden = !maskDraft;
   if (!maskDraft) return;
   const r = stageFrameRect(maskStage);
   const b = maskDraft.box;
@@ -325,7 +308,7 @@ function showMaskGuides(x, y) {
 }
 
 bindStageView(maskStage, {
-  open: () => !!maskDraft && !maskModal.hidden,
+  open: () => !!maskPic && !cropModal.hidden && cropTab === 'mask',
   empty: (evt) => evt.target === maskStage || evt.target === maskCanvas,
   redraw: () => {
     placeMaskBox();
@@ -338,14 +321,26 @@ bindStageView(maskStage, {
 
 function showMaskDraft(except) {
   const d = maskDraft;
-  if (!d) return;
   for (const b of maskShapes.querySelectorAll('button')) {
-    b.classList.toggle('btn--active', b.dataset.kind === d.kind);
+    b.classList.toggle('btn--active', !!d && b.dataset.kind === d.kind);
   }
-  const name = d.kind === 'custom' && d.src ? d.src.split(/[\\/]/).pop() : '';
+  const name = d && d.kind === 'custom' && d.src ? d.src.split(/[\\/]/).pop() : '';
   maskFileName.textContent = name;
-  maskFileName.title = d.kind === 'custom' && d.src ? d.src : '';
+  maskFileName.title = d && d.kind === 'custom' && d.src ? d.src : '';
   maskFileName.hidden = !name;
+  // With no mask there is nothing for these to say, so they wait, greyed.
+  for (const input of [maskInvert, maskSoftSlider, maskSoftBox, maskRingSlider, maskRingBox,
+    maskPointsSlider, maskPointsBox, maskInnerSlider, maskInnerBox]) input.disabled = !d;
+  // Remove Mask has something to take off once there is a mask or a draft.
+  const own = cropLayerId && timelineModel.layerById(layers, cropLayerId);
+  if (cropTab === 'mask') cropRemoveBtn.disabled = !d && !(own && own.mask);
+  if (!d) {
+    maskInvert.checked = false;
+    maskRingField.hidden = true;
+    maskPointsField.hidden = true;
+    maskInnerField.hidden = true;
+    return;
+  }
   maskInvert.checked = d.invert;
   const show = (slider, box, value) => {
     slider.value = String(value);
@@ -396,26 +391,34 @@ function restarMask(props) {
  * Custom: a picture of the user's own, from a dialog of pictures only. What
  * shows is decided once, here: its transparency when it has any, a PNG cut
  * out round a logo, and its brightness when it has none, a black and white
- * matte.
+ * matte. On a layer with no mask yet it starts one, its own proportions
+ * fitted to the picture.
  */
 async function pickMaskImage() {
-  const id = maskLayerId;
+  const id = cropLayerId;
   const picked = await window.lwclipper.openMaskImage();
-  if (maskLayerId !== id || !maskDraft || !picked || !picked.ok) return;
+  if (cropLayerId !== id || cropModal.hidden || !picked || !picked.ok) return;
   let file;
   try {
     file = await readMaskFile(picked.path);
   } catch {
-    if (maskLayerId === id) setStatus('That picture could not be read as a mask.');
+    if (cropLayerId === id) setStatus('That picture could not be read as a mask.');
     return;
   }
-  if (maskLayerId !== id || !maskDraft) return;
+  if (cropLayerId !== id || cropModal.hidden || !maskPic) return;
   const props = { kind: 'custom', src: picked.path, by: file.transparent ? 'alpha' : 'luma', aspect: file.aspect };
   maskFailed.delete(props.src + '|' + props.by);
-  changeMask(refitMask(props));
-  loadMaskPicture(timelineModel.maskOf({ ...maskDraft })).then(() => {
-    if (maskLayerId === id) {
-      maskPreviewKey = '';
+  if (maskDraft) {
+    changeMask(refitMask(props));
+  } else {
+    maskDraft = maskDraftOf(maskStarting('custom', props));
+    showMaskDraft(null);
+    placeMaskBox();
+    paintMaskStage();
+  }
+  loadMaskPicture(timelineModel.maskOf(maskOfDraft(maskDraft))).then(() => {
+    if (cropLayerId === id) {
+      cropPreviewKey = '';
       paintMaskStage();
     }
   }, () => {});
@@ -423,9 +426,13 @@ async function pickMaskImage() {
 
 for (const b of maskShapes.querySelectorAll('button')) {
   b.addEventListener('click', () => {
-    if (!maskDraft) return;
+    if (!maskPic) return;
     if (b.dataset.kind === 'custom') {
       pickMaskImage();
+      return;
+    }
+    if (!maskDraft) {
+      startMaskDraft(b.dataset.kind);
       return;
     }
     changeMask(refitMask({ kind: b.dataset.kind }));
@@ -518,52 +525,27 @@ maskBoxEl.addEventListener('pointerdown', (evt) => {
   }, () => showMaskGuides(null, null));
 });
 
-// ---- Accept, and Remove Mask ----
+// ---- the right click ----
 
-maskAcceptBtn.addEventListener('click', () => {
-  if (!maskDraft) return;
-  const id = maskLayerId;
-  const layer = timelineModel.layerById(layers, id);
-  const mask = maskOfDraft(maskDraft);
-  const opened = JSON.parse(maskOpened);
-  const changed = JSON.stringify(maskDraft) !== maskOpened;
-  const first = maskFirst;
-  const k = maskKeyframe;
-  const draft = maskDraft;
-  closeMask();
-  if (!layer) return;
-  if (first || !layer.mask) {
-    setLayers(timelineModel.setMask(layers, id, mask));
-    commitHistory();
-    return;
+/**
+ * Add Mask or Edit Mask on a layer, from the right click at `at` on the
+ * timeline: the crop window on its Layer Mask view, on the clip, so its
+ * picture is the one shown: where it was clicked, or its start, when the
+ * playhead is somewhere else.
+ */
+function openMask(layerId, at) {
+  const layer = timelineModel.layerById(layers, layerId);
+  if (!layer || layer.kind === 'gen' || layer.type !== 'video' || busy) return;
+  if (!cropWindowOn(layerId) && !timelineModel.covers(layer, compositeAt)) {
+    const fps = projectFrame().fps || 30;
+    const want = Number.isFinite(at) ? at : layer.start;
+    seekComposite(Math.min(Math.max(want, layer.start), timelineModel.endOf(layer) - 1 / fps));
   }
-  if (!changed) return;
-  if (!k) {
-    setLayers(timelineModel.setMask(layers, id, mask));
-    commitHistory();
-    return;
-  }
-  // On a keyframe: the box and the soft edge to it when they moved, made here
-  // if it is new; the rest to the layer, its own box and soft edge kept.
-  let next = timelineModel.setMask(layers, id, { ...mask, box: layer.mask.box, soft: layer.mask.soft });
-  const moved = JSON.stringify([draft.box, draft.soft]) !== JSON.stringify([opened.box, opened.soft]);
-  if (moved) {
-    const live = k.id ? timelineModel.keyframesFor(layer).find((o) => o.id === k.id) : null;
-    const keyId = k.id || newKeyframeId();
-    next = timelineModel.putKeyframe(next, id, { ...k, ...(live || {}), mask: { box: mask.box, soft: mask.soft }, id: keyId });
-    setLayers(next);
-    selectKeyframe(id, keyId);
-  } else {
-    setLayers(next);
-  }
-  commitHistory();
-});
+  selectLayer(layer.id);
+  openCrop(layer.id, 'mask', !layer.mask);
+}
 
-maskCancelBtn.addEventListener('click', cancelMask);
-
-bindPopup(maskModal, cancelMask);
-
-/** Remove Mask on the right click: one step, and the window on it closed. */
+/** Remove Mask on the right click: one step, and a window open on it asked about. */
 function removeMaskFrom(layerId) {
   const layer = timelineModel.layerById(layers, layerId);
   if (!layer || !layer.mask || busy) return;
@@ -572,5 +554,5 @@ function removeMaskFrom(layerId) {
     commitHistory();
     return true;
   };
-  confirmPopoutConflict([maskWindowOn(layerId) && maskWindowConflict()], run);
+  confirmPopoutConflict([cropWindowOn(layerId) && cropWindowConflict()], run);
 }

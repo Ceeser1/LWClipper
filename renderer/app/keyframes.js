@@ -232,7 +232,10 @@ function deleteKeyframe(layerId, id) {
   // with it (a last pair collapses), asks first.
   const left = timelineModel.keyframesFor(layer).length - 1;
   const hit = cropWindowOn(layerId) && (!cropKeyframe || cropKeyframe.id === id || left < 2);
-  return confirmPopoutConflict([hit && cropWindowConflict()], () => {
+  // V3.6.2. And the keyframe a media window has open, by the same rule.
+  const open = genKeyframeOf(layerId);
+  const genHit = genWindowOn(layerId) && (!open || open.id === id || left < 2);
+  return confirmPopoutConflict([hit && cropWindowConflict(), genHit && genWindowConflict()], () => {
     removeKeyframeNow(layerId, id);
     return true;
   });

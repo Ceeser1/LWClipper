@@ -142,26 +142,54 @@ const genDraw = (() => {
    * The outline of a shape in a box added to the path on `ctx`, which is how
    * an inverted one puts the frame's rectangle round it first.
    */
+  //
+  // V3.6.2. Turned by `shape.rotation` degrees about the box's centre, every
+  // point of the path worked out turned rather than the context being turned,
+  // so an inverted shape's frame and a soft edge's surface stay square to the
+  // frame. A square with `shape.radius`, in the canvas's pixels, has its
+  // corners rounded by that much, never more than half its shorter side.
   function tracePath(ctx, shape, b) {
     const kind = shape.kind;
+    const cx = b.x + b.w / 2;
+    const cy = b.y + b.h / 2;
+    const a = (Number(shape.rotation) || 0) * Math.PI / 180;
+    const cos = Math.cos(a);
+    const sin = Math.sin(a);
+    // Unturned, the points exactly as they are, not as cx + (x - cx).
+    const at = a
+      ? (x, y) => [cx + (x - cx) * cos - (y - cy) * sin, cy + (x - cx) * sin + (y - cy) * cos]
+      : (x, y) => [x, y];
     if (kind === 'circle' || kind === 'ring') {
-      const cx = b.x + b.w / 2;
-      const cy = b.y + b.h / 2;
-      ctx.moveTo(cx + b.w / 2, cy);
-      ctx.ellipse(cx, cy, b.w / 2, b.h / 2, 0, 0, Math.PI * 2);
+      ctx.moveTo(...at(cx + b.w / 2, cy));
+      ctx.ellipse(cx, cy, b.w / 2, b.h / 2, a, 0, Math.PI * 2);
       if (kind === 'ring') {
         const hole = 1 - (Number.isFinite(shape.ring) ? shape.ring : SHAPE_DEFAULTS.ring);
-        ctx.moveTo(cx + b.w / 2 * hole, cy);
-        ctx.ellipse(cx, cy, b.w / 2 * hole, b.h / 2 * hole, 0, 0, Math.PI * 2);
+        ctx.moveTo(...at(cx + b.w / 2 * hole, cy));
+        ctx.ellipse(cx, cy, b.w / 2 * hole, b.h / 2 * hole, a, 0, Math.PI * 2);
       }
+      return;
+    }
+    const r = kind === 'square' ? Math.min(Math.max(0, Number(shape.radius) || 0), b.w / 2, b.h / 2) : 0;
+    if (r > 0) {
+      const tl = at(b.x, b.y);
+      const tr = at(b.x + b.w, b.y);
+      const br = at(b.x + b.w, b.y + b.h);
+      const bl = at(b.x, b.y + b.h);
+      ctx.moveTo(...at(cx, b.y));
+      ctx.arcTo(...tr, ...br, r);
+      ctx.arcTo(...br, ...bl, r);
+      ctx.arcTo(...bl, ...tl, r);
+      ctx.arcTo(...tl, ...tr, r);
+      ctx.closePath();
       return;
     }
     const pts = kind === 'star'
       ? starPolygon(shape.points || SHAPE_DEFAULTS.points, shape.inner || SHAPE_DEFAULTS.inner).pts
       : SHAPE_POLYGONS[kind] || SHAPE_POLYGONS.square;
     pts.forEach(([x, y], i) => {
-      if (i) ctx.lineTo(b.x + x * b.w, b.y + y * b.h);
-      else ctx.moveTo(b.x + x * b.w, b.y + y * b.h);
+      const p = at(b.x + x * b.w, b.y + y * b.h);
+      if (i) ctx.lineTo(...p);
+      else ctx.moveTo(...p);
     });
     ctx.closePath();
   }
@@ -263,8 +291,9 @@ const genDraw = (() => {
    * so the hole's edge fades and the frame's own edges stay solid.
    */
   function drawShape(ctx, gen, width, height, surface) {
-    const s = gen.shape;
     const k = scaleOf(gen, height);
+    // V3.6.2. The rounded corners in the canvas's pixels, which tracePath takes.
+    const s = gen.shape.radius ? { ...gen.shape, radius: gen.shape.radius * k } : gen.shape;
     paintShape(ctx, s, shapeBox(gen, width, height), Math.max(0, (s.soft || 0) * k),
       s.outline ? Math.max(0.5, s.line * k) : 0, width, height, surface);
   }
@@ -788,7 +817,19 @@ const genDraw = (() => {
       box = { x: lerp(p.x, q.x), y: lerp(p.y, q.y), w: lerp(p.w, q.w), h: lerp(p.h, q.h) };
     }
     if (own === 'shape') {
-      return { ...a, shape: { ...a.shape, box, soft: lerp(a.shape.soft || 0, b.shape.soft || 0) } };
+      // V3.6.2. The turn the short way round, as a text's is.
+      const from = a.shape.rotation || 0;
+      const spin = (((((b.shape.rotation || 0) - from) % 360) + 540) % 360) - 180;
+      return {
+        ...a,
+        shape: {
+          ...a.shape,
+          box,
+          soft: lerp(a.shape.soft || 0, b.shape.soft || 0),
+          rotation: from + spin * u,
+          radius: lerp(a.shape.radius || 0, b.shape.radius || 0),
+        },
+      };
     }
     const turn = ((((b.text.rotation - a.text.rotation) % 360) + 540) % 360) - 180;
     return { ...a, text: { ...a.text, box, rotation: a.text.rotation + turn * u } };

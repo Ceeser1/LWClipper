@@ -212,7 +212,7 @@ function bindCombo(root, opts) {
   // caret down and undoes the selection.
   let fresh = false;
   box.addEventListener('mousedown', () => {
-    fresh = document.activeElement !== box;
+    fresh = box.ownerDocument.activeElement !== box;
   });
   box.addEventListener('mouseup', (evt) => {
     if (fresh) evt.preventDefault();
@@ -403,7 +403,7 @@ function editBoxMatches() {
 
 // Where a point in the box is, as an offset into its text.
 function boxOffset(node, offset) {
-  const range = document.createRange();
+  const range = textEditBox.ownerDocument.createRange();
   range.setStart(textEditBox, 0);
   range.setEnd(node, offset);
   return boxTextOf(range.cloneContents()).length;
@@ -411,7 +411,8 @@ function boxOffset(node, offset) {
 
 // The selection in the box as offsets, or null when it is somewhere else.
 function boxSelection() {
-  const sel = window.getSelection();
+  // V3.6.2. The window the box is in, which is the media window's once it is out.
+  const sel = hostWindowOf(textEditBox).getSelection();
   if (!sel.rangeCount || !textEditBox.contains(sel.anchorNode) || !textEditBox.contains(sel.focusNode)) {
     return null;
   }
@@ -425,7 +426,7 @@ function boxSelection() {
 // spans it is the end of the first, so a letter typed there goes into the
 // span whose style it takes.
 function boxPoint(at) {
-  const walker = document.createTreeWalker(textEditBox, NodeFilter.SHOW_TEXT);
+  const walker = textEditBox.ownerDocument.createTreeWalker(textEditBox, NodeFilter.SHOW_TEXT);
   let acc = 0;
   let last = null;
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
@@ -439,7 +440,7 @@ function boxPoint(at) {
 function setBoxSelection(anchor, focus) {
   const [an, ao] = boxPoint(anchor);
   const [fn, fo] = boxPoint(focus);
-  window.getSelection().setBaseAndExtent(an, ao, fn, fo);
+  hostWindowOf(textEditBox).getSelection().setBaseAndExtent(an, ao, fn, fo);
   textSel = { from: Math.min(anchor, focus), to: Math.max(anchor, focus), anchor, focus };
 }
 
@@ -452,7 +453,7 @@ function refreshEditBox() {
     return;
   }
   renderEditBox();
-  if (document.activeElement === textEditBox) {
+  if (textEditBox.ownerDocument.activeElement === textEditBox) {
     setBoxSelection(textSel.anchor ?? textSel.from, textSel.focus ?? textSel.to);
   }
 }
@@ -647,6 +648,23 @@ function openTextSettings(layer, first) {
   titleTextTools();
   textModal.hidden = false;
   recallStageView(textStage, textLayerId, genKeyframeOf(textLayerId));
+  // V3.6.2. Out into the media window, before anything below measures it.
+  popOutGenWindow(textModal, layer.id, {
+    cancel: cancelTextSettings,
+    relayout: () => {
+      if (!textDraft) return;
+      sizeTextStage();
+      paintTextPreview();
+      if (fxKind) {
+        sizeGenStage(FX[fxKind].stage, FX[fxKind].canvas);
+        paintFx(false);
+      }
+    },
+    draftGen: () => (textDraft ? textGenOf(textDraft) : null),
+  });
+  // The selection is followed in whichever document the box is in now.
+  const textDoc = textEditBox.ownerDocument;
+  if (textDoc !== document) textDoc.addEventListener('selectionchange', followTextSelection);
   sizeTextStage();
   renderEditBox();
   // Straight into typing. A new text has its placeholder word selected so
@@ -666,6 +684,7 @@ function closeTextSettings() {
   settlePick(false);
   fontCombo.close();
   sizeCombo.close();
+  popInGenWindow(textModal);
   textModal.hidden = true;
   textGuideX.hidden = true;
   textGuideY.hidden = true;
@@ -1020,14 +1039,17 @@ textEditBox.addEventListener('keydown', (evt) => {
 // the font box, the size box and the colour picker act on the words that were
 // selected before they took the focus. A caret moved off the pending style's
 // place drops it.
-document.addEventListener('selectionchange', () => {
+// V3.6.2. Named, so the media window's document can follow it as well.
+function followTextSelection() {
   if (!textDraft || textModal.hidden || textMode !== 'edit') return;
   const s = boxSelection();
   if (!s) return;
   textSel = s;
   if (textPending && !(s.from === s.to && s.from === textPendingAt)) textPending = null;
   showTextTools(null);
-});
+}
+
+document.addEventListener('selectionchange', followTextSelection);
 
 // Words copied inside the box keep their formatting, in a type of the app's
 // own beside the plain text. Anything else is pasted by the box as plain text

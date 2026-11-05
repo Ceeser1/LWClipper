@@ -612,16 +612,24 @@ function buildLayerClip(track, layer) {
     marks.appendChild(cog);
   } else if (layer.type === 'video') {
     // Video only: there is nothing to crop out of a waveform.
-    const crop = makeClipMark('clip-mark--crop', '⛶', t('Crop layer'), () => {
+    // V3.6.2. The user: the crop button becomes "a cogwheel with hover text
+    // Crop and Mask", opening the one window that has both.
+    const crop = makeClipMark('clip-mark--crop', '', t('Crop and Mask'), () => {
       selectLayer(layer.id);
       openCrop(layer.id);
     });
+    const icon = document.createElement('img');
+    icon.className = 'clip-mark__icon';
+    icon.src = '../images/settings.png';
+    icon.alt = '';
+    crop.appendChild(icon);
     // Lit when this layer is actually cropped, so the row says so without
     // anything having to be opened to find out.
     // V3.3. Or any of its keyframes is, since those are its crop now.
-    crop.classList.toggle('clip-mark--on', timelineModel.keyframesFor(layer).length
+    // V3.6.2. Or it has a mask.
+    crop.classList.toggle('clip-mark--on', !!layer.mask || (timelineModel.keyframesFor(layer).length
       ? timelineModel.keyframesFor(layer).some((k) => !!k.crop)
-      : !!layer.crop);
+      : !!layer.crop));
     marks.appendChild(crop);
     // There was a second mark here for the Render Position tab, added in 21a so
     // each layer could be opened straight onto it. Removed on 2026-09-23: the
@@ -1246,7 +1254,9 @@ function addEmptyRow(type) {
 function deleteRow(type, lane) {
   // V3.3. A row holding the track a crop window is open on asks first.
   const hit = !cropModal.hidden && layers.some((l) => l.id === cropLayerId && l.type === type && l.lane === lane);
-  confirmPopoutConflict([hit && cropWindowConflict()], () => {
+  // V3.6.2. And one holding the track a media window is open on.
+  const genHit = layers.some((l) => genWindowOn(l.id) && l.type === type && l.lane === lane);
+  confirmPopoutConflict([hit && cropWindowConflict(), genHit && genWindowConflict()], () => {
     laneRows[type] = rowsOf(type) - 1;
     setLayers(timelineModel.removeLane(layers, type, lane));
     commitHistory();

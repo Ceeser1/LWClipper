@@ -79,6 +79,16 @@ function genWords(gen) {
 function openGenSettings(id, first) {
   const layer = timelineModel.layerById(layers, id);
   if (!layer || layer.kind !== 'gen') return;
+  // V3.6.2. Its window open on this layer and on the same keyframe is brought
+  // forward; any other editor window open asks first, as the crop windows do.
+  if (!first && (genWindowOpen() || !cropModal.hidden || !renderModal.hidden)) {
+    if (genWindowOn(id) && cropModal.hidden && renderModal.hidden && sameGenTarget(layer)) {
+      focusPopOut(genWindow.modal);
+      return;
+    }
+    confirmPopoutConflict(editorWindowConflicts(), () => openGenSettings(id, false));
+    return;
+  }
   // V3.3. On a layer with keyframes the modal edits the one at the playhead,
   // or a new one there, the same rule as the crop popup. It is handed the
   // layer as that keyframe has it, so no modal has to know about keyframes;
@@ -91,6 +101,19 @@ function openGenSettings(id, first) {
 // V3.3. The keyframe the open settings modal is editing, as a draft with the
 // layer's id, or null when the layer has none.
 let genKeyframe = null;
+
+/**
+ * V3.6.2. Whether opening the media window on `layer` now would open what it
+ * already has open: the same keyframe, or the same new keyframe's moment, or
+ * neither having any. sameCropTarget's rule.
+ */
+function sameGenTarget(layer) {
+  const kf = genKeyframeToEdit(layer);
+  const open = genKeyframeOf(layer.id);
+  if (!kf || !open) return !kf && !open;
+  if (kf.id || open.id) return kf.id === open.id;
+  return Math.abs(kf.t - open.t) < 1e-6;
+}
 
 // V3.3. The keyframe the open modal is on, when it is this layer's: what its
 // remembered zoom and pan are kept under.
@@ -253,13 +276,15 @@ function drawClipShape(layer, ctx, leftX, width, height) {
   const w = h * genDraw.shapeAspect(shape);
   // V3.5. Outline Only as the band it is in the picture, at the share of the
   // shape's height it has there, and never thinner than a pixel.
+  const frame = projectFrame();
+  const full = genDraw.shapeBox(layer.gen, frame.width, frame.height);
+  const toIcon = h * genDraw.scaleOf(layer.gen, frame.height) / Math.max(1, full.h);
   let band = 0;
-  if (shape.outline) {
-    const frame = projectFrame();
-    const full = genDraw.shapeBox(layer.gen, frame.width, frame.height);
-    band = Math.max(1, h * shape.line * genDraw.scaleOf(layer.gen, frame.height) / Math.max(1, full.h));
-  }
-  genDraw.drawShapeIcon(ctx, shape, { x, y: (height - h) / 2, w, h }, band);
+  if (shape.outline) band = Math.max(1, shape.line * toIcon);
+  // V3.6.2. Turned as it is in the picture, and its corners rounded at the
+  // same share of its height.
+  genDraw.drawShapeIcon(ctx, { ...shape, radius: (shape.radius || 0) * toIcon },
+    { x, y: (height - h) / 2, w, h }, band);
   ctx.lineWidth = 1;
   ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
   ctx.stroke();

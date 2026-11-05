@@ -56,6 +56,16 @@ function openBarSettings(layer, first) {
   barOpened = JSON.stringify(barDraft);
   barBackground.checked = genBackdropOn;
   barModal.hidden = false;
+  // V3.6.2. Out into the media window, before anything below measures it.
+  popOutGenWindow(barModal, layer.id, {
+    cancel: cancelBarSettings,
+    relayout: () => {
+      if (!barDraft) return;
+      sizeGenStage(barStage, barCanvas);
+      paintBarPreview();
+    },
+    draftGen: () => (barDraft ? barGenOf(barDraft) : null),
+  });
   showBarDraft(null);
   sizeGenStage(barStage, barCanvas);
   paintBarPreview();
@@ -63,6 +73,7 @@ function openBarSettings(layer, first) {
 
 function closeBarSettings() {
   settlePick(false);
+  popInGenWindow(barModal);
   barModal.hidden = true;
   barLayerId = null;
   barDraft = null;

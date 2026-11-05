@@ -150,25 +150,61 @@ function placeFitRect(layer) {
   return placement ? { ...placement.dest } : null;
 }
 
+// V3.6.2. The views in the cycling menu's order: after Video Frame comes Layer
+// Mask, then Render Position, then Video Frame again.
+const CROP_TABS = ['frame', 'mask', 'place'];
+
+/** The menu with `cropTab` in the middle and its neighbours either side. */
+function placeCropCycle() {
+  const i = CROP_TABS.indexOf(cropTab);
+  const prev = CROP_TABS[(i + CROP_TABS.length - 1) % CROP_TABS.length];
+  for (const b of cropTabs.querySelectorAll('.crop-cycle__item')) {
+    const tab = b.dataset.tab;
+    b.style.order = tab === cropTab ? '2' : tab === prev ? '1' : '3';
+    b.classList.toggle('crop-cycle__item--current', tab === cropTab);
+  }
+}
+
+function stepCropTab(by) {
+  const i = CROP_TABS.indexOf(cropTab);
+  showCropTab(CROP_TABS[(i + by + CROP_TABS.length) % CROP_TABS.length]);
+}
+
 function showCropTab(which) {
-  cropTab = which === 'place' ? 'place' : 'frame';
+  cropTab = CROP_TABS.includes(which) ? which : 'frame';
+  // Simple editing has only the crop, and no menu to choose another with.
+  if (!timelineDriving()) cropTab = 'frame';
   const place = cropTab === 'place';
-  cropTabFrame.classList.toggle('btn--active', !place);
-  cropTabPlace.classList.toggle('btn--active', place);
-  cropFramePanel.hidden = place;
+  const mask = cropTab === 'mask';
+  const frame = cropTab === 'frame';
+  placeCropCycle();
+  cropFramePanel.hidden = !frame;
   placePanel.hidden = !place;
+  maskPanel.hidden = !mask;
   // The crop tab's own controls go with it. The zoom is a view into the source
   // and the presets are crop ratios: neither has anything to say about where
   // the result lands.
-  cropHint.hidden = place;
-  cropSize.hidden = place;
-  cropZoomRow.hidden = place;
-  cropPresets.hidden = place;
+  cropHint.hidden = !frame;
+  cropSize.hidden = !frame;
+  cropZoomRow.hidden = !frame;
+  cropPresets.hidden = !frame;
   placeHint.hidden = !place;
   placeZoomHint.hidden = !place;
   placeSize.hidden = !place;
   placeScaleRow.hidden = !place;
-  if (!place) {
+  maskHint.hidden = !mask;
+  maskZoomHint.hidden = !mask;
+  // V3.6.2. The user: "Reset Crop", "Reset Position", "Remove Mask". Three
+  // calls, so check-locales sees each literal.
+  if (mask) cropRemoveBtn.textContent = t('Remove Mask');
+  else if (place) cropRemoveBtn.textContent = t('Reset Position');
+  else cropRemoveBtn.textContent = t('Reset Crop');
+  if (mask) {
+    showMaskTab();
+    return;
+  }
+  cropRemoveBtn.disabled = false;
+  if (frame) {
     // The crop stage is inside a panel that was hidden while the other tab was
     // up, so nothing has been able to measure it: a window resized during the
     // Render Position tab left it at the size it had before. Re-fitting on the
@@ -619,7 +655,10 @@ function drawPlaceStage() {
   // is not on screen is placing it blind. Its decoder was parked on that
   // layer's own first frame when the popup opened.
   paintLayers(ctx, virtual, compositeAt, null, target ? target.id : null);
-  if (target) drawLayerInto(ctx, virtual, { ...target, rotation: placeRotation }, cropDraft, placeDraft);
+  // V3.6.2. With the Layer Mask view's draft on it, which is the layer's own
+  // mask here: the crop and the placement are handed in as drafts already.
+  const masked = maskDraft ? { mask: maskOfDraft(maskDraft), keyframes: [] } : {};
+  if (target) drawLayerInto(ctx, virtual, { ...target, rotation: placeRotation, ...masked }, cropDraft, placeDraft);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   dimOutsideFrame(ctx, placeCanvas, placeStage);
   drawPlaceBox();
@@ -658,8 +697,14 @@ function drawPlaceBox() {
   if (placeRotation) placeSize.textContent += ', ' + placeRotation + '°';
 }
 
-cropTabFrame.addEventListener('click', () => showCropTab('frame'));
-cropTabPlace.addEventListener('click', () => showCropTab('place'));
+// V3.6.2. Each item opens its view, and the arrows step round the menu.
+for (const b of cropTabs.querySelectorAll('.crop-cycle__item')) {
+  b.addEventListener('click', () => {
+    if (b.dataset.tab !== cropTab) showCropTab(b.dataset.tab);
+  });
+}
+cropCyclePrev.addEventListener('click', () => stepCropTab(-1));
+cropCycleNext.addEventListener('click', () => stepCropTab(1));
 
 // The popup is sized against the window, so resizing it while the popup is open
 // has to redo the lot: the frame, the snapshot in it, and the box on top.
@@ -667,6 +712,11 @@ function resizeCropStage() {
   if (cropModal.hidden || !cropDraft) return;
   if (cropTab === 'place') {
     drawPlaceStage();
+    return;
+  }
+  // V3.6.2. Layer Mask's stage.
+  if (cropTab === 'mask') {
+    resizeMaskStage();
     return;
   }
   const size = sourceSize();
@@ -1162,20 +1212,29 @@ for (const preset of CROP_PRESETS) {
   cropPresets.appendChild(btn);
 }
 
-function openCrop(layerId) {
+/**
+ * V3.6.2. `tab` is the view it opens on: 'frame', the default and what the
+ * clip's cogwheel opens, or 'mask' from the right click's Add Mask and Edit
+ * Mask, where `addMask` starts a layer with none on a circle, as Add Mask did.
+ */
+function openCrop(layerId, tab = 'frame', addMask = false) {
   if (busy) return;
   // V3.3. The main window stays usable while a crop window is out, so this can
   // be asked for with one already open. On the same layer and keyframe it is
   // brought forward; anything else asks before the open one is thrown away,
   // and so does Crop Render Frame, whose Accept would move the frame under it.
-  // V3.6. And so does a mask window, which shows its draft in the same preview.
-  if (!cropModal.hidden || !renderModal.hidden || !maskModal.hidden) {
+  // V3.6.2. And so does an open media window, which shows its draft in the
+  // same preview.
+  if (!cropModal.hidden || !renderModal.hidden || genWindowOpen()) {
     const want = timelineDriving()
       ? ((layerId && timelineModel.layerById(layers, layerId)) || cropTargetLayer())
       : null;
     const same = !cropModal.hidden && (!timelineDriving() || sameCropTarget(want));
-    if (same && renderModal.hidden && maskModal.hidden) {
+    if (same && renderModal.hidden && !genWindowOpen()) {
       focusPopOut(cropModal);
+      // Brought forward on the view asked for.
+      if (tab !== cropTab) showCropTab(tab);
+      if (addMask && !maskDraft) startMaskDraft('circle');
       return;
     }
     confirmPopoutConflict([
@@ -1184,8 +1243,8 @@ function openCrop(layerId) {
         close: closeCrop,
       },
       renderWindowConflict(),
-      maskWindowConflict(),
-    ], () => openCrop(layerId));
+      genWindowConflict(),
+    ], () => openCrop(layerId, tab, addMask));
     return;
   }
   cropFrozen = null;
@@ -1230,14 +1289,20 @@ function openCrop(layerId) {
   cropZoomValue.textContent = percent + '%';
   // Whatever a previous session left part way towards a step is not this one's.
   zoomWheelResidue = 0;
+  // V3.6.2. Crop and Mask in advanced editing, where it has the three views.
+  // Two calls, so check-locales sees both literals.
+  if (timelineDriving()) cropTitle.textContent = t('Crop and Mask');
+  else cropTitle.textContent = t('Crop');
   cropModal.hidden = false;
   // V3.3. The Render Position tab opens on the view this keyframe, or this
   // layer, was last left at, and fitted when there is none.
   recallStageView(placeStage, cropLayerId, cropKeyframe);
+  // V3.6.2. And Layer Mask's.
+  if (cropLayerId) recallStageView(maskStage, cropLayerId, cropKeyframe);
   // V3.3. Out into a window of its own, before anything below measures it.
   cropPreviewKey = '';
   popOut(cropModal, 'crop', {
-    title: cropModal.querySelector('.modal__title').textContent,
+    title: cropTitle.textContent,
     cancel: closeCrop,
     relayout: resizeCropStage,
     preview: previewCropDraft,
@@ -1272,7 +1337,10 @@ function openCrop(layerId) {
   // taken from whatever it opens on rather than being left at their defaults
   // for the first slider move to invent.
   adoptPlaceRect(placeDraft, target ? placeFitRect(target) : null);
-  showCropTab('frame');
+  // V3.6.2. The layer's mask, or none, for the Layer Mask view; Add Mask's
+  // circle when that is what opened it.
+  if (target) startMaskTab(target, addMask);
+  showCropTab(tab);
 }
 
 /**
@@ -1284,10 +1352,16 @@ function openCrop(layerId) {
 let cropPreviewKey = '';
 let cropPreviewLayers = null;
 let cropPreviewAt = -1;
+/** V3.6.2. The placement Accept would store, or null for centre and fit. */
+function cropRenderDraft() {
+  return placeTouched && placeDraft ? { ...placeDraft } : null;
+}
+
 function previewCropDraft() {
   if (cropModal.hidden || !cropDraft) return;
-  const render = placeTouched && placeDraft ? { ...placeDraft } : null;
-  const key = JSON.stringify([cropLayerId, cropDraft, render, placeAnchor, placeRotation]);
+  const render = cropRenderDraft();
+  // V3.6.2. The Layer Mask view's draft is part of what the preview shows.
+  const key = JSON.stringify([cropLayerId, cropDraft, render, placeAnchor, placeRotation, maskDraft]);
   // V3.3. The main window stays usable, so the Render Position tab's picture
   // of the other layers follows the playhead and any edit made there too.
   if (cropTab === 'place' && placeDraft && (layers !== cropPreviewLayers || compositeAt !== cropPreviewAt)) {
@@ -1315,9 +1389,13 @@ function previewCropDraft() {
  * with the playhead anywhere on the clip it shows the final picture with this
  * crop in it, a keyframe's crop blended along the move like any other.
  */
-function cropDraftLayer(render) {
-  const layer = cropLayerId ? timelineModel.layerById(layers, cropLayerId) : null;
-  if (!layer) return null;
+// V3.6.2. With the Layer Mask view's draft as well, unless `withMask` is
+// false, which is how that view asks where the picture it masks lands.
+function cropDraftLayer(render, withMask = true) {
+  const own = cropLayerId ? timelineModel.layerById(layers, cropLayerId) : null;
+  if (!own) return null;
+  const m = withMask ? maskDraftParts(own) : {};
+  const layer = m.layer ? { ...own, mask: m.layer } : own;
   const size = sourceSize();
   const crop = (size && !isFullFrame(cropDraft, size)) ? { ...cropDraft } : null;
   if (!cropKeyframe) return { ...layer, crop, render, anchor: placeAnchor, rotation: placeRotation };
@@ -1332,6 +1410,7 @@ function cropDraftLayer(render) {
       render,
       anchor: placeAnchor,
       rotation: placeRotation,
+      ...(m.keyed ? { mask: m.keyed } : {}),
       id: cropKeyframe.id || 'draft',
     });
   return next[0];
@@ -1367,6 +1446,9 @@ function cropWindowConflict() {
 function closeCrop() {
   // V3.3. Kept before the keyframe it belongs to is let go, Accept or Cancel.
   rememberStageView(placeStage, cropLayerId, cropKeyframe);
+  // V3.6.2. And Layer Mask's, whose draft goes with the window.
+  if (cropLayerId) rememberStageView(maskStage, cropLayerId, cropKeyframe);
+  stopMaskTab();
   // V3.3. Back from its own window, and the main window's preview back to
   // the layer as it is, which Accept has by now made it.
   cropFrozen = null;
@@ -1412,6 +1494,22 @@ cropRemoveBtn.addEventListener('click', () => {
   // position it puts the layer back to centre and fit. One button rather than
   // two, because the tabs are two views of one layer and Remove means "take
   // back what this tab does".
+  // V3.6.2. Remove Mask takes the mask off outright, keyframes and all, the
+  // right click's Remove Mask. With none on the layer yet it drops the draft
+  // a shape button started, and the window stays.
+  if (cropTab === 'mask') {
+    const own = cropLayerId && timelineModel.layerById(layers, cropLayerId);
+    if (!own || !own.mask) {
+      dropMaskDraft();
+      return;
+    }
+    setLayers(timelineModel.removeMask(layers, cropLayerId));
+    commitHistory();
+    closeCrop();
+    updateCropOverlays();
+    updateCropBtn();
+    return;
+  }
   // V3.3. On a keyframe it is that keyframe's crop or placement that goes,
   // and a keyframe the popup was about to make is made without it.
   if (cropKeyframe && cropLayerId) {
@@ -1467,10 +1565,17 @@ cropAcceptBtn.addEventListener('click', () => {
   // V3.3. On a layer with keyframes the popup was editing one, the one at the
   // playhead, and Accept writes that keyframe or makes it there: the user's
   // rule for an edit between two of them.
+  // V3.6.2. The mask the Layer Mask view settled on: what the layer keeps,
+  // and the box and soft edge for the keyframe when they moved on one.
+  const maskPlan = maskAcceptPlan();
   if (cropKeyframe && cropLayerId) {
     rememberView('crop', cropLayerId, cropKeyframe,
       rect ? { zoom: viewZoom, panX: viewPanX, panY: viewPanY } : null);
-    saveCropKeyframe({ crop: rect, render, anchor: placeAnchor, rotation: placeRotation });
+    if (maskPlan.layer) setLayers(timelineModel.setMask(layers, cropLayerId, maskPlan.layer));
+    saveCropKeyframe({
+      crop: rect, render, anchor: placeAnchor, rotation: placeRotation,
+      ...(maskPlan.keyed ? { mask: maskPlan.keyed } : {}),
+    });
     commitHistory();
     closeCrop();
     updateCropOverlays();
@@ -1485,6 +1590,7 @@ cropAcceptBtn.addEventListener('click', () => {
     // finds the same one lit and scaling goes on sticking to it.
     setLayers(timelineModel.setLayer(layers, cropLayerId,
       { render, anchor: placeAnchor, rotation: placeRotation }));
+    if (maskPlan.layer) setLayers(timelineModel.setMask(layers, cropLayerId, maskPlan.layer));
   }
   commitHistory();
   closeCrop();

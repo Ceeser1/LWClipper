@@ -40,6 +40,9 @@ function pickColor(color, onInput) {
   if (pickSettle) settlePick(false);
   pickState = colorModel.stateOf(color);
   pickOnInput = onInput || null;
+  // V3.6.2. Over the media window when it is out, which is where it was
+  // asked for from.
+  carryOver(colorModal, genWindow && genWindow.modal);
   colorModal.hidden = false;
   drawPickWheel();
   showPick(null);
@@ -56,6 +59,7 @@ function settlePick(accept) {
   pickOnInput = null;
   pickState = null;
   colorModal.hidden = true;
+  carryBack(colorModal);
   resolve(out);
 }
 
@@ -64,7 +68,7 @@ function settlePick(accept) {
 // rather than on every move. Pixel by pixel, which at 200 across is forty
 // thousand, with the rim faded over one pixel so it is not jagged.
 function drawPickWheel() {
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = hostWindowOf(colorWheel).devicePixelRatio || 1;
   const size = Math.max(1, Math.round(colorWheel.clientWidth * dpr));
   if (colorWheelCanvas.width === size && colorWheelCanvas.dataset.drawn) return;
   colorWheelCanvas.width = size;
@@ -148,9 +152,8 @@ function bindPickDrag(target, apply) {
   target.addEventListener('pointerdown', (evt) => {
     if (evt.button !== 0 || !pickState) return;
     evt.preventDefault();
-    if (document.activeElement && colorModal.contains(document.activeElement)) {
-      document.activeElement.blur();
-    }
+    const focused = colorModal.ownerDocument.activeElement;
+    if (focused && colorModal.contains(focused)) focused.blur();
     apply(evt);
     beginDrag(target, evt, apply, null);
   });

@@ -164,8 +164,10 @@ const cropArrowLeft = el('cropArrowLeft');
 const cropArrowRight = el('cropArrowRight');
 const cropPanHint = el('cropPanHint');
 const cropTabs = el('cropTabs');
-const cropTabFrame = el('cropTabFrame');
-const cropTabPlace = el('cropTabPlace');
+// V3.6.2. The cycling menu's arrows; its three items are found under cropTabs.
+const cropCyclePrev = el('cropCyclePrev');
+const cropCycleNext = el('cropCycleNext');
+const cropTitle = el('cropTitle');
 const cropFramePanel = el('cropFramePanel');
 const cropZoomRow = el('cropZoomRow');
 const placePanel = el('placePanel');

@@ -18,8 +18,8 @@ function resetApp() {
   closeCrop();
   // V3.3. Crop Render Frame can be open beside the main window now.
   if (!renderModal.hidden) closeRenderCrop();
-  // V3.6. And a mask window.
-  if (!maskModal.hidden) closeMask();
+  // V3.6.2. And a media window.
+  closeGenWindow();
   // V3.3. A cleared project has no views; done after closeCrop, which keeps
   // the view of whatever it was open on.
   adoptViews(null);
@@ -367,7 +367,9 @@ drawWaveform();
 refreshToolsLabel();
 // Translates the interface and fills the settings panel. Async, so the first
 // frame is English even when another language is saved; it is one frame.
-loadSettings();
+// V3.6.1. Then the restore question after a crash, once it can be asked in
+// the language the app is set to.
+loadSettings().then(offerRestore);
 // Builds the format toggle from what the main process says it can write. Async,
 // so the row starts empty for a frame; nothing is enabled until a file is
 // loaded anyway.

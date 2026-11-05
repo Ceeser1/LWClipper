@@ -96,9 +96,13 @@ function popOut(modal, name, { title, cancel, relayout, preview }) {
   const state = { win, panel, gone: false, timer: 0, settle: [] };
   popped.set(modal, state);
 
-  // Escape in the window cancels that window.
+  // Escape in the window cancels that window, or V3.6.2 the dialog carried
+  // over it, the colour picker or Outline or Shadow, when one is open.
   doc.addEventListener('keydown', (evt) => {
-    if (evt.key === 'Escape') cancel();
+    if (evt.key !== 'Escape') return;
+    const over = topPopupIn(doc);
+    if (over) over.cancel();
+    else cancel();
   });
   win.addEventListener('resize', () => relayout());
   // The window does not know its size at once, so the fit is done again over
@@ -126,6 +130,11 @@ function popIn(modal) {
   popped.delete(modal);
   clearInterval(state.timer);
   for (const t of state.settle) clearTimeout(t);
+  // V3.6.2. Anything carried over it comes home first, or it would go with
+  // the window's document.
+  for (const sub of [...carried.keys()]) {
+    if (sub.ownerDocument === state.win.document) carryBack(sub);
+  }
   if (state.panel.ownerDocument !== document) modal.appendChild(state.panel);
   modal.classList.remove('modal--popped');
   if (!state.gone) {
@@ -136,6 +145,44 @@ function popIn(modal) {
       // Already closed.
     }
   }
+}
+
+// ---- V3.6.2. Dialogs carried over a popped out window ----
+//
+// The media windows open dialogs of their own over themselves: the colour
+// picker, and Outline and Shadow over Edit Text. Those live in the main
+// window's document, where a popped out media window cannot show them, so
+// while one is open it is moved into that window, over its panel, and moved
+// back as it closes: the same move popOut makes with a panel, so every
+// listener on it goes on working.
+
+const carried = new Map();
+
+/** `sub` into the window `modal` is popped out in, if it is. */
+function carryOver(sub, modal) {
+  const state = modal && popped.get(modal);
+  if (!state || state.gone || sub.ownerDocument === state.win.document) return;
+  carried.set(sub, { parent: sub.parentNode, next: sub.nextSibling });
+  state.win.document.body.appendChild(sub);
+}
+
+/** `sub` back where it came from, if it was carried. */
+function carryBack(sub) {
+  const home = carried.get(sub);
+  if (!home) return;
+  carried.delete(sub);
+  if (home.next && home.next.parentNode === home.parent) home.parent.insertBefore(sub, home.next);
+  else home.parent.appendChild(sub);
+}
+
+/** The highest popup open in another window's document, or null. */
+function topPopupIn(doc) {
+  let top = null;
+  for (const p of popups) {
+    if (p.modal.hidden || p.modal.ownerDocument !== doc) continue;
+    if (!top || p.layer > top.layer) top = p;
+  }
+  return top;
 }
 
 /**

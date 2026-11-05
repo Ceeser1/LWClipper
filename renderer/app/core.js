@@ -211,7 +211,9 @@ function topPopup() {
   for (const p of popups) {
     // V3.3. A popup out in a window of its own leaves the main window free, so
     // it is not the main window's popup on top.
-    if (p.modal.hidden || p.modal.classList.contains('modal--popped')) continue;
+    // V3.6.2. Nor is a dialog carried over to one of those windows.
+    if (p.modal.hidden || p.modal.classList.contains('modal--popped')
+      || p.modal.ownerDocument !== document) continue;
     if (!top || p.layer > top.layer) top = p;
   }
   return top;

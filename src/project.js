@@ -150,6 +150,23 @@ const projectFile = (() => {
     return { at: source.at, pool: source.pool, steps: source.steps };
   }
 
+  /**
+   * V3.6.1. What an auto-save says about itself: which run of the app wrote
+   * it, and the project file it is a copy of, null for a project never
+   * saved. Null for every file that is not an auto-save, which is every file
+   * the user saves. A fact about the file rather than the project, like
+   * metaOf, so it is not part of documentOf either.
+   */
+  function autosaveOf(source) {
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return null;
+    if (typeof source.session !== 'string' || !source.session) return null;
+    const o = source.origin;
+    const origin = o && typeof o === 'object' && typeof o.path === 'string' && o.path
+      ? { path: o.path, name: typeof o.name === 'string' ? o.name : '' }
+      : null;
+    return { session: source.session, origin };
+  }
+
   /** Whether the document has changed since a given copy of it. */
   function sameDocument(a, b) {
     return deepEqual(documentOf(a), documentOf(b));
@@ -185,7 +202,7 @@ const projectFile = (() => {
    * saved. Both are worked out by the main process, because this module does
    * not touch a filesystem.
    */
-  function serialise(state, { stats = {}, relatives = {}, app = '', name = '' } = {}) {
+  function serialise(state, { stats = {}, relatives = {}, app = '', name = '', autosave = null } = {}) {
     const doc = documentOf(state);
     return {
       format: FORMAT,
@@ -194,6 +211,8 @@ const projectFile = (() => {
       // writes and what parse reads back are the same set of fields by
       // construction rather than by two lists agreeing.
       ...metaOf({ app, savedAt: new Date().toISOString(), name }),
+      // V3.6.1. Only on an auto-save; undefined is not written at all.
+      autosave: autosaveOf(autosave) || undefined,
       project: doc.project,
       trim: doc.trim,
       layers: doc.layers.map((l) => ({
@@ -248,6 +267,7 @@ const projectFile = (() => {
       meta: metaOf(doc),
       views: viewsOf(doc.views),
       history: historyOf(doc.history),
+      autosave: autosaveOf(doc.autosave),
     };
   }
 
@@ -374,6 +394,7 @@ const projectFile = (() => {
     metaOf,
     viewsOf,
     historyOf,
+    autosaveOf,
     sameDocument,
     serialise,
     stringify,

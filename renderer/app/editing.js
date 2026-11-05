@@ -203,7 +203,8 @@ function splitSelected(at) {
   if (next === layers) return false;
   // V3.3. The track a crop window is open on asks first.
   const id = selectedLayerId;
-  return confirmPopoutConflict([cropWindowOn(id) && cropWindowConflict()], () => {
+  // V3.6.2. And so does the track a media window is open on.
+  return confirmPopoutConflict([cropWindowOn(id) && cropWindowConflict(), genWindowOn(id) && genWindowConflict()], () => {
     const now = timelineModel.splitLayer(layers, id, at);
     if (now === layers) return false;
     setLayers(now);
@@ -297,7 +298,8 @@ function deleteSelected() {
   // V3.3. The user: "if you are trying to delete a track while a
   // crop/keyframe window is open it must show a warning modal".
   const id = selectedLayerId;
-  return confirmPopoutConflict([cropWindowOn(id) && cropWindowConflict()], () => {
+  // V3.6.2. And so does the track a media window is open on.
+  return confirmPopoutConflict([cropWindowOn(id) && cropWindowConflict(), genWindowOn(id) && genWindowConflict()], () => {
     const now = timelineModel.removeLayer(layers, id);
     if (now.length === layers.length) return false;
     setLayers(now);
@@ -431,6 +433,12 @@ function subMenuEntry(menu, label, enabled, fill) {
  */
 function addGenMedia(form, at, variant) {
   if (!timelineDriving() || busy) return;
+  // V3.6.2. Its settings open in a window, and only one editor window at a
+  // time: asked before anything is added, so Abort adds nothing.
+  if (!cropModal.hidden || !renderModal.hidden || genWindowOpen()) {
+    confirmPopoutConflict(editorWindowConflicts(), () => addGenMedia(form, at, variant));
+    return;
+  }
   const gen = GEN_KINDS[form].starter(variant);
   const rows = rowsOf('video');
   genAddBefore = { layers, rows: laneRows.video, selected: selectedLayerId };
@@ -438,6 +446,10 @@ function addGenMedia(form, at, variant) {
   if (added.inserted) laneRows.video = rows + 1;
   selectedLayerId = added.layer.id;
   setLayers(added.layers);
+  // V3.6.2. What the add made, so its Cancel can tell whether anything has
+  // happened since, see cancelGenAdd.
+  genAddBefore.after = layers;
+  genAddBefore.id = added.layer.id;
   openGenSettings(added.layer.id, true);
 }
 
@@ -475,7 +487,7 @@ let choiceCancelId = null;
  * around that, so the ticks arrive through `onCheck` instead and the caller
  * keeps its own copy of them.
  */
-function showChoice({ title, message, footer, entries, checks, onCheck, buttons, cancel }) {
+function showChoice({ title, message, footer, entries, checks, single, onCheck, buttons, cancel }) {
   // Nothing may stack: a second question while one is up would strand the
   // first one's promise forever.
   if (choiceSettle) settleChoice(choiceCancelId);
@@ -527,9 +539,13 @@ function showChoice({ title, message, footer, entries, checks, onCheck, buttons,
     line.className = 'choice-row choice-row--check';
     if (row.title) line.title = row.title;
     const box = document.createElement('input');
-    box.type = 'checkbox';
+    // V3.6.1. `single` makes the rows a pick of one, which is the restore
+    // window's list of auto-saves. The answer still arrives through onCheck,
+    // as a list holding the one picked.
+    box.type = single ? 'radio' : 'checkbox';
+    if (single) box.name = 'choicePick';
     box.className = 'choice-row__check';
-    box.checked = !!row.checked;
+    box.checked = !!row.checked && !(single && ticked.size);
     if (box.checked) ticked.add(row.id);
     const name = document.createElement('div');
     name.className = 'choice-row__name';
@@ -547,6 +563,7 @@ function showChoice({ title, message, footer, entries, checks, onCheck, buttons,
     size.textContent = row.note || '';
     line.appendChild(size);
     box.addEventListener('change', () => {
+      if (single) ticked.clear();
       if (box.checked) ticked.add(row.id);
       else ticked.delete(row.id);
       drawFooter();
@@ -744,7 +761,7 @@ async function openProjectFile() {
  * arrived and there is nothing left to ask first.
  */
 async function openProjectPath(filePath) {
-  if (busy || !filePath) return;
+  if (busy || !filePath) return false;
   // Advanced editing first, so the guard below is asked in the mode that has a
   // project to lose. Asked in simple editing it always answers yes, because
   // projectDirty() reports false there, and a timeline switched away from five
@@ -759,15 +776,18 @@ async function openProjectPath(filePath) {
   // nothing else about the window changed either.
   if (!(await confirmDiscard())) {
     if (wasSimple) await setAdvancedEditing(false);
-    return;
+    return false;
   }
   const result = await window.lwclipper.openProject(filePath);
   if (!result || !result.ok) {
     if (wasSimple) await setAdvancedEditing(false);
     setProjectError(result && result.error);
-    return;
+    return false;
   }
-  await adoptProject(result);
+  // V3.6.1. Whether it opened, which the restore window needs to know.
+  const opened = await adoptProject(result);
+  if (!opened && wasSimple) await setAdvancedEditing(false);
+  return opened;
 }
 
 /**
@@ -793,7 +813,7 @@ async function adoptProject(result) {
       ],
       cancel: 'cancel',
     });
-    if (choice !== 'continue') return;
+    if (choice !== 'continue') return false;
   }
 
   // Through the model, which is what says what a layer is. A file carries a
@@ -824,8 +844,8 @@ async function adoptProject(result) {
   // would; opening has already asked about unsaved work.
   if (!cropModal.hidden) closeCrop();
   if (!renderModal.hidden) closeRenderCrop();
-  // V3.6. And a mask window.
-  if (!maskModal.hidden) closeMask();
+  // V3.6.2. And a media window, the way its Cancel would.
+  closeGenWindow();
   // V3.3. Before anything opens an editor on the new layers.
   adoptViews(result.views);
   setLayers(keep, true);
@@ -872,16 +892,41 @@ async function adoptProject(result) {
   // included. So Continue having dropped them in memory reads as unsaved work,
   // which is exactly what it is: the file still references them, and it is
   // never rewritten by opening it. That is what keeps Continue a safe choice.
-  markProjectSaved({
-    layers: built,
-    project: compositeFrame || { width: 0, height: 0, fps: 0 },
-    trim: result.doc.trim,
-  });
+  //
+  // V3.6.1. A restored auto-save is the exception: it is a copy, and what
+  // counts as saved is the project file it is a copy of, when that is still
+  // there, or nothing at all for a project never saved. So the work the crash
+  // would have lost shows as unsaved until it is saved.
+  if (result.restored && result.savedDoc) {
+    const own = result.savedDoc.project;
+    markProjectSaved({
+      ...result.savedDoc,
+      layers: result.savedDoc.layers.map((l) => timelineModel.createLayer(l)),
+      // The frame the way opening that file would set it: its own, with the
+      // same fallback rate, or when it has none the one its first picture
+      // gives it, which is the one on screen. Measured: a file saved with no
+      // frame read as changed even with every step undone.
+      project: own.width > 1 && own.height > 1
+        ? { width: own.width, height: own.height, fps: own.fps > 0 ? own.fps : COMPOSITE_FALLBACK.fps }
+        : (compositeFrame || { width: 0, height: 0, fps: 0 }),
+    });
+  } else if (result.restored) {
+    projectSaved = null;
+    updateProjectUi();
+  } else {
+    markProjectSaved({
+      layers: built,
+      project: compositeFrame || { width: 0, height: 0, fps: 0 },
+      trim: result.doc.trim,
+    });
+  }
   // Two calls rather than one with a ternary in it, for the reason spelled out
   // over setProjectError: the checker sees a literal and nothing else.
   if (trouble.length) setStatus('Project opened without {n} track(s).', { n: trouble.length });
   else if (maskless.size) setStatus('Project opened. {n} mask picture(s) could not be found, those tracks have no mask.', { n: maskless.size });
+  else if (result.restored) setStatus('Project restored from its auto-save.');
   else setStatus('Project opened.');
+  return true;
 }
 
 /**
@@ -1059,12 +1104,14 @@ document.addEventListener('keydown', (evt) => {
   const frameHit = !renderModal.hidden && compositeFrame
     && ((target.width && target.width !== compositeFrame.width)
       || (target.height && target.height !== compositeFrame.height));
-  // V3.6. And so does one that would change the track a mask window is open on.
-  const maskHit = !maskModal.hidden && maskLayerId
-    && JSON.stringify(timelineModel.layerById(layers, maskLayerId) || null)
-      !== JSON.stringify(target.layers.find((l) => l.id === maskLayerId) || null);
+  // V3.6.2. And so does one that would change the track a media window is
+  // open on. (The mask is the crop window's since 3.6.2, so cropHit has it.)
+  const genId = genWindowLayerId();
+  const genHit = !!genId
+    && JSON.stringify(timelineModel.layerById(layers, genId) || null)
+      !== JSON.stringify(target.layers.find((l) => l.id === genId) || null);
   confirmPopoutConflict([cropHit && cropWindowConflict(), frameHit && renderWindowConflict(),
-    maskHit && maskWindowConflict()], () => {
+    genHit && genWindowConflict()], () => {
     // Asked about one step; if anything moved the stack meanwhile, nothing.
     if ((redoing ? projectHistory.redo(undoStack) : projectHistory.undo(undoStack)).present !== target) return;
     applyHistory(redoing ? projectHistory.redo(undoStack) : projectHistory.undo(undoStack));

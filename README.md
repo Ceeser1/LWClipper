@@ -8,7 +8,10 @@ Switch on **Use advanced Editing** in the settings and the same window becomes a
 small multi-track editor instead: several video and audio layers on one
 timeline, each trimmed, moved, cropped and mixed on its own, composited into one
 file. A project is saved as a `.lwc` file, which holds the arrangement and
-references the media rather than copying it.
+references the media rather than copying it. Every three minutes the open
+project is also auto-saved, the last five copies kept in
+`%LOCALAPPDATA%\LWClipper\data\autosave`, and after a crash the next start
+offers to restore it.
 
 Windows only. The interface is in English and German.
 
@@ -80,7 +83,8 @@ icon or the wording ever change.
   that all of it can be tested under plain `node --test`: `timeline.js` is the
   layer model, `geometry.js` places a layer in the output frame, `composer.js`
   turns both into an ffmpeg filter graph, `history.js` is the undo stack,
-  `project.js` reads and writes `.lwc`, `filmstrip.js` extracts clip thumbnails
+  `project.js` reads and writes `.lwc`, `autosave.js` decides which auto-saves
+  to keep and which runs crashed, `filmstrip.js` extracts clip thumbnails
   and `progress.js` reads ffmpeg's own progress blocks for the bar and the ETA.
   `renderer/timelineView.js` is the zoom and scroll arithmetic, and the only one
   of them that lives with the window.

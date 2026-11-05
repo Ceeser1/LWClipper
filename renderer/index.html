@@ -483,9 +483,16 @@
            same layer and the same Accept, which is why they are tabs rather
            than two popups. Hidden in simple editing, where there is no project
            frame to place anything in. -->
-      <div id="cropTabs" class="crop-tabs" hidden>
-        <button id="cropTabFrame" class="crop-tab btn--active">Video Frame</button>
-        <button id="cropTabPlace" class="crop-tab">Render Position</button>
+      <!-- V3.6.2. Three views now, Layer Mask the third, in a menu that
+           cycles: the one open in the middle and bigger, the one before it on
+           the left and the one after it on the right, each a button, with an
+           arrow either side. The order is placed by the script. -->
+      <div id="cropTabs" class="crop-cycle" hidden>
+        <button id="cropCyclePrev" class="crop-cycle__arrow" data-no-translate>&lt;</button>
+        <button class="crop-cycle__item" data-tab="frame">Video Frame</button>
+        <button class="crop-cycle__item" data-tab="mask">Layer Mask</button>
+        <button class="crop-cycle__item" data-tab="place">Render Position</button>
+        <button id="cropCycleNext" class="crop-cycle__arrow" data-no-translate>&gt;</button>
       </div>
       <!-- The frame is a snapshot of whatever the preview is showing, painted
            into a canvas rather than a second <video>: it holds no file open and
@@ -533,8 +540,71 @@
           <div id="placeAngle" class="text-angle" data-no-translate hidden></div>
         </div>
       </div>
+      <!-- V3.6. Edit Mask: the shapes over the picture the mask belongs to,
+           then Invert and Soft Edge and what a ring or a star has, then the
+           picture with the mask's box on it. V3.6.2 moved it in here from a
+           window of its own, the crop window's third view. -->
+      <div id="maskPanel" class="mask-panel" hidden>
+        <div class="mask-shapes-row">
+          <div id="maskShapes" class="gen-choice mask-shapes">
+            <button data-kind="circle">Circle</button>
+            <button data-kind="square">Square</button>
+            <button data-kind="triangle">Triangle</button>
+            <button data-kind="star">Star</button>
+            <button data-kind="ring">Ring</button>
+            <button data-kind="custom">Custom...</button>
+          </div>
+          <span id="maskFileName" class="mask-file" data-no-translate hidden></span>
+        </div>
+        <div class="gen-grid">
+          <div class="gen-field">
+            <label class="gen-check gen-check--field"><input id="maskInvert" type="checkbox" /> Invert Mask</label>
+          </div>
+          <div class="gen-field">
+            <span class="gen-field__caption">Soft Edge:</span>
+            <input id="maskSoftSlider" class="gen-field__slider" type="range" min="0" max="360" step="1" value="0" />
+            <input id="maskSoftBox" class="gen-num" type="text" inputmode="numeric" maxlength="4" />
+            <span class="gen-field__unit">px</span>
+          </div>
+          <div id="maskRingField" class="gen-field" hidden>
+            <span class="gen-field__caption">Ring Thickness:</span>
+            <input id="maskRingSlider" class="gen-field__slider" type="range" min="5" max="95" step="1" value="40" />
+            <input id="maskRingBox" class="gen-num" type="text" inputmode="numeric" maxlength="2" />
+            <span class="gen-field__unit">%</span>
+          </div>
+          <div id="maskPointsField" class="gen-field" hidden>
+            <span class="gen-field__caption">Points:</span>
+            <input id="maskPointsSlider" class="gen-field__slider" type="range" min="3" max="12" step="1" value="5" />
+            <input id="maskPointsBox" class="gen-num" type="text" inputmode="numeric" maxlength="2" />
+            <span class="gen-field__unit"></span>
+          </div>
+          <div id="maskInnerField" class="gen-field" hidden>
+            <span class="gen-field__caption">Inner Radius:</span>
+            <input id="maskInnerSlider" class="gen-field__slider" type="range" min="10" max="90" step="1" value="38" />
+            <input id="maskInnerBox" class="gen-num" type="text" inputmode="numeric" maxlength="2" />
+            <span class="gen-field__unit">%</span>
+          </div>
+        </div>
+        <div id="maskStage" class="gen-stage">
+          <canvas id="maskCanvas" class="gen-canvas"></canvas>
+          <div id="maskGuideX" class="text-guide text-guide--x" hidden></div>
+          <div id="maskGuideY" class="text-guide text-guide--y" hidden></div>
+          <div id="maskBoxEl" class="crop-box text-box">
+            <div class="crop-grip crop-grip--left" data-edge="left"></div>
+            <div class="crop-grip crop-grip--right" data-edge="right"></div>
+            <div class="crop-grip crop-grip--top" data-edge="top"></div>
+            <div class="crop-grip crop-grip--bottom" data-edge="bottom"></div>
+            <div class="crop-corner crop-corner--tl" data-corner="tl"></div>
+            <div class="crop-corner crop-corner--tr" data-corner="tr"></div>
+            <div class="crop-corner crop-corner--bl" data-corner="bl"></div>
+            <div class="crop-corner crop-corner--br" data-corner="br"></div>
+          </div>
+        </div>
+      </div>
       <div id="placeHint" class="hint-label crop-hint" hidden>Drag the picture to place it, and the scale to resize it</div>
       <div id="placeZoomHint" class="hint-label crop-hint" hidden>Scroll to zoom, drag empty space or with the middle button to pan, double-click empty space to fit the frame</div>
+      <div id="maskHint" class="hint-label crop-hint" hidden>Drag the sides to stretch the mask, a corner to scale it and inside it to move it, hold Shift to keep its centre</div>
+      <div id="maskZoomHint" class="hint-label crop-hint" hidden>Scroll to zoom, drag empty space or with the middle button to pan, double-click empty space to fit the frame</div>
       <div id="cropHint" class="hint-label crop-hint">Hold Shift to move bars mirrored, Ctrl on a corner to move it diagonally, both to keep the shape</div>
       <div id="cropSize" class="crop-size"></div>
       <div id="placeSize" class="crop-size" hidden></div>
@@ -563,7 +633,8 @@
       <div class="crop-presets" id="cropPresets"></div>
       <div class="crop-actions">
         <button id="cropAcceptBtn" class="crop-accept-btn">Accept</button>
-        <button id="cropRemoveBtn" class="crop-remove-btn">Remove</button>
+        <!-- V3.6.2. Reset Crop, Reset Position or Remove Mask, by the view. -->
+        <button id="cropRemoveBtn" class="crop-remove-btn">Reset Crop</button>
         <button id="cropCancelBtn">Cancel</button>
       </div>
     </div>
@@ -670,76 +741,6 @@
     </div>
   </div>
 
-  <!-- V3.6. Edit Mask: the shapes over the picture the mask belongs to, then
-       Invert and Soft Edge and what a ring or a star has, then the picture
-       with the mask's box on it. It opens in a window of its own. -->
-  <div id="maskModal" class="modal" hidden>
-    <div class="modal__panel modal__panel--crop" role="dialog" aria-modal="true"
-      aria-labelledby="maskTitle">
-      <div id="maskTitle" class="modal__title">Edit Mask</div>
-      <div class="mask-shapes-row">
-        <div id="maskShapes" class="gen-choice mask-shapes">
-          <button data-kind="circle">Circle</button>
-          <button data-kind="square">Square</button>
-          <button data-kind="triangle">Triangle</button>
-          <button data-kind="star">Star</button>
-          <button data-kind="ring">Ring</button>
-          <button data-kind="custom">Custom...</button>
-        </div>
-        <span id="maskFileName" class="mask-file" data-no-translate hidden></span>
-      </div>
-      <div class="gen-grid">
-        <div class="gen-field">
-          <label class="gen-check gen-check--field"><input id="maskInvert" type="checkbox" /> Invert Mask</label>
-        </div>
-        <div class="gen-field">
-          <span class="gen-field__caption">Soft Edge:</span>
-          <input id="maskSoftSlider" class="gen-field__slider" type="range" min="0" max="360" step="1" value="0" />
-          <input id="maskSoftBox" class="gen-num" type="text" inputmode="numeric" maxlength="4" />
-          <span class="gen-field__unit">px</span>
-        </div>
-        <div id="maskRingField" class="gen-field" hidden>
-          <span class="gen-field__caption">Ring Thickness:</span>
-          <input id="maskRingSlider" class="gen-field__slider" type="range" min="5" max="95" step="1" value="40" />
-          <input id="maskRingBox" class="gen-num" type="text" inputmode="numeric" maxlength="2" />
-          <span class="gen-field__unit">%</span>
-        </div>
-        <div id="maskPointsField" class="gen-field" hidden>
-          <span class="gen-field__caption">Points:</span>
-          <input id="maskPointsSlider" class="gen-field__slider" type="range" min="3" max="12" step="1" value="5" />
-          <input id="maskPointsBox" class="gen-num" type="text" inputmode="numeric" maxlength="2" />
-          <span class="gen-field__unit"></span>
-        </div>
-        <div id="maskInnerField" class="gen-field" hidden>
-          <span class="gen-field__caption">Inner Radius:</span>
-          <input id="maskInnerSlider" class="gen-field__slider" type="range" min="10" max="90" step="1" value="38" />
-          <input id="maskInnerBox" class="gen-num" type="text" inputmode="numeric" maxlength="2" />
-          <span class="gen-field__unit">%</span>
-        </div>
-      </div>
-      <div id="maskStage" class="gen-stage">
-        <canvas id="maskCanvas" class="gen-canvas"></canvas>
-        <div id="maskGuideX" class="text-guide text-guide--x" hidden></div>
-        <div id="maskGuideY" class="text-guide text-guide--y" hidden></div>
-        <div id="maskBoxEl" class="crop-box text-box">
-          <div class="crop-grip crop-grip--left" data-edge="left"></div>
-          <div class="crop-grip crop-grip--right" data-edge="right"></div>
-          <div class="crop-grip crop-grip--top" data-edge="top"></div>
-          <div class="crop-grip crop-grip--bottom" data-edge="bottom"></div>
-          <div class="crop-corner crop-corner--tl" data-corner="tl"></div>
-          <div class="crop-corner crop-corner--tr" data-corner="tr"></div>
-          <div class="crop-corner crop-corner--bl" data-corner="bl"></div>
-          <div class="crop-corner crop-corner--br" data-corner="br"></div>
-        </div>
-      </div>
-      <div class="hint-label crop-hint">Drag the sides to stretch the mask, a corner to scale it and inside it to move it, hold Shift to keep its centre</div>
-      <div class="hint-label crop-hint">Scroll to zoom, drag empty space or with the middle button to pan, double-click empty space to fit the frame</div>
-      <div class="crop-actions">
-        <button id="maskAcceptBtn" class="crop-accept-btn">Accept</button>
-        <button id="maskCancelBtn">Cancel</button>
-      </div>
-    </div>
-  </div>
 
   <!-- Shape Settings: the colour, and the shape's box on the render preview.
        Sides stretch it, corners scale it keeping its proportions, Shift keeps
@@ -788,6 +789,14 @@
           <input id="shapeInnerBox" class="gen-num" type="text" inputmode="numeric" maxlength="2" />
           <span class="gen-field__unit">%</span>
         </div>
+        <!-- V3.6.2. A square's rounded corners, in pixels, up to half its
+             shorter side. -->
+        <div id="shapeRadiusField" class="gen-field" hidden>
+          <span class="gen-field__caption">Rounded Corners:</span>
+          <input id="shapeRadiusSlider" class="gen-field__slider" type="range" min="0" max="180" step="1" value="0" />
+          <input id="shapeRadiusBox" class="gen-num" type="text" inputmode="numeric" maxlength="4" />
+          <span class="gen-field__unit">px</span>
+        </div>
       </div>
       <div id="shapeStage" class="gen-stage">
         <canvas id="shapeCanvas" class="gen-canvas"></canvas>
@@ -802,9 +811,15 @@
           <div class="crop-corner crop-corner--tr" data-corner="tr"></div>
           <div class="crop-corner crop-corner--bl" data-corner="bl"></div>
           <div class="crop-corner crop-corner--br" data-corner="br"></div>
+          <!-- V3.6.2. The user: "a new dot at its outer center a bit away from
+               the border connected with a line which acts as the rotate-dot".
+               Inside the box, so it turns with it. -->
+          <div class="shape-rotor-line"></div>
+          <div id="shapeRotor" class="shape-rotor text-rotor"></div>
         </div>
+        <div id="shapeAngle" class="text-angle" data-no-translate hidden></div>
       </div>
-      <div class="hint-label crop-hint">Drag the sides to stretch the shape, a corner to scale it and inside it to move it, hold Shift to keep its centre</div>
+      <div class="hint-label crop-hint">Drag the sides to stretch the shape, a corner to scale it, inside it to move it and the dot above it to turn it, hold Shift to keep its centre</div>
       <div class="hint-label crop-hint">Scroll to zoom, drag empty space or with the middle button to pan, double-click empty space to fit the frame</div>
       <label class="gen-check"><input id="shapeBackground" type="checkbox" /> Enable Background</label>
       <div class="crop-actions">
@@ -1033,6 +1048,7 @@
   <script src="../src/history.js"></script>
   <script src="../src/project.js"></script>
   <script src="../src/claim.js"></script>
+  <script src="../src/autosave.js"></script>
   <script src="timelineView.js"></script>
   <!-- The window itself, in the order it loads. Plain scripts sharing one
        scope: a file may use anything from the files above it while the page
@@ -1061,6 +1077,7 @@
   <script src="app/gen/effects.js"></script>
   <script src="app/mask.js"></script>
   <script src="app/export.js"></script>
+  <script src="app/autosave.js"></script>
   <script src="app/startup.js"></script>
 </body>
 </html>

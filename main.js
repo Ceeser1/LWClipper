@@ -25,6 +25,7 @@ const waveform = require('./src/waveform');
 const filmstrip = require('./src/filmstrip');
 const projectFile = require('./src/project');
 const projectClaim = require('./src/claim');
+const autosave = require('./src/autosave');
 const settings = require('./src/settings');
 const locales = require('./src/locales');
 // The dialogs below are the only sentences this side of the app writes, and
@@ -177,8 +178,36 @@ function createWindow() {
   // straight through, which is what stops this from being a loop.
   mainWindow.on('close', (evt) => {
     if (closeAllowed || !mainWindow || mainWindow.isDestroyed()) return;
+    // V3.6.1. A page that has crashed can never answer, and holding the
+    // window for it left a window nothing but Task Manager could close.
+    if (mainWindow.webContents.isCrashed()) return;
     evt.preventDefault();
     mainWindow.webContents.send('app:closing');
+  });
+
+  // V3.6.1. The page crashing while the app goes on: the window would stay
+  // blank. It is loaded again instead, and this run's own auto-saves are then
+  // offered the way a crashed run's are at startup. Popped out editors run in
+  // the same page and went down with it, so they go.
+  //
+  // Loaded half a second later rather than from inside this event: measured,
+  // a reload started in here gave a page that crashed again 130 ms later.
+  // Not again within ten seconds of the last one, so a page that crashes as
+  // it loads is not loaded for ever; that one is left closable, and the next
+  // start offers the restore.
+  let lastReload = 0;
+  mainWindow.webContents.on('render-process-gone', (_evt, details) => {
+    if (!details || details.reason === 'clean-exit') return;
+    pageCrashed = true;
+    for (const child of mainWindow.getChildWindows()) {
+      if (!child.isDestroyed()) child.destroy();
+    }
+    if (Date.now() - lastReload < 10000) return;
+    lastReload = Date.now();
+    setTimeout(() => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+    }, 500);
   });
 
   // V3.3. The crop popups as windows of their own, at the user's word,
@@ -284,6 +313,8 @@ app.whenReady().then(() => {
   // Anything still here is left over from a run that never reached will-quit.
   waveform.clearPeaks();
   filmstrip.clearStrips();
+  // V3.6.1. Before the window, so the page's first question finds the answer.
+  startSession();
 
   // Step 4 of the V2 plan, a throwaway development path. Reached only with
   // --v2-slice on the command line, and the folder it loads is outside the
@@ -309,6 +340,7 @@ app.on('window-all-closed', () => {
 app.on('will-quit', () => {
   waveform.clearPeaks();
   filmstrip.clearStrips();
+  endSession();
 });
 
 function sendProgress(frac, text) {
@@ -848,6 +880,23 @@ function writeClaim(filePath, name, sources, previous) {
 }
 
 /**
+ * A stat per source for its fingerprint, and its path relative to `dir`.
+ * V3.6.1 gave this its own function, since an auto-save needs the stats too;
+ * it passes no `dir`, so it records no relative paths.
+ */
+function sourceFacts(state, dir) {
+  const stats = {};
+  const relatives = {};
+  for (const layer of state.layers || []) {
+    if (!layer.src || stats[layer.src] !== undefined) continue;
+    stats[layer.src] = statOrNull(layer.src);
+    const rel = dir ? projectFile.relativePath(dir, layer.src, path) : null;
+    if (rel) relatives[layer.src] = rel;
+  }
+  return { stats, relatives };
+}
+
+/**
  * Write the project.
  *
  * The renderer hands over the state and this side adds what only it can know:
@@ -856,15 +905,7 @@ function writeClaim(filePath, name, sources, previous) {
  */
 ipcMain.handle('project:save', (_event, { filePath, state, previous }) => {
   try {
-    const dir = path.dirname(filePath);
-    const stats = {};
-    const relatives = {};
-    for (const layer of state.layers || []) {
-      if (!layer.src || stats[layer.src] !== undefined) continue;
-      stats[layer.src] = statOrNull(layer.src);
-      const rel = projectFile.relativePath(dir, layer.src, path);
-      if (rel) relatives[layer.src] = rel;
-    }
+    const { stats, relatives } = sourceFacts(state, path.dirname(filePath));
     const doc = projectFile.serialise(state, {
       stats, relatives, app: app.getVersion(),
       // Step 18. The file records what it is called, so that a claim in the
@@ -895,6 +936,24 @@ ipcMain.handle('project:openDialog', async () => {
   return openProject(result.filePaths[0]);
 });
 
+/** Where each layer's file is now, and which custom mask pictures are gone. */
+function resolveSources(parsed, dir) {
+  const statuses = {};
+  for (const layer of parsed.doc.layers) {
+    const ref = layer.ref || (layer.src ? { path: layer.src } : null);
+    if (!ref) continue;
+    const found = projectFile.candidatesFor(ref, dir, path.join)
+      .map((p) => ({ path: p, stat: statOrNull(p) }));
+    statuses[layer.id] = projectFile.statusFor(ref, found);
+  }
+  // V3.6. A custom mask's picture that is no longer where it was. The track
+  // still opens, without its mask, rather than being left out.
+  const masksMissing = parsed.doc.layers
+    .filter((l) => l.mask && typeof l.mask === 'object' && l.mask.src && !statOrNull(l.mask.src))
+    .map((l) => l.id);
+  return { statuses, masksMissing };
+}
+
 /**
  * Read a project and work out where each of its files actually is.
  *
@@ -912,21 +971,11 @@ function openProject(filePath) {
   }
   const parsed = projectFile.parse(text);
   if (!parsed.ok) return { ok: false, error: parsed.error, version: parsed.version };
+  // V3.6.1. An auto-save, from the restore window or opened by hand, opens
+  // as the project it is a copy of.
+  if (parsed.autosave) return openAutosave(filePath, parsed);
 
-  const dir = path.dirname(filePath);
-  const statuses = {};
-  for (const layer of parsed.doc.layers) {
-    const ref = layer.ref || (layer.src ? { path: layer.src } : null);
-    if (!ref) continue;
-    const found = projectFile.candidatesFor(ref, dir, path.join)
-      .map((p) => ({ path: p, stat: statOrNull(p) }));
-    statuses[layer.id] = projectFile.statusFor(ref, found);
-  }
-  // V3.6. A custom mask's picture that is no longer where it was. The track
-  // still opens, without its mask, rather than being left out.
-  const masksMissing = parsed.doc.layers
-    .filter((l) => l.mask && typeof l.mask === 'object' && l.mask.src && !statOrNull(l.mask.src))
-    .map((l) => l.id);
+  const { statuses, masksMissing } = resolveSources(parsed, path.dirname(filePath));
   const name = path.basename(filePath, '.' + PROJECT_EXT);
   // Opening is when the app learns this project exists, so it claims here too.
   // The identity to match on is what the file says it was last called, which is
@@ -951,6 +1000,225 @@ function openProject(filePath) {
 }
 
 ipcMain.handle('project:open', (_event, filePath) => openProject(filePath));
+
+// ---- auto-save and crash restore ----
+//
+// V3.6.1. src/autosave.js holds the rules: what an auto-save is called, how
+// many are kept, and which runs crashed. Everything here is the disk.
+
+const session = { id: null, crashed: [] };
+// This run's page crashed and was loaded again. Its own auto-saves are then
+// offered too, and its marker stays at quit until that has been answered.
+let pageCrashed = false;
+
+function autosaveDir() {
+  return path.join(app.getPath('userData'), autosave.FOLDER);
+}
+
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // There, but not ours to signal, is still there.
+    return !!(err && err.code === 'EPERM');
+  }
+}
+
+function markersOnDisk() {
+  let names;
+  try {
+    names = fs.readdirSync(autosaveDir());
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const file of names) {
+    const id = autosave.markerId(file);
+    if (!id) continue;
+    let marker = null;
+    try {
+      marker = autosave.markerOf(fs.readFileSync(path.join(autosaveDir(), file), 'utf8'));
+    } catch {
+      // Unreadable still names its run, which is then taken as gone.
+    }
+    out.push(marker && marker.id === id ? marker : { id, pid: 0, startedAt: '' });
+  }
+  return out;
+}
+
+function removeMarker(id) {
+  try {
+    fs.rmSync(path.join(autosaveDir(), autosave.markerName(id)), { force: true });
+  } catch {
+    // Held open or already gone. It is read again next start either way.
+  }
+}
+
+/** Which runs crashed, read before this one says it is running. */
+function startSession() {
+  session.id = autosave.newSessionId(Date.now(), process.pid);
+  session.crashed = autosave.crashedSessions(markersOnDisk(), pidAlive, session.id);
+  try {
+    fs.mkdirSync(autosaveDir(), { recursive: true });
+    fs.writeFileSync(path.join(autosaveDir(), autosave.markerName(session.id)),
+      JSON.stringify({ id: session.id, pid: process.pid, startedAt: new Date().toISOString() }) + '\n',
+      'utf8');
+  } catch {
+    // A data folder that cannot be written has nothing to restore from either.
+  }
+}
+
+function endSession() {
+  if (session.id && !pageCrashed) removeMarker(session.id);
+}
+
+function forgetCrashes() {
+  for (const id of session.crashed) removeMarker(id);
+  session.crashed = [];
+  pageCrashed = false;
+}
+
+/** Every auto-save in the folder, with what the restore window shows of it. */
+function autosavesOnDisk() {
+  const dir = autosaveDir();
+  let names;
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const file of names) {
+    if (path.extname(file).toLowerCase() !== '.' + PROJECT_EXT) continue;
+    const full = path.join(dir, file);
+    let parsed;
+    try {
+      parsed = projectFile.parse(fs.readFileSync(full, 'utf8'));
+    } catch {
+      continue;
+    }
+    if (!parsed.ok || !parsed.autosave) continue;
+    out.push({
+      file: full,
+      savedAt: parsed.meta.savedAt,
+      session: parsed.autosave.session,
+      origin: parsed.autosave.origin,
+      tracks: parsed.doc.layers.length,
+    });
+  }
+  return out;
+}
+
+/**
+ * Write one auto-save and let the oldest past five go. Written beside its
+ * place and renamed into it, so a crash in the middle of a write leaves the
+ * last good copy rather than half a file. No relative paths: they would be
+ * relative to this folder, which no media is ever beside.
+ */
+ipcMain.handle('autosave:write', (_event, { state, origin }) => {
+  try {
+    const dir = autosaveDir();
+    fs.mkdirSync(dir, { recursive: true });
+    const from = origin && origin.path
+      ? { path: String(origin.path), name: String(origin.name || '') }
+      : null;
+    const base = autosave.fileNameFor(new Date(),
+      safeFilename((from && from.name) || t('Unsaved project'), 80), PROJECT_EXT);
+    const stem = base.slice(0, -(PROJECT_EXT.length + 1));
+    let target = path.join(dir, base);
+    for (let n = 2; fs.existsSync(target); n += 1) {
+      target = path.join(dir, stem + ' (' + n + ').' + PROJECT_EXT);
+    }
+    const doc = projectFile.serialise(state, {
+      stats: sourceFacts(state, null).stats,
+      app: app.getVersion(),
+      name: from ? from.name : '',
+      autosave: { session: session.id, origin: from },
+    });
+    const temp = target + '.tmp';
+    fs.writeFileSync(temp, projectFile.stringify(doc), 'utf8');
+    fs.renameSync(temp, target);
+    for (const old of autosave.toPrune(autosavesOnDisk())) {
+      try {
+        fs.rmSync(old.file, { force: true });
+      } catch {
+        // Held open. It goes on the next write.
+      }
+    }
+    return { ok: true, file: target };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// What the restore window offers: the crashed runs' auto-saves, newest first.
+// Nothing to offer is the answer too, so those runs are forgotten here.
+ipcMain.handle('autosave:crashed', () => {
+  const from = pageCrashed ? [...session.crashed, session.id] : session.crashed;
+  const found = autosave.restorable(autosavesOnDisk(), from);
+  if (!found.length) forgetCrashes();
+  return found;
+});
+
+// The restore window was answered. The auto-saves stay; only the question goes.
+ipcMain.handle('autosave:forget', () => {
+  forgetCrashes();
+  return true;
+});
+
+/**
+ * Open an auto-save as the project it is a copy of: saving goes back to that
+ * file when it is still there, and what that file holds is what the window
+ * counts unsaved work against. A copy of a project never saved opens as one
+ * never saved. No claim is written, since the copy is not a project of its
+ * own; the file it came from has its own claim from when it was saved.
+ */
+function openAutosave(filePath, parsed) {
+  const { statuses, masksMissing } = resolveSources(parsed, null);
+  const origin = parsed.autosave.origin;
+  let home = null;
+  let savedDoc = null;
+  if (origin && statOrNull(origin.path)) {
+    home = origin.path;
+    try {
+      const own = projectFile.parse(fs.readFileSync(home, 'utf8'));
+      // Its layers pointed where opening it would point them.
+      if (own.ok && !own.autosave) {
+        const found = resolveSources(own, path.dirname(home)).statuses;
+        savedDoc = { ...own.doc, layers: projectFile.applyStatuses(own.doc, found).layers };
+      }
+    } catch {
+      // Unreadable now. Everything restored counts as unsaved, which it may be.
+    }
+  }
+  // A file the copy and the project both use, spelled the project's way, so
+  // C:/a/b.mp4 against C:\a\b.mp4 is not an unsaved change. Measured: it was,
+  // with every step undone.
+  if (savedDoc) {
+    const key = (p) => path.resolve(String(p)).toLowerCase();
+    const spelled = new Map(savedDoc.layers.filter((l) => l.src).map((l) => [l.id, l.src]));
+    for (const [id, status] of Object.entries(statuses)) {
+      const theirs = spelled.get(id);
+      if (status.state === 'ok' && theirs && status.path && key(status.path) === key(theirs)) {
+        statuses[id] = { ...status, path: theirs };
+      }
+    }
+  }
+  return {
+    ok: true,
+    path: home,
+    name: home ? path.basename(home, '.' + PROJECT_EXT) : '',
+    doc: parsed.doc,
+    meta: parsed.meta,
+    views: parsed.views,
+    history: parsed.history,
+    statuses,
+    masksMissing,
+    restored: { from: filePath, savedAt: parsed.meta.savedAt },
+    savedDoc,
+  };
+}
 
 // The facts only this side can take: every claim on disk, and the size of
 // every file in the cache. The rows and the totals are worked out in the

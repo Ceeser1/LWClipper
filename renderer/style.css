@@ -2646,15 +2646,51 @@ body.lane-lifting * {
 /* V2.1. The two tabs, sitting under the title and over whichever stage is up.
    Centred, because the popup is centred and a left aligned pair under a centred
    title reads as a mistake. */
-.crop-tabs {
+/* V3.6.2. The crop window's three views as a menu that cycles: the one
+   open in the middle and bigger, its neighbours either side, an arrow at
+   each end. The script sets each item's order. */
+.crop-cycle {
   display: flex;
   justify-content: center;
+  align-items: center;
   gap: 6px;
   margin-bottom: 10px;
 }
 
-.crop-tab {
-  min-width: 140px;
+.crop-cycle[hidden] {
+  display: none;
+}
+
+.crop-cycle__arrow {
+  order: 0;
+  min-width: 32px;
+  font-weight: bold;
+}
+
+#cropCycleNext {
+  order: 4;
+}
+
+.crop-cycle__item {
+  min-width: 130px;
+  color: #a0a0aa;
+}
+
+.crop-cycle__item--current {
+  min-width: 170px;
+  font-size: 1.25em;
+  font-weight: bold;
+  color: #ebebf0;
+  border-color: #6a6a78;
+}
+
+/* The mask's view, laid out as the mask window was. */
+.mask-panel[hidden] {
+  display: none;
+}
+
+.mask-panel .gen-stage {
+  margin: 0 auto;
 }
 
 /* The output frame, at the project's aspect. The picture in it is drawn by the
@@ -3933,6 +3969,34 @@ button.color-swatch:hover:not(:disabled) {
    the picture, but its turning circles do. */
 .place-rotor {
   pointer-events: auto;
+}
+
+/* V3.6.2. A shape's turning dot, above the middle of its top side and joined
+   to it by a line. Both sit inside the box, so they turn with it; the corners
+   keep scaling. */
+.shape-rotor-line {
+  position: absolute;
+  left: 50%;
+  bottom: 100%;
+  width: 1px;
+  height: 22px;
+  margin-left: -0.5px;
+  background: #ffffff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+.shape-rotor {
+  position: absolute;
+  left: 50%;
+  bottom: 100%;
+  width: 13px;
+  height: 13px;
+  margin: 0 0 22px -6.5px;
+  transform: translateY(50%);
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
 }
 
 /* The angle while a corner is dragged, beside the box's centre. */

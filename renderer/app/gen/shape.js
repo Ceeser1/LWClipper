@@ -36,11 +36,18 @@ const shapePointsBox = el('shapePointsBox');
 const shapeInnerField = el('shapeInnerField');
 const shapeInnerSlider = el('shapeInnerSlider');
 const shapeInnerBox = el('shapeInnerBox');
+// V3.6.2. The turning dot and a square's rounded corners.
+const shapeRotor = el('shapeRotor');
+const shapeAngle = el('shapeAngle');
+const shapeRadiusField = el('shapeRadiusField');
+const shapeRadiusSlider = el('shapeRadiusSlider');
+const shapeRadiusBox = el('shapeRadiusBox');
 
 let shapeLayerId = null;
 let shapeFirst = false;
 // { kind, color, box: null or whole project pixels, invert, soft and line in
-// whole project pixels, outline, ring and inner as shares, points }
+// whole project pixels, outline, ring and inner as shares, points, and since
+// 3.6.2 rotation in whole degrees and radius in whole project pixels }
 let shapeDraft = null;
 let shapeOpened = null;   // the draft as it opened, as JSON
 
@@ -63,6 +70,14 @@ function shapeLineCeiling() {
   return Math.max(1, Math.round(projectFrame().height / 4));
 }
 
+// V3.6.2. Rounded corners reach half the square's shorter side, where its
+// ends are round. A box made smaller afterwards keeps the number, and the
+// drawing holds it to the half.
+function shapeRadiusCeiling() {
+  const b = shapeBoxNow();
+  return Math.max(1, Math.round(Math.min(b.w, b.h) / 2));
+}
+
 function openShapeSettings(layer, first) {
   const shape = layer.gen.shape;
   const k = genDraw.scaleOf(layer.gen, projectFrame().height);
@@ -80,11 +95,23 @@ function openShapeSettings(layer, first) {
     ring: shape.ring,
     points: shape.points,
     inner: shape.inner,
+    rotation: Math.round(shape.rotation),
+    radius: Math.round(shape.radius * k),
   };
   shapeOpened = JSON.stringify(shapeDraft);
   shapeBackground.checked = genBackdropOn;
   shapeModal.hidden = false;
   recallStageView(shapeStage, shapeLayerId, genKeyframeOf(shapeLayerId));
+  // V3.6.2. Out into the media window, before anything below measures it.
+  popOutGenWindow(shapeModal, layer.id, {
+    cancel: cancelShapeSettings,
+    relayout: () => {
+      if (!shapeDraft) return;
+      sizeShapeStage();
+      paintShapePreview();
+    },
+    draftGen: () => (shapeDraft ? shapeGenOf(shapeDraft) : null),
+  });
   showShapeDraft(null);
   sizeShapeStage();
   paintShapePreview();
@@ -113,6 +140,9 @@ function showShapeDraft(except) {
   shapeInnerField.hidden = d.kind !== 'star';
   show(shapePointsSlider, shapePointsBox, d.points);
   show(shapeInnerSlider, shapeInnerBox, Math.round(d.inner * 100));
+  shapeRadiusField.hidden = d.kind !== 'square';
+  shapeRadiusSlider.max = String(shapeRadiusCeiling());
+  show(shapeRadiusSlider, shapeRadiusBox, d.radius);
 }
 
 function changeShape(props, except, quick) {
@@ -139,9 +169,11 @@ function closeShapeSettings() {
   // V3.3. Kept before the modal lets the layer go, Accept or Cancel.
   if (shapeLayerId) rememberStageView(shapeStage, shapeLayerId, genKeyframeOf(shapeLayerId));
   settlePick(false);
+  popInGenWindow(shapeModal);
   shapeModal.hidden = true;
   shapeGuideX.hidden = true;
   shapeGuideY.hidden = true;
+  shapeAngle.hidden = true;
   shapeLayerId = null;
   shapeDraft = null;
   shapeOpened = null;
@@ -185,12 +217,17 @@ function placeShapeBox() {
   shapeBoxEl.style.top = (r.top + b.y * s) + 'px';
   shapeBoxEl.style.width = (b.w * s) + 'px';
   shapeBoxEl.style.height = (b.h * s) + 'px';
+  // V3.6.2. Turned about its centre, the point the drawing turns it about.
+  shapeBoxEl.style.transform = shapeDraft.rotation ? 'rotate(' + shapeDraft.rotation + 'deg)' : '';
 }
 
 function setShapeBox(box) {
   if (!shapeDraft) return;
   shapeDraft = { ...shapeDraft, box: { x: box.x, y: box.y, w: box.w, h: box.h } };
   placeShapeBox();
+  // The rounded corners' reach follows the box.
+  shapeRadiusSlider.max = String(shapeRadiusCeiling());
+  shapeRadiusSlider.value = String(shapeDraft.radius);
   paintShapePreview();
 }
 
@@ -235,7 +272,20 @@ for (const grip of shapeBoxEl.querySelectorAll('.crop-grip')) {
     const frame = projectFrame();
     const s = shapeStageScale();
     const from = vertical ? evt.clientY : evt.clientX;
+    // V3.6.2. A turned shape's side moves along the box's own axis, as a
+    // turned text box's does.
+    const turn = shapeDraft.rotation;
+    const a = turn * Math.PI / 180;
+    const ux = vertical ? -Math.sin(a) : Math.cos(a);
+    const uy = vertical ? Math.cos(a) : Math.sin(a);
+    const x0 = evt.clientX;
+    const y0 = evt.clientY;
     beginDrag(grip, evt, (ev) => {
+      if (turn) {
+        const along = ((ev.clientX - x0) * ux + (ev.clientY - y0) * uy) / s;
+        setShapeBox(layerGeometry.textBoxEdgeTurned(start, edge, along, ev.shiftKey, turn, frame).box);
+        return;
+      }
       const travel = ((vertical ? ev.clientY : ev.clientX) - from) / s;
       const r = layerGeometry.textBoxEdge(start, edge, travel, ev.shiftKey, frame, TEXT_BOX_SNAP / s);
       showShapeGuides(vertical ? null : r.snap, vertical ? r.snap : null);
@@ -255,9 +305,15 @@ for (const corner of shapeBoxEl.querySelectorAll('.crop-corner')) {
     const s = shapeStageScale();
     const x0 = evt.clientX;
     const y0 = evt.clientY;
+    const turn = shapeDraft.rotation;
     beginDrag(corner, evt, (ev) => {
-      setShapeBox(layerGeometry.boxCornerScale(start, corner.dataset.corner,
-        (ev.clientX - x0) / s, (ev.clientY - y0) / s, ev.shiftKey, frame));
+      // V3.6.2. Turned, along the box's own diagonal, its opposite corner
+      // held where it is on the screen.
+      setShapeBox(turn
+        ? layerGeometry.boxCornerScaleTurned(start, corner.dataset.corner,
+          (ev.clientX - x0) / s, (ev.clientY - y0) / s, ev.shiftKey, turn, frame)
+        : layerGeometry.boxCornerScale(start, corner.dataset.corner,
+          (ev.clientX - x0) / s, (ev.clientY - y0) / s, ev.shiftKey, frame));
     });
   });
 }
@@ -269,11 +325,39 @@ shapeBoxEl.addEventListener('pointerdown', (evt) => {
   const s = shapeStageScale();
   const x0 = evt.clientX;
   const y0 = evt.clientY;
+  // V3.6.2. Turned, only its centre snaps, as a turned text box's does.
+  const move = shapeDraft.rotation ? layerGeometry.textBoxMoveTurned : layerGeometry.textBoxMove;
   beginDrag(shapeBoxEl, evt, (ev) => {
-    const r = layerGeometry.textBoxMove(start, (ev.clientX - x0) / s, (ev.clientY - y0) / s, frame, TEXT_BOX_SNAP / s);
+    const r = move(start, (ev.clientX - x0) / s, (ev.clientY - y0) / s, frame, TEXT_BOX_SNAP / s);
     showShapeGuides(r.snapX, r.snapY);
     setShapeBox(r.box);
   }, () => showShapeGuides(null, null));
+});
+
+// V3.6.2. The dot turns the shape about the box's centre by as far as the
+// pointer goes round it, in whole degrees, landing on a quarter turn within
+// two of one, the text's rule; the angle shows by the centre meanwhile.
+shapeRotor.addEventListener('pointerdown', (evt) => {
+  if (evt.button !== 0 || !shapeDraft) return;
+  evt.stopPropagation();
+  const b = shapeBoxNow();
+  const r = stageFrameRect(shapeStage);
+  const stage = shapeStage.getBoundingClientRect();
+  const cx = stage.left + shapeStage.clientLeft + r.left + (b.x + b.w / 2) * r.s;
+  const cy = stage.top + shapeStage.clientTop + r.top + (b.y + b.h / 2) * r.s;
+  const start = shapeDraft.rotation;
+  const from = [evt.clientX - cx, evt.clientY - cy];
+  shapeAngle.style.left = (cx - stage.left) + 'px';
+  shapeAngle.style.top = (cy - stage.top) + 'px';
+  shapeAngle.textContent = start + '\u00B0';
+  shapeAngle.hidden = false;
+  beginDrag(shapeRotor, evt, (ev) => {
+    const deg = layerGeometry.textTurnDrag(start, from, [ev.clientX - cx, ev.clientY - cy]);
+    shapeAngle.textContent = deg + '\u00B0';
+    if (deg !== shapeDraft.rotation) changeShape({ rotation: deg }, null);
+  }, () => {
+    shapeAngle.hidden = true;
+  });
 });
 
 shapeColorBtn.addEventListener('click', async () => {
@@ -336,6 +420,16 @@ bindNumberField({
   box: shapePointsBox,
   range: () => [3, 12],
   set: (n, except) => changeShape(restar({ points: n }), except),
+  show: () => showShapeDraft(null),
+});
+
+// V3.6.2. Drawn at the stage's size while dragged, like the soft edge.
+bindNumberField({
+  slider: shapeRadiusSlider,
+  box: shapeRadiusBox,
+  range: () => [0, shapeRadiusCeiling()],
+  set: (n, except, quick) => changeShape({ radius: n }, except, quick),
+  settle: () => paintShapePreview(),
   show: () => showShapeDraft(null),
 });
 

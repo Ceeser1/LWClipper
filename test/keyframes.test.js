@@ -95,8 +95,8 @@ test('a generated keyframe holds what its form places, and nothing of the crop p
   assert.deepEqual(Object.keys(bar.keyframes[0]).sort(), ['color', 'id', 'span', 't', 'thickness']);
   assert.equal(bar.keyframes[0].span, 1, 'held to its range');
   const shape = gen('shape', { shape: { kind: 'star' } }, [{ t: 1, box: null }]);
-  // V3.5. And its soft edge.
-  assert.deepEqual(Object.keys(shape.keyframes[0]).sort(), ['box', 'id', 'soft', 't']);
+  // V3.5. And its soft edge; V3.6.2, its turn and its rounded corners.
+  assert.deepEqual(Object.keys(shape.keyframes[0]).sort(), ['box', 'id', 'radius', 'rotation', 'soft', 't']);
 });
 
 test('V3.5: a shape blends its soft edge and keeps the rest of its settings at every moment', () => {

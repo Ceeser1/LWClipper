@@ -20,7 +20,9 @@ function sizeGenStage(stage, canvas) {
   const panel = stage.parentElement;
   let w = Math.round(panel.clientWidth * CROP_FRAME_SHARE);
   let h = Math.round(w * 9 / 16);
-  const maxH = Math.round(window.innerHeight * CROP_HEIGHT_SHARE);
+  // V3.6.2. Against whichever window the stage is in: out in its own, as
+  // tall as the rest of the panel leaves.
+  const maxH = popupStageRoom(stage.closest('.modal__panel') || panel, stage, CROP_HEIGHT_SHARE);
   if (h > maxH) {
     h = maxH;
     w = Math.round(h * 16 / 9);
@@ -34,7 +36,7 @@ function sizeGenStage(stage, canvas) {
   canvas.style.top = '0px';
   canvas.style.width = w + 'px';
   canvas.style.height = h + 'px';
-  const dpr = window.devicePixelRatio || 1;
+  const dpr = hostWindowOf(stage).devicePixelRatio || 1;
   canvas.width = Math.max(1, Math.round(w * dpr));
   canvas.height = Math.max(1, Math.round(h * dpr));
 }
@@ -152,13 +154,134 @@ let genAddBefore = null;
 
 // The first opening's Cancel: the add taken off again, with no step of its own
 // ever having been written, so there is nothing for undo to find either.
+// V3.6.2. The main window stays usable while the media window is out, so the
+// project may have moved on since the add. Then only the added layer goes,
+// as a step of its own, and everything done meanwhile stays.
 function cancelGenAdd() {
   const before = genAddBefore;
   genAddBefore = null;
   if (!before) return;
-  laneRows.video = before.rows;
-  selectedLayerId = before.selected;
-  setLayers(before.layers, true);
+  if (!before.after || layers === before.after) {
+    laneRows.video = before.rows;
+    selectedLayerId = before.selected;
+    setLayers(before.layers, true);
+    return;
+  }
+  if (!timelineModel.layerById(layers, before.id)) return;
+  if (selectedLayerId === before.id) selectedLayerId = null;
+  setLayers(timelineModel.removeLayer(layers, before.id));
+  commitHistory();
+}
+
+// ---- V3.6.2. The media windows, out on their own like the crop window ----
+//
+// The user: "Media edit should be a seperate window like crop, not a pop-up
+// modal." Bar Settings, Shape Settings and Edit Text open in a window of their
+// own, remembered where it was left, with the main window usable beside them
+// and its preview showing the draft as their Accept would leave it. One at a
+// time, and not beside the crop window or Crop Render Frame, since only one
+// window's draft can be in the main preview: opening any of them with
+// another open asks first, as the crop windows do among themselves.
+
+// { modal, layerId, cancel, draftGen } while one is open.
+let genWindow = null;
+let genPreviewKey = '';
+let genPreviewLayers = null;
+
+function genWindowOpen() {
+  return !!genWindow;
+}
+
+function genWindowLayerId() {
+  return genWindow ? genWindow.layerId : null;
+}
+
+function genWindowOn(layerId) {
+  return !!genWindow && genWindow.layerId === layerId;
+}
+
+/** The open media window as a conflict confirmPopoutConflict can name, or null. */
+function genWindowConflict() {
+  if (!genWindow) return null;
+  return {
+    message: t('The media window is open. Going on closes it and discards what it has not accepted.'),
+    close: closeGenWindow,
+  };
+}
+
+/** The media window closed the way its Cancel would, if one is open. */
+function closeGenWindow() {
+  if (genWindow) genWindow.cancel();
+}
+
+/**
+ * Every editor window open, as conflicts: the crop window, Crop Render Frame
+ * and a media window. What opening another one asks about.
+ */
+function editorWindowConflicts() {
+  return [
+    !cropModal.hidden && {
+      message: t('Another crop window is open. Going on closes it and discards what it has not accepted.'),
+      close: closeCrop,
+    },
+    renderWindowConflict(),
+    genWindowConflict(),
+  ];
+}
+
+/**
+ * A kind's settings, just shown, out into the media window. `draftGen()` is
+ * the settings as the window has them now, `relayout()` fits its stage.
+ */
+function popOutGenWindow(modal, layerId, { cancel, relayout, draftGen }) {
+  genWindow = { modal, layerId, cancel, draftGen };
+  genPreviewKey = '';
+  genPreviewLayers = null;
+  popOut(modal, 'media', {
+    title: modal.querySelector('.modal__title').textContent,
+    cancel,
+    relayout,
+    preview: previewGenDraft,
+  });
+}
+
+/** A kind's settings closing: back from the window, the preview its own again. */
+function popInGenWindow(modal) {
+  if (!genWindow || genWindow.modal !== modal) return;
+  genWindow = null;
+  popIn(modal);
+  if (popoutPreview) {
+    popoutPreview = null;
+    drawComposite();
+  }
+}
+
+/**
+ * POPOUT_FPS times a second while a media window is open: the main preview
+ * shows the layer as Accept would leave it. A layer gone from under the window
+ * takes the window with it.
+ */
+function previewGenDraft() {
+  if (!genWindow) return;
+  const id = genWindow.layerId;
+  if (!timelineModel.layerById(layers, id)) {
+    genWindow.cancel();
+    return;
+  }
+  const gen = genWindow.draftGen();
+  if (!gen) return;
+  const key = JSON.stringify([gen, compositeAt]);
+  if (key === genPreviewKey && layers === genPreviewLayers && !compositePlaying) return;
+  genPreviewKey = key;
+  genPreviewLayers = layers;
+  popoutPreview = {
+    layerId: id,
+    layerNow: () => {
+      const r = genAcceptedLayers(id, gen, true, 'draft');
+      return r && timelineModel.layerById(r.next, id);
+    },
+  };
+  if (!compositePlaying) drawComposite();
 }
 
 /**
@@ -181,6 +304,8 @@ function sameKeyed(a, b) {
   if ('thickness' in a && !close(a.thickness, b.thickness, 0.75)) return false;
   if ('rotation' in a && !close(a.rotation, b.rotation, 0.75)) return false;
   if ('soft' in a && !close(a.soft, b.soft, 0.75)) return false;
+  // V3.6.2. A square's rounded corners.
+  if ('radius' in a && !close(a.radius, b.radius, 0.75)) return false;
   if ('box' in a) {
     if (!a.box !== !b.box) return false;
     if (a.box && !['x', 'y', 'w', 'h'].every((f) => close(a.box[f], b.box[f], 0.75))) return false;
@@ -188,18 +313,21 @@ function sameKeyed(a, b) {
   return true;
 }
 
-function acceptGenSettings(id, gen, changed, first) {
-  genAddBefore = null;
+/**
+ * V3.6.2. The layers as Accept would leave them, worked out rather than set,
+ * so the media window's preview can show it too: { next, keyId, moved }, or
+ * null with the layer gone. `keyId` names a keyframe that is new.
+ */
+function genAcceptedLayers(id, gen, changed, keyId) {
   const layer = timelineModel.layerById(layers, id);
-  if (!layer) return;
+  if (!layer) return null;
   // V3.3. On a keyframe: what the keyframe holds goes to the keyframe, made
   // here if it is new, and only when it changed, so editing a text's words
   // with the playhead between two keyframes does not leave a third behind.
   // Everything else goes to the layer, its own keyed settings untouched.
   const k = genKeyframe && genKeyframe.layerId === id ? genKeyframe : null;
-  genKeyframe = null;
   if (k) {
-    if (!changed) return;
+    if (!changed) return { next: layers, moved: false, keyed: true };
     // The modal hands back its settings at the project's height, so the layer's
     // keyframes, the one it opened on and its own keyed settings are all
     // brought to that height first, to be compared and kept in one measure.
@@ -210,15 +338,28 @@ function acceptGenSettings(id, gen, changed, first) {
     const rest = timelineModel.withKeyed(gen, timelineModel.keyedAt(timelineModel.keyedOfGen(layer.gen), scale));
     let next = timelineModel.setGen(layers, id, rest);
     next = timelineModel.setLayer(next, id, { keyframes: timelineModel.keyframesAtRef(layer, ref) });
-    const keyId = k.id || newKeyframeId();
+    const key = k.id || keyId;
     const moved = !sameKeyed(keyed, opened);
-    if (moved) next = timelineModel.putKeyframe(next, id, { ...k, ...keyed, id: keyId });
-    setLayers(next);
-    if (moved) selectKeyframe(id, keyId);
+    if (moved) next = timelineModel.putKeyframe(next, id, { ...k, ...keyed, id: key });
+    return { next, keyId: key, moved, keyed: true };
+  }
+  return { next: changed ? timelineModel.setGen(layers, id, gen) : layers, moved: false, keyed: false };
+}
+
+function acceptGenSettings(id, gen, changed, first) {
+  genAddBefore = null;
+  const k = genKeyframe && genKeyframe.layerId === id ? genKeyframe : null;
+  const r = genAcceptedLayers(id, gen, changed, k && !k.id ? newKeyframeId() : null);
+  genKeyframe = null;
+  if (!r) return;
+  if (r.keyed) {
+    if (!changed) return;
+    setLayers(r.next);
+    if (r.moved) selectKeyframe(id, r.keyId);
     commitHistory();
     return;
   }
-  if (changed) setLayers(timelineModel.setGen(layers, id, gen));
+  if (changed) setLayers(r.next);
   if (changed || first) commitHistory();
 }
 
