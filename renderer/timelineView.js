@@ -204,6 +204,29 @@ function tickLabel(t, step, longest) {
   return m + ':' + pad2(Math.round(s));
 }
 
+/**
+ * V3.6.3. A label on the small rulers of the crop window's keyframe strip:
+ * minutes and seconds, two digits each, with `decimals` places after the
+ * seconds, and the hours in front once `longest` reaches an hour. Its ends
+ * take three places, the user's "00:00:000" and "00:11:300", with the dot the
+ * rest of the app writes before the milliseconds.
+ *
+ * Counted in whole units of the last place shown, so 59.9996 at three places
+ * is 01:00.000 and never 00:60.000.
+ */
+function clockLabel(t, longest, decimals = 0) {
+  const unit = 10 ** decimals;
+  const n = Math.round(Math.max(0, t) * unit);
+  const whole = Math.floor(n / unit);
+  const h = Math.floor(whole / 3600);
+  const m = Math.floor(whole / 60) % 60;
+  const s = whole % 60;
+  const pad2 = (v) => String(v).padStart(2, '0');
+  const part = decimals > 0 ? '.' + String(n % unit).padStart(decimals, '0') : '';
+  const tail = pad2(m) + ':' + pad2(s) + part;
+  return longest >= 3600 ? h + ':' + tail : tail;
+}
+
 const timelineView = {
   MAX_PX_PER_SEC,
   MIN_LABEL_GAP,
@@ -224,6 +247,7 @@ const timelineView = {
   chooseStep,
   ticks,
   tickLabel,
+  clockLabel,
 };
 
 // The window reaches this through the lexical binding above; node --test needs

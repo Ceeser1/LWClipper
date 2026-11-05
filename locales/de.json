@@ -45,6 +45,8 @@
   "Reset Crop": "Zuschnitt zurücksetzen",
   "Reset Position": "Position zurücksetzen",
   "Rounded Corners:": "Abgerundete Ecken:",
+  "Selected Keyframe: {n} / {total}": "Ausgewählter Keyframe: {n} / {total}",
+  "No keyframes": "Keine Keyframes",
   "The media window is open. Going on closes it and discards what it has not accepted.": "Das Medienfenster ist geöffnet. Wenn du fortfährst, wird es geschlossen und alles nicht Übernommene verworfen.",
   "Shapes": "Formen",
   "Size:": "Größe:",

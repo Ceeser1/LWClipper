@@ -76,6 +76,8 @@ function selectLayer(id) {
   if (selectedLayerId === id) return;
   selectedLayerId = id;
   paintLayerSelection();
+  // V3.6.3. The diamonds are white on the selected clip and grey elsewhere.
+  paintKeyframeSelection();
   // The Crop button acts on the selected layer, so selecting one is what
   // enables it and what decides which layer its tooltip names. Step 11.
   updateCropBtn();

@@ -170,14 +170,15 @@ function stepCropTab(by) {
   showCropTab(CROP_TABS[(i + by + CROP_TABS.length) % CROP_TABS.length]);
 }
 
-function showCropTab(which) {
-  cropTab = CROP_TABS.includes(which) ? which : 'frame';
-  // Simple editing has only the crop, and no menu to choose another with.
-  if (!timelineDriving()) cropTab = 'frame';
-  const place = cropTab === 'place';
-  const mask = cropTab === 'mask';
-  const frame = cropTab === 'frame';
-  placeCropCycle();
+/**
+ * V3.6.3. The parts of the window that belong to view `tab` shown and the
+ * other views' parts hidden, and nothing else: split out of showCropTab so
+ * measureCropStage can put each view up in turn.
+ */
+function showCropViewParts(tab) {
+  const place = tab === 'place';
+  const mask = tab === 'mask';
+  const frame = tab === 'frame';
   cropFramePanel.hidden = !frame;
   placePanel.hidden = !place;
   maskPanel.hidden = !mask;
@@ -194,6 +195,85 @@ function showCropTab(which) {
   placeScaleRow.hidden = !place;
   maskHint.hidden = !mask;
   maskZoomHint.hidden = !mask;
+}
+
+// V3.6.3. The one size every view's stage is, as measureCropStage last found
+// it. Held, since Render Position sizes its stage on every draw, a drag's
+// every move included, and measuring puts all three views up in turn.
+let cropStageWH = null;
+
+/**
+ * V3.6.3. The user: "Make every layers preview in the Crop and Mask settings
+ * the same size at 16:9 ratio in the window." One 16:9 size for the stages of
+ * Video Frame, Render Position and Layer Mask, so stepping round the menu
+ * never resizes the picture: as wide as Video Frame allows beside its side
+ * arrows, and as tall as the view with the most around its stage leaves room
+ * for. Each view is put up in turn to be measured, all inside this call, so
+ * none of them is ever painted that way.
+ *
+ * A ring or a star mask has a second row of fields under Invert Mask. It is
+ * always counted, so picking a star does not shrink all three stages.
+ */
+function measureCropStage() {
+  const panel = cropStage.closest('.modal__panel');
+  if (!panel) return cropStageWH || { w: 160, h: 90 };
+  // The keyframe strip is above every view, so it is in each measure.
+  cropKeys.hidden = !cropKeysLayer();
+  const host = hostWindowOf(panel);
+  const style = host.getComputedStyle(panel);
+  const padLeft = parseFloat(style.paddingLeft) || 0;
+  const content = panel.clientWidth - padLeft - (parseFloat(style.paddingRight) || 0);
+  // The side arrows may hang into the panel's own padding, which is what lets
+  // the frame keep its full share: at that share the frame leaves only about
+  // 20px beside it, and an arrow plus its gap wants a little more than that.
+  // The cap is only here so a freakishly narrow window cannot push one out
+  // past the edge and raise a scrollbar; in practice it never binds.
+  const spare = Math.max(0, CROP_ARROW_SHORT + CROP_ARROW_GAP - padLeft + 2);
+  let w = Math.min(Math.round(panel.clientWidth * CROP_FRAME_SHARE), Math.round(content - 2 * spare));
+  let h = Math.round(w * 9 / 16);
+  let maxH;
+  if (panel.ownerDocument === document) {
+    // Not popped out: the share of the window it always was, the same for
+    // every view.
+    maxH = Math.round(window.innerHeight * CROP_HEIGHT_SHARE);
+  } else {
+    // Out in its own window: as tall as the window leaves once the most
+    // crowded view's controls are in, popupStageRoom's sum for each view.
+    const views = timelineDriving() ? CROP_TABS : ['frame'];
+    const noSecondRow = maskRingField.hidden && maskPointsField.hidden && maskInnerField.hidden;
+    let other = 0;
+    for (const tab of views) {
+      showCropViewParts(tab);
+      if (tab === 'mask' && noSecondRow) maskRingField.hidden = false;
+      const stage = tab === 'place' ? placeStage : tab === 'mask' ? maskStage : cropStage;
+      other = Math.max(other, panel.scrollHeight - stage.offsetHeight);
+      if (tab === 'mask' && noSecondRow) maskRingField.hidden = true;
+    }
+    showCropViewParts(cropTab);
+    maxH = Math.max(120, Math.round(host.innerHeight - other - 6));
+  }
+  if (h > maxH) {
+    h = maxH;
+    w = Math.round(h * 16 / 9);
+  }
+  cropStageWH = { w: Math.max(160, w), h: Math.max(90, h) };
+  return cropStageWH;
+}
+
+function showCropTab(which) {
+  cropTab = CROP_TABS.includes(which) ? which : 'frame';
+  // Simple editing has only the crop, and no menu to choose another with.
+  if (!timelineDriving()) cropTab = 'frame';
+  const place = cropTab === 'place';
+  const mask = cropTab === 'mask';
+  const frame = cropTab === 'frame';
+  placeCropCycle();
+  showCropViewParts(cropTab);
+  // V3.6.3. One size for every view's stage, and the strip as wide.
+  if (!cropModal.hidden) {
+    measureCropStage();
+    drawCropKeys();
+  }
   // V3.6.2. The user: "Reset Crop", "Reset Position", "Remove Mask". Three
   // calls, so check-locales sees each literal.
   if (mask) cropRemoveBtn.textContent = t('Remove Mask');
@@ -607,23 +687,15 @@ bindStageView(placeStage, {
 placeStage.addEventListener('pointercancel', (evt) => endPlaceDrag(evt, false));
 
 /**
- * The output frame, sized the way the crop frame is sized.
+ * The output frame's stage.
  *
- * At the project's own aspect rather than at 16:9. The crop frame is always
- * 16:9 so that the arrows around it and the hint above it never move; this one
- * has no arrows and is a picture of the file, so a portrait project has to look
- * portrait.
+ * V3.6.3. The same 16:9 size as the other two views, measureCropStage's,
+ * where it used to be the project's own aspect. A portrait project still
+ * looks portrait: the frame is fitted inside the stage by stageFrameRect, as
+ * Shape Settings and Edit Text have always fitted it.
  */
 function sizePlaceStage() {
-  const frame = projectFrame();
-  const panel = placePanel.parentElement;
-  let w = Math.round(panel.clientWidth * CROP_FRAME_SHARE);
-  let h = Math.round(w * frame.height / frame.width);
-  const maxH = popupStageRoom(panel, placeStage, CROP_HEIGHT_SHARE);
-  if (h > maxH) {
-    h = maxH;
-    w = Math.round(h * frame.width / frame.height);
-  }
+  const { w, h } = cropStageWH || measureCropStage();
   placeStage.style.width = w + 'px';
   placeStage.style.height = h + 'px';
   return { w, h };
@@ -710,6 +782,10 @@ cropCycleNext.addEventListener('click', () => stepCropTab(1));
 // has to redo the lot: the frame, the snapshot in it, and the box on top.
 function resizeCropStage() {
   if (cropModal.hidden || !cropDraft) return;
+  // V3.6.3. The one stage size, measured again for the window's new size, and
+  // the keyframe strip drawn as wide.
+  measureCropStage();
+  drawCropKeys();
   if (cropTab === 'place') {
     drawPlaceStage();
     return;
@@ -1311,6 +1387,9 @@ function openCrop(layerId, tab = 'frame', addMask = false) {
   // against whatever frame its decoder was last asked for.
   const target = cropTargetLayer();
   if (target) seedCropFrame(target);
+  // V3.6.3. Measured for this opening, not left at the last one's: a window
+  // that could not pop out never runs the relayout that would.
+  measureCropStage();
   sizeCropStage(size);
   paintCropFrame();
   placeCropDraft();
@@ -1362,6 +1441,9 @@ function previewCropDraft() {
   const render = cropRenderDraft();
   // V3.6.2. The Layer Mask view's draft is part of what the preview shows.
   const key = JSON.stringify([cropLayerId, cropDraft, render, placeAnchor, placeRotation, maskDraft]);
+  // V3.6.3. And the keyframe strip follows a keyframe moved, added or deleted
+  // there, or the clip trimmed.
+  if (layers !== cropPreviewLayers) drawCropKeys();
   // V3.3. The main window stays usable, so the Render Position tab's picture
   // of the other layers follows the playhead and any edit made there too.
   if (cropTab === 'place' && placeDraft && (layers !== cropPreviewLayers || compositeAt !== cropPreviewAt)) {

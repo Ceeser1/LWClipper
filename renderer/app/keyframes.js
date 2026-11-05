@@ -45,10 +45,16 @@ function paintKeyframeSelection() {
     const layer = timelineModel.layerById(layers, selectedKeyframe.layerId);
     if (!selectedKeyframeOf(layer)) selectedKeyframe = null;
   }
+  // V3.6.3. The user: "The selected keyframe of the selected track should be
+  // golden, each other white. Keyframes of non-selected tracks should be
+  // light grey." So a clip's diamonds say whether it is the selected clip, and
+  // gold is only ever on that clip.
   for (const el of timelineStack.querySelectorAll('.clip-key')) {
-    const on = !!selectedKeyframe
+    const own = !!selectedLayerId && el.dataset.layerId === selectedLayerId;
+    const on = own && !!selectedKeyframe
       && el.dataset.layerId === selectedKeyframe.layerId
       && el.dataset.keyId === selectedKeyframe.id;
+    el.classList.toggle('clip-key--own', own);
     el.classList.toggle('clip-key--selected', on);
   }
   updateKeyframeReadout();
@@ -433,3 +439,168 @@ timelineStack.addEventListener('dblclick', (evt) => {
   if (!timelineModel.covers(layer, at)) return;
   addKeyframeAt(layer.id, at - layer.start);
 });
+
+// ---- V3.6.3. The keyframe strip in the Crop and Mask window ----
+//
+// The user, 2026-11-05: right below the menu 'show a text "Selected Keyframe:
+// X / Y" and below that a black bar with a timeline ruler spanning across the
+// same width as the previews. The bar shows the keyframes of the track
+// according to its timeline. above the bar show a small ruler ranging from
+// 0:00:00 to [track_length] and below the bar another ruler ranging from
+// [video_position_track_start] to [video_position_track_end].'
+//
+// The clip's own keyframes, the ones in view, which is all the bar can show;
+// the header's readout on the timeline counts the whole row instead. The one
+// this window edits is gold and the rest white, the colours the selected
+// clip's diamonds have. One that Accept is to make at the playhead is counted
+// and drawn as a gold outline, since it is not there yet. An image runs no
+// source, so it has no lower ruler.
+
+// Each ruler's height and the bar's, together the canvas's 48px in style.css.
+const CROP_KEYS_RULER = 17;
+const CROP_KEYS_BAR = 14;
+// The clip's time starts and ends this far in from the strip's ends, so a
+// diamond on its first or last moment is drawn whole.
+const CROP_KEYS_INSET = 7;
+const CROP_KEYS_FONT = '10px -apple-system, "Segoe UI", Roboto, sans-serif';
+const CROP_KEY_GOLD = '#e8c860';
+const CROP_KEY_WHITE = '#ffffff';
+// The two ends' labels, a little brighter than the marks between them.
+const CROP_KEYS_END_LABEL = '#c8c8d2';
+
+/** The clip the Crop and Mask window is open on, in advanced editing. */
+function cropKeysLayer() {
+  if (cropModal.hidden || !timelineDriving() || !cropLayerId) return null;
+  return timelineModel.layerById(layers, cropLayerId);
+}
+
+/**
+ * The clip's keyframes in view, in time order: the one this window edits
+ * flagged `on`, and one Accept is to make at the playhead counted in, `fresh`.
+ */
+function cropKeysOf(layer) {
+  const editing = cropKeyframe && cropKeyframe.id;
+  const out = timelineModel.keyframesFor(layer)
+    .filter((k) => k.t >= 0 && k.t <= layer.duration)
+    .map((k) => ({ t: k.t, on: !!editing && k.id === editing, fresh: false }));
+  if (cropKeyframe && !cropKeyframe.id) out.push({ t: cropKeyframe.t, on: true, fresh: true });
+  return out.sort((a, b) => a.t - b.t);
+}
+
+/** The line and the strip, the strip as wide as the stages. */
+function drawCropKeys() {
+  const layer = cropKeysLayer();
+  cropKeys.hidden = !layer;
+  if (!layer) return;
+  const keys = cropKeysOf(layer);
+  // Two calls, so check-locales sees both literals.
+  if (keys.length) {
+    cropKeysReadout.textContent = t('Selected Keyframe: {n} / {total}', {
+      n: keys.findIndex((k) => k.on) + 1,
+      total: keys.length,
+    });
+  } else {
+    cropKeysReadout.textContent = t('No keyframes');
+  }
+  if (!cropStageWH) return;
+  const w = cropStageWH.w;
+  const h = 2 * CROP_KEYS_RULER + CROP_KEYS_BAR;
+  const dpr = hostWindowOf(cropKeysCanvas).devicePixelRatio || 1;
+  cropKeysCanvas.style.width = w + 'px';
+  cropKeysCanvas.style.height = h + 'px';
+  const backW = Math.max(1, Math.round(w * dpr));
+  const backH = Math.max(1, Math.round(h * dpr));
+  if (cropKeysCanvas.width !== backW || cropKeysCanvas.height !== backH) {
+    cropKeysCanvas.width = backW;
+    cropKeysCanvas.height = backH;
+  }
+  const ctx = cropKeysCanvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  const span = Math.max(1e-6, layer.duration);
+  const scale = Math.max(1, w - 2 * CROP_KEYS_INSET) / span;
+  const barTop = CROP_KEYS_RULER;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, barTop, w, CROP_KEYS_BAR);
+  // The clip's own time above, 0 to its length; the source's below, from
+  // where the clip starts in it to as far again.
+  drawCropKeysRuler(ctx, { from: 0, span, scale, w, top: 0, above: true });
+  if (!timelineModel.isStill(layer)) {
+    drawCropKeysRuler(ctx, {
+      from: layer.sourceIn || 0, span, scale, w, top: barTop + CROP_KEYS_BAR, above: false,
+    });
+  }
+  // The edited one last, so it is on top where two meet.
+  const mid = barTop + CROP_KEYS_BAR / 2;
+  const r = CROP_KEYS_BAR / 2 - 1;
+  for (const k of [...keys.filter((o) => !o.on), ...keys.filter((o) => o.on)]) {
+    const x = CROP_KEYS_INSET + k.t * scale;
+    ctx.beginPath();
+    ctx.moveTo(x, mid - r);
+    ctx.lineTo(x + r, mid);
+    ctx.lineTo(x, mid + r);
+    ctx.lineTo(x - r, mid);
+    ctx.closePath();
+    if (k.fresh) {
+      ctx.strokeStyle = CROP_KEY_GOLD;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      continue;
+    }
+    ctx.fillStyle = k.on ? CROP_KEY_GOLD : CROP_KEY_WHITE;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+}
+
+/**
+ * One of the strip's rulers, `from` to `from + span`: the timeline's own
+ * ladder of marks standing on the bar's edge, both ends marked and labelled to
+ * the millisecond, and the labelled marks between them labelled where they
+ * have room. `above` is the ruler over the bar, its marks hanging down to it.
+ */
+function drawCropKeysRuler(ctx, { from, span, scale, w, top, above }) {
+  const axis = Math.max(1, w - 2 * CROP_KEYS_INSET);
+  const end = from + span;
+  const marks = timelineView.ticks({ scale, scroll: from }, end, axis);
+  const edge = above ? top + CROP_KEYS_RULER : top;
+  const mark = (x, len, colour) => {
+    const px = Math.round(x) + 0.5;
+    ctx.strokeStyle = colour;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(px, edge);
+    ctx.lineTo(px, above ? edge - len : edge + len);
+    ctx.stroke();
+  };
+  ctx.font = CROP_KEYS_FONT;
+  ctx.textBaseline = above ? 'top' : 'bottom';
+  ctx.textAlign = 'left';
+  const textY = above ? top + 1 : top + CROP_KEYS_RULER - 1;
+  const first = timelineView.clockLabel(from, end, 3);
+  const last = timelineView.clockLabel(end, end, 3);
+  const firstX = CROP_KEYS_INSET;
+  const lastX = w - CROP_KEYS_INSET;
+  // Where the two end labels reach, which a label between may not come near.
+  const firstReach = firstX + 3 + ctx.measureText(first).width + 6;
+  const lastReach = lastX - 3 - ctx.measureText(last).width - 6;
+  for (const m of marks) {
+    const x = CROP_KEYS_INSET + m.x;
+    mark(x, m.major ? 5 : 3, m.major ? TIMELINE_TICK_MAJOR : TIMELINE_TICK_MINOR);
+    if (!m.major) continue;
+    const text = timelineView.clockLabel(m.t, end, m.step < 1 ? 1 : 0);
+    const left = x + 3;
+    if (left < firstReach || left + ctx.measureText(text).width > lastReach) continue;
+    ctx.fillStyle = TIMELINE_LABEL;
+    ctx.fillText(text, left, textY);
+  }
+  mark(firstX, 7, TIMELINE_TICK_MAJOR);
+  mark(lastX, 7, TIMELINE_TICK_MAJOR);
+  ctx.fillStyle = CROP_KEYS_END_LABEL;
+  ctx.fillText(first, firstX + 3, textY);
+  ctx.textAlign = 'right';
+  ctx.fillText(last, lastX - 3, textY);
+  ctx.textAlign = 'left';
+}

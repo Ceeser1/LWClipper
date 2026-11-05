@@ -1833,7 +1833,9 @@ body.layer-trimming .playhead--timeline {
   width: var(--key-side, 9px);
   height: var(--key-side, 9px);
   transform: translate(-50%, -50%) rotate(45deg);
-  background: #e8c860;
+  /* V3.6.3. Light grey on a clip that is not selected, white on the selected
+     clip, gold for its chosen keyframe: the user's three colours. */
+  background: #b4b4bc;
   border: 1px solid rgba(0, 0, 0, 0.7);
   box-sizing: border-box;
 }
@@ -1857,11 +1859,20 @@ body.layer-trimming .playhead--timeline {
 }
 
 .clip-key:hover::before {
+  background: #dcdce2;
+}
+
+.clip-key--own::before {
+  background: #ffffff;
+}
+
+.clip-key--own:hover::before {
   background: #fff0b8;
 }
 
-.clip-key--selected::before {
-  background: #78c88c;
+.clip-key--selected::before,
+.clip-key--selected:hover::before {
+  background: #e8c860;
 }
 
 .clip-fade-dot[hidden] {
@@ -2684,6 +2695,34 @@ body.lane-lifting * {
   border-color: #6a6a78;
 }
 
+/* V3.6.3. Under the menu in every view: "Selected Keyframe: X / Y", then
+   the clip's keyframes on a black bar between two small rulers, as wide as
+   the stages. The canvas's height is drawCropKeys' two rulers and its bar,
+   set here as well so the window can be measured before the first draw. */
+.crop-keys {
+  margin: 0 auto 10px;
+}
+
+.crop-keys[hidden] {
+  display: none;
+}
+
+.crop-keys__readout {
+  min-height: 16px;
+  line-height: 16px;
+  margin-bottom: 4px;
+  color: #c8c8d2;
+  font-size: 12px;
+  font-weight: bold;
+  white-space: nowrap;
+}
+
+.crop-keys__canvas {
+  display: block;
+  margin: 0 auto;
+  height: 48px;
+}
+
 /* The mask's view, laid out as the mask window was. */
 .mask-panel[hidden] {
   display: none;
@@ -2703,6 +2742,9 @@ body.lane-lifting * {
 
 .place-stage {
   position: relative;
+  /* V3.6.3. The border inside the size, so this stage is exactly as big as
+     the other two views' stages. */
+  box-sizing: border-box;
   background: #121214;
   border: 1px solid #3a3a42;
   /* A render rectangle is allowed to hang off the edge of the frame, which is

@@ -429,28 +429,11 @@ function updateCropBtn() {
 }
 
 function sizeCropStage(size) {
-  // The frame's own wrapper is only as wide as the popup's content, so the
-  // share is taken from the panel rather than from the padding box around it.
-  const frame = cropStage.parentElement;
-  const panel = frame.parentElement;
-  // The side arrows may hang into the popup's own padding, which is what lets
-  // the frame keep its full share: at that share the frame leaves only about
-  // 20px beside it, and an arrow plus its gap wants a little more than that.
-  // The cap is only here so a freakishly narrow popup cannot push one out past
-  // the edge and raise a scrollbar; in practice it never binds.
-  const padding = parseFloat(hostWindowOf(panel).getComputedStyle(panel).paddingLeft) || 0;
-  const spare = Math.max(0, CROP_ARROW_SHORT + CROP_ARROW_GAP - padding + 2);
-  const forArrows = frame.clientWidth - 2 * spare;
   // Always 16:9, whatever shape the picture is. A portrait clip used to make
   // the frame narrow and tall, which moved the arrows and the hint with it.
-  let w = Math.min(Math.round(panel.clientWidth * CROP_FRAME_SHARE), forArrows);
-  let h = Math.round(w * 9 / 16);
-  // V3.3. In a window of its own, as tall as the rest of the panel leaves.
-  const maxH = popupStageRoom(panel, cropStage, CROP_HEIGHT_SHARE);
-  if (h > maxH) {
-    h = maxH;
-    w = Math.round(h * 16 / 9);
-  }
+  // V3.6.3. The size all three views of the window share, measureCropStage's,
+  // which also leaves this one's side arrows their room.
+  const { w, h } = cropStageWH || measureCropStage();
   cropStage.style.width = w + 'px';
   cropStage.style.height = h + 'px';
 

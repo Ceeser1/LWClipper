@@ -494,6 +494,14 @@
         <button class="crop-cycle__item" data-tab="place">Render Position</button>
         <button id="cropCycleNext" class="crop-cycle__arrow" data-no-translate>&gt;</button>
       </div>
+      <!-- V3.6.3. Under the menu, in every view: which of the clip's keyframes
+           this window edits, then the clip's keyframes on a black bar as wide
+           as the stage, with the clip's own time on a ruler above it and the
+           source's time below it. Drawn by drawCropKeys. -->
+      <div id="cropKeys" class="crop-keys" hidden>
+        <div id="cropKeysReadout" class="crop-keys__readout"></div>
+        <canvas id="cropKeysCanvas" class="crop-keys__canvas"></canvas>
+      </div>
       <!-- The frame is a snapshot of whatever the preview is showing, painted
            into a canvas rather than a second <video>: it holds no file open and
            cannot drift off the position the preview is parked at. -->

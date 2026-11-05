@@ -207,18 +207,8 @@ function maskAcceptPlan() {
 
 function resizeMaskStage() {
   if (cropModal.hidden || cropTab !== 'mask' || !maskPic) return;
-  // The crop window's whole panel, wherever it is now: out in its own window
-  // it is no longer inside cropModal.
-  const panel = maskStage.closest('.modal__panel') || maskStage.parentElement;
-  let w = Math.round(maskPanel.clientWidth * CROP_FRAME_SHARE);
-  let h = Math.round(w * 9 / 16);
-  const maxH = popupStageRoom(panel, maskStage, CROP_HEIGHT_SHARE);
-  if (h > maxH) {
-    h = maxH;
-    w = Math.round(h * 16 / 9);
-  }
-  w = Math.max(160, w);
-  h = Math.max(90, h);
+  // V3.6.3. The size all three views of the window share, measureCropStage's.
+  const { w, h } = cropStageWH || measureCropStage();
   maskStage.style.width = w + 'px';
   maskStage.style.height = h + 'px';
   maskCanvas.style.left = '0px';

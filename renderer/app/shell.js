@@ -166,6 +166,10 @@ const cropPanHint = el('cropPanHint');
 const cropTabs = el('cropTabs');
 // V3.6.2. The cycling menu's arrows; its three items are found under cropTabs.
 const cropCyclePrev = el('cropCyclePrev');
+// V3.6.3. The keyframe line and strip under the menu.
+const cropKeys = el('cropKeys');
+const cropKeysReadout = el('cropKeysReadout');
+const cropKeysCanvas = el('cropKeysCanvas');
 const cropCycleNext = el('cropCycleNext');
 const cropTitle = el('cropTitle');
 const cropFramePanel = el('cropFramePanel');

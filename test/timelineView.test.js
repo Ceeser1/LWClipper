@@ -253,3 +253,36 @@ test('a label never shows sixty seconds', () => {
     }
   }
 });
+
+// V3.6.3. The rulers of the crop window's keyframe strip.
+
+test('the keyframe strip labels its ends to the millisecond', () => {
+  // The user's example: a clip starting 11.3 seconds into its video.
+  assert.strictEqual(view.clockLabel(0, 4, 3), '00:00.000');
+  assert.strictEqual(view.clockLabel(11.3, 15.3, 3), '00:11.300');
+  assert.strictEqual(view.clockLabel(15.3, 15.3, 3), '00:15.300');
+  assert.strictEqual(view.clockLabel(754.25, 760, 3), '12:34.250');
+});
+
+test('the keyframe strip shows hours once its ruler reaches one', () => {
+  assert.strictEqual(view.clockLabel(3725.5, 3800, 3), '1:02:05.500');
+  assert.strictEqual(view.clockLabel(65, 3800, 0), '0:01:05');
+  assert.strictEqual(view.clockLabel(65, 600, 0), '01:05');
+});
+
+test('the marks between the ends have whole seconds or one decimal', () => {
+  assert.strictEqual(view.clockLabel(12, 20, 0), '00:12');
+  assert.strictEqual(view.clockLabel(12.5, 20, 1), '00:12.5');
+});
+
+test('a strip label carries over rather than showing sixty seconds', () => {
+  assert.strictEqual(view.clockLabel(59.9996, 70, 3), '01:00.000');
+  assert.strictEqual(view.clockLabel(59.96, 70, 1), '01:00.0');
+  assert.strictEqual(view.clockLabel(3599.9999, 4000, 3), '1:00:00.000');
+  for (let t = 0; t <= 600; t += 0.0625) {
+    for (const d of [0, 1, 3]) {
+      const label = view.clockLabel(t, 600, d);
+      assert.ok(!/(^|:)60(\.|$)/.test(label), t + 's at ' + d + ' places read ' + label);
+    }
+  }
+});
