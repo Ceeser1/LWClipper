@@ -3556,6 +3556,28 @@ button.color-swatch:hover:not(:disabled) {
   width: 120px;
 }
 
+/* V3.6. Edit Mask's shapes, over everything else in it, and the name of a
+   custom mask's picture beside them. */
+.mask-shapes-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.mask-file {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #b8b8c0;
+}
+
+.mask-file[hidden] {
+  display: none;
+}
+
 .gen-field__caption {
   min-width: 72px;
   text-align: right;

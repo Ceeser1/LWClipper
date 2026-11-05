@@ -799,7 +799,12 @@ async function adoptProject(result) {
   // Through the model, which is what says what a layer is. A file carries a
   // ref block and may carry fields this version has never heard of; createLayer
   // takes what it knows and clamps it.
-  const built = resolved.map((l) => timelineModel.createLayer(l));
+  // V3.6. A track whose mask picture has gone opens without its mask.
+  const maskless = new Set(result.masksMissing || []);
+  const built = resolved.map((l) => {
+    const layer = timelineModel.createLayer(l);
+    return maskless.has(layer.id) ? timelineModel.removeMask([layer], layer.id)[0] : layer;
+  });
   const keep = trouble.length ? projectFile.pruneTrouble(built, trouble) : built;
 
   const frame = result.doc.project;
@@ -819,6 +824,8 @@ async function adoptProject(result) {
   // would; opening has already asked about unsaved work.
   if (!cropModal.hidden) closeCrop();
   if (!renderModal.hidden) closeRenderCrop();
+  // V3.6. And a mask window.
+  if (!maskModal.hidden) closeMask();
   // V3.3. Before anything opens an editor on the new layers.
   adoptViews(result.views);
   setLayers(keep, true);
@@ -873,6 +880,7 @@ async function adoptProject(result) {
   // Two calls rather than one with a ternary in it, for the reason spelled out
   // over setProjectError: the checker sees a literal and nothing else.
   if (trouble.length) setStatus('Project opened without {n} track(s).', { n: trouble.length });
+  else if (maskless.size) setStatus('Project opened. {n} mask picture(s) could not be found, those tracks have no mask.', { n: maskless.size });
   else setStatus('Project opened.');
 }
 
@@ -1051,7 +1059,12 @@ document.addEventListener('keydown', (evt) => {
   const frameHit = !renderModal.hidden && compositeFrame
     && ((target.width && target.width !== compositeFrame.width)
       || (target.height && target.height !== compositeFrame.height));
-  confirmPopoutConflict([cropHit && cropWindowConflict(), frameHit && renderWindowConflict()], () => {
+  // V3.6. And so does one that would change the track a mask window is open on.
+  const maskHit = !maskModal.hidden && maskLayerId
+    && JSON.stringify(timelineModel.layerById(layers, maskLayerId) || null)
+      !== JSON.stringify(target.layers.find((l) => l.id === maskLayerId) || null);
+  confirmPopoutConflict([cropHit && cropWindowConflict(), frameHit && renderWindowConflict(),
+    maskHit && maskWindowConflict()], () => {
     // Asked about one step; if anything moved the stack meanwhile, nothing.
     if ((redoing ? projectHistory.redo(undoStack) : projectHistory.undo(undoStack)).present !== target) return;
     applyHistory(redoing ? projectHistory.redo(undoStack) : projectHistory.undo(undoStack));

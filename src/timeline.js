@@ -368,6 +368,72 @@ const timelineModel = (() => {
     };
   }
 
+  // ---- V3.6. Masks ----
+  //
+  // A mask belongs to a video or image layer, the user's "Add Mask" on the
+  // track: a shape, or a picture of their own, that decides which part of the
+  // layer's picture shows. It sticks to the picture rather than to the frame,
+  // so it moves, scales and turns with it: its box is in fractions of the
+  // picture as it is placed, 0 to 1 across and down, and may reach past it.
+  // Its soft edge is a fraction of the picture's height for the same reason.
+  // Inverted, the shape becomes a hole and the rest shows.
+  //
+  // The box and the soft edge are keyed, a keyframe holding its own as
+  // `mask: { box, soft }`; a keyframe holding none stands for the layer's.
+  // Everything else, the kind, Invert, the ring's and star's figures and the
+  // picture, is the layer's.
+
+  const MASK_KINDS = [...SHAPE_KINDS, 'custom'];
+  const MASK_BY = ['alpha', 'luma'];
+
+  // A mask's box: fractions, any position, a real size. The whole picture when
+  // there is none to be had.
+  function maskBoxOf(v) {
+    const b = v && typeof v === 'object' ? v : {};
+    const x = Number(b.x);
+    const y = Number(b.y);
+    const w = Number(b.w);
+    const h = Number(b.h);
+    if (![x, y, w, h].every(Number.isFinite) || w <= 0 || h <= 0) return { x: 0, y: 0, w: 1, h: 1 };
+    return { x, y, w, h };
+  }
+
+  function maskSoftOf(v) {
+    return within(v, 0, 1, 0);
+  }
+
+  /**
+   * A mask, or null for none. `src` is the user's own picture for a custom
+   * one, `by` whether its transparency or its brightness is what shows
+   * ("alpha" or "luma", decided once when it is picked), and `aspect` its
+   * width over its height, for the box it starts in. A custom mask with no
+   * picture is a circle, so a mask is never something that cannot be drawn.
+   */
+  function maskOf(v) {
+    if (!v || typeof v !== 'object') return null;
+    const src = typeof v.src === 'string' && v.src ? v.src : null;
+    let kind = oneOf(v.kind, MASK_KINDS, 'circle');
+    if (kind === 'custom' && !src) kind = 'circle';
+    return {
+      kind,
+      invert: bool(v.invert),
+      soft: maskSoftOf(v.soft),
+      box: maskBoxOf(v.box),
+      ring: within(v.ring, 0.05, 0.95, 0.4),
+      points: Math.round(within(v.points, 3, 12, 5)),
+      inner: within(v.inner, 0.1, 0.9, 0.381966),
+      src: kind === 'custom' ? src : null,
+      by: oneOf(v.by, MASK_BY, 'alpha'),
+      aspect: within(v.aspect, 0.01, 100, 1),
+    };
+  }
+
+  /** What a keyframe holds of a mask, or null when it holds none. */
+  function maskKeyOf(v) {
+    if (!v || typeof v !== 'object') return null;
+    return { box: maskBoxOf(v.box), soft: maskSoftOf(v.soft) };
+  }
+
   /**
    * A generated layer's settings, whole. Anything missing or broken comes out
    * as its default, and a form this version does not know comes out as text,
@@ -462,6 +528,10 @@ const timelineModel = (() => {
       // have the rotation-circles at its corners like texts do". A generated
       // layer turns inside its own settings, and a sound has nothing to turn.
       rotation: kind !== 'gen' && props.type !== 'audio' ? rotationOf(props.rotation) : 0,
+      // V3.6. The layer's mask, null for none, which every layer written
+      // before masks is. Only a picture of a file has one: a generated layer
+      // is a shape or a text already, and a sound has nothing to mask.
+      mask: kind !== 'gen' && props.type !== 'audio' ? maskOf(props.mask) : null,
       // V3.3. The crop, placement and ring at moments of the clip, and empty on
       // everything written before them. See "Keyframes" below. Declared here
       // for the reason render is: a field createLayer does not name is a field
@@ -1330,6 +1400,9 @@ const timelineModel = (() => {
       anchor: typeof v.anchor === 'string' && v.anchor ? v.anchor : null,
       // V3.4. The turn at that moment.
       rotation: rotationOf(v.rotation),
+      // V3.6. The mask's box and soft edge at that moment, or null for the
+      // layer's own.
+      mask: maskKeyOf(v.mask),
     };
   }
 
@@ -1413,7 +1486,14 @@ const timelineModel = (() => {
       const keep = list[0];
       if (l.kind === 'gen') return { ...l, keyframes: [], gen: withKeyed(l.gen, keep) };
       return {
-        ...l, keyframes: [], crop: keep.crop, render: keep.render, anchor: keep.anchor, rotation: keep.rotation || 0,
+        ...l,
+        keyframes: [],
+        crop: keep.crop,
+        render: keep.render,
+        anchor: keep.anchor,
+        rotation: keep.rotation || 0,
+        // V3.6. The first keyframe's mask too, when it held one of its own.
+        mask: l.mask && keep.mask ? maskOf({ ...l.mask, ...keep.mask }) : l.mask,
       };
     });
   }
@@ -1476,6 +1556,72 @@ const timelineModel = (() => {
       ...keyedOfGen(reframeGen(withKeyed(layer.gen, kf), fromHeight, toHeight, k, dx, dy)),
     }));
     return { ...layer, gen, keyframes };
+  }
+
+  // ---- V3.6. A mask between keyframes ----
+
+  /** The box and soft edge a keyframe stands for: its own, or the layer's. */
+  function maskKeyAt(layer, k) {
+    return (k && k.mask) || { box: layer.mask.box, soft: layer.mask.soft };
+  }
+
+  /**
+   * A layer's mask at `t`, the clip's own seconds: its settings with the box
+   * and the soft edge blended between the keyframes either side, the way the
+   * placement is. Null when the layer has no mask. Before the first keyframe
+   * it is the first's and after the last the last's, so a trimmed-off one
+   * still steers it.
+   */
+  function maskAt(layer, t) {
+    if (!layer || !layer.mask) return null;
+    const list = keyframesFor(layer);
+    if (!list.some((k) => k.mask)) return layer.mask;
+    const at = Number.isFinite(Number(t)) ? Number(t) : 0;
+    const put = (key) => ({ ...layer.mask, box: { ...key.box }, soft: key.soft });
+    if (at <= list[0].t) return put(maskKeyAt(layer, list[0]));
+    const last = list[list.length - 1];
+    if (at >= last.t) return put(maskKeyAt(layer, last));
+    let i = 0;
+    while (list[i + 1].t <= at) i += 1;
+    const a = maskKeyAt(layer, list[i]);
+    const b = maskKeyAt(layer, list[i + 1]);
+    const u = (at - list[i].t) / (list[i + 1].t - list[i].t);
+    const lerp = (p, q) => p + (q - p) * u;
+    return put({
+      box: { x: lerp(a.box.x, b.box.x), y: lerp(a.box.y, b.box.y), w: lerp(a.box.w, b.box.w), h: lerp(a.box.h, b.box.h) },
+      soft: lerp(a.soft, b.soft),
+    });
+  }
+
+  /**
+   * The stretch of the clip over which its mask changes, in its own seconds,
+   * or null when it never does. Its placement moving is not this: the mask
+   * sticks to the picture, so a mask that holds still on a moving picture is
+   * still one mask.
+   */
+  function maskMotion(layer) {
+    if (!layer || !layer.mask) return null;
+    const list = keyframesFor(layer);
+    if (list.length < 2) return null;
+    const first = JSON.stringify(maskKeyAt(layer, list[0]));
+    if (list.every((k) => JSON.stringify(maskKeyAt(layer, k)) === first)) return null;
+    const from = Math.max(0, list[0].t);
+    const to = Math.min(layer.duration, list[list.length - 1].t);
+    return to > from ? { from, to } : null;
+  }
+
+  /** A new mask on a layer, its keyframes' own masks left as they are. */
+  function setMask(layers, id, mask) {
+    return replace(layers, id, (l) => (l.kind === 'gen' || l.type !== 'video' ? l : { ...l, mask: maskOf(mask) }));
+  }
+
+  /** The mask taken off a layer, and off every one of its keyframes. */
+  function removeMask(layers, id) {
+    return replace(layers, id, (l) => ({
+      ...l,
+      mask: null,
+      keyframes: keyframesFor(l).map((k) => (k.mask ? { ...k, mask: null } : k)),
+    }));
   }
 
   /** Every keyframe of a layer moved by `dt` of its own seconds. */
@@ -1925,6 +2071,12 @@ const timelineModel = (() => {
     putKeyframe,
     removeKeyframe,
     moveKeyframe,
+    MASK_KINDS,
+    maskOf,
+    maskAt,
+    maskMotion,
+    setMask,
+    removeMask,
     setFade,
     fadeGroup,
     setAlpha,

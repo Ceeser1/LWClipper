@@ -448,17 +448,139 @@ function drawLayerInto(ctx, canvas, layer, crop = layer.crop, render = layer.ren
   // where kx and ky come out at 1 and nothing is scaled at all.
   const kx = entry.width / source.width;
   const ky = entry.height / source.height;
+  // V3.6. A masked picture is cut out first, at the size it is drawn, and the
+  // cut-out is what is placed and turned, so the mask goes wherever the
+  // picture goes. At the moment drawn, or the playhead's for a draft.
+  const pic = maskedPicture(layer, entry.el, [d.sx * kx, d.sy * ky, d.sw * kx, d.sh * ky], d,
+    at === null ? compositeAt : at);
   if (!turn) {
-    ctx.drawImage(entry.el, d.sx * kx, d.sy * ky, d.sw * kx, d.sh * ky,
-      d.dx, d.dy, d.dw, d.dh);
+    ctx.drawImage(pic.el, ...pic.from, d.dx, d.dy, d.dw, d.dh);
     return;
   }
   ctx.save();
   ctx.translate(d.dx + d.dw / 2, d.dy + d.dh / 2);
   ctx.rotate(turn * Math.PI / 180);
-  ctx.drawImage(entry.el, d.sx * kx, d.sy * ky, d.sw * kx, d.sh * ky,
-    -d.dw / 2, -d.dh / 2, d.dw, d.dh);
+  ctx.drawImage(pic.el, ...pic.from, -d.dw / 2, -d.dh / 2, d.dw, d.dh);
   ctx.restore();
+}
+
+// ---- V3.6. Masked pictures ----
+
+// Two surfaces, kept: the picture, and its mask. Every masked layer is cut out
+// on them in turn, and each is drawn out before the next is cut.
+const maskedSurfaces = [null, null];
+function maskedSurface(i, w, h) {
+  if (!maskedSurfaces[i]) maskedSurfaces[i] = new OffscreenCanvas(w, h).getContext('2d');
+  const c = maskedSurfaces[i].canvas;
+  if (c.width !== w) c.width = w;
+  if (c.height !== h) c.height = h;
+  return maskedSurfaces[i];
+}
+
+/**
+ * What to draw for a layer's picture: the element and its source rect as they
+ * are, or with a mask the picture cut out at the size `d` draws it, the mask
+ * as it is at `at` on the timeline. drawMask is the export's drawing too.
+ */
+function maskedPicture(layer, el, from, d, at) {
+  const mask = layer.kind !== 'gen' ? timelineModel.maskAt(layer, at - layer.start) : null;
+  // A custom mask whose picture cannot be read, gone from the disk since, is
+  // shown as no mask rather than as a picture with nothing left of it.
+  if (!mask || maskPictureFailed(mask)) return { el, from };
+  const w = Math.max(1, Math.round(d.dw));
+  const h = Math.max(1, Math.round(d.dh));
+  const p = maskedSurface(0, w, h);
+  p.globalCompositeOperation = 'source-over';
+  p.clearRect(0, 0, w, h);
+  p.drawImage(el, ...from, 0, 0, w, h);
+  const m = maskedSurface(1, w, h);
+  genDraw.drawMask(m, mask, w, h, maskPicture(mask));
+  p.globalCompositeOperation = 'destination-in';
+  p.drawImage(m.canvas, 0, 0);
+  p.globalCompositeOperation = 'source-over';
+  return { el: p.canvas, from: [0, 0, w, h] };
+}
+
+// A custom mask's picture is at most this big on its longer side. A mask is
+// scaled to the picture it cuts anyway, and a 6000 pixel photograph turned
+// into one would be a lot of memory for nothing.
+const MASK_PICTURE_MAX = 2048;
+
+// Custom mask pictures by file: { img, width, height, transparent } once read,
+// and each as a mask by what shows, `file|by`, once made.
+const maskFiles = new Map();
+const maskPictures = new Map();
+
+/**
+ * A custom mask's file read into the window, once: the picture, its size, and
+ * whether any of it is see-through, which is what Custom decides `by` from.
+ */
+function readMaskFile(src) {
+  if (maskFiles.has(src)) return maskFiles.get(src);
+  const job = (async () => {
+    const url = await window.lwclipper.fileUrl(src);
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    const k = Math.min(1, MASK_PICTURE_MAX / Math.max(img.naturalWidth, img.naturalHeight));
+    const width = Math.max(1, Math.round(img.naturalWidth * k));
+    const height = Math.max(1, Math.round(img.naturalHeight * k));
+    const c = new OffscreenCanvas(width, height).getContext('2d', { willReadFrequently: true });
+    c.drawImage(img, 0, 0, width, height);
+    const transparent = genDraw.hasTransparency(c.getImageData(0, 0, width, height).data);
+    return { img, width, height, transparent, aspect: img.naturalWidth / img.naturalHeight };
+  })();
+  // A file that cannot be read is asked about again next time, not never.
+  job.catch(() => maskFiles.delete(src));
+  maskFiles.set(src, job);
+  return job;
+}
+
+/** A custom mask's picture made into a mask, as a promise, once per file and way. */
+function loadMaskPicture(mask) {
+  const key = mask.src + '|' + mask.by;
+  const kept = maskPictures.get(key);
+  if (kept) return kept.job;
+  const entry = { canvas: null, job: null };
+  entry.job = readMaskFile(mask.src).then((f) => {
+    const c = new OffscreenCanvas(f.width, f.height).getContext('2d', { willReadFrequently: true });
+    c.drawImage(f.img, 0, 0, f.width, f.height);
+    const data = c.getImageData(0, 0, f.width, f.height);
+    genDraw.maskPixels(data.data, mask.by);
+    c.putImageData(data, 0, 0);
+    entry.canvas = c.canvas;
+    return c.canvas;
+  });
+  entry.job.catch(() => {
+    maskPictures.delete(key);
+    maskFailed.add(key);
+  });
+  maskPictures.set(key, entry);
+  return entry.job;
+}
+
+// Custom mask pictures that could not be read this session, by `file|by`.
+// Picking one again through Custom asks again.
+const maskFailed = new Set();
+
+function maskPictureFailed(mask) {
+  return mask.kind === 'custom' && maskFailed.has(mask.src + '|' + mask.by);
+}
+
+/**
+ * A custom mask's picture as the drawing wants it now, or null while it is
+ * still being made, in which case the preview is drawn again once it is.
+ */
+function maskPicture(mask) {
+  if (mask.kind !== 'custom' || !mask.src) return null;
+  const kept = maskPictures.get(mask.src + '|' + mask.by);
+  if (kept && kept.canvas) return kept.canvas;
+  if (!kept && !maskPictureFailed(mask)) {
+    loadMaskPicture(mask).then(() => {
+      if (!compositePlaying) drawComposite();
+    }, () => {});
+  }
+  return null;
 }
 
 // V3.3. What a popped out crop window is doing, for the main window's preview

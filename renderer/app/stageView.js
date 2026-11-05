@@ -36,6 +36,16 @@ const STAGE_FRAME_LINE = 'rgba(235, 235, 240, 0.6)';
 
 const stageViews = new Map();
 
+/**
+ * V3.6. The frame a stage shows, in the pixels its editor works in: the
+ * project's, or what its bindStageView was given, which for the mask editor
+ * is the picture the mask belongs to.
+ */
+function stageFrameSize(stage) {
+  const v = stageViews.get(stage);
+  return (v && v.size && v.size()) || projectFrame();
+}
+
 /** Back to fitted, the way every stage opens. */
 function resetStageView(stage) {
   const v = stageViews.get(stage);
@@ -53,7 +63,7 @@ function resetStageView(stage) {
 function stageFrameRect(stage) {
   const w = stage.clientWidth;
   const h = stage.clientHeight;
-  const frame = projectFrame();
+  const frame = stageFrameSize(stage);
   const v = stageViews.get(stage);
   const pad = v ? STAGE_FIT_PAD : 0;
   const fit = Math.max(1e-6, Math.min((w - 2 * pad) / frame.width, (h - 2 * pad) / frame.height));
@@ -92,7 +102,7 @@ function stageProjectPoint(stage, evt) {
 function holdStageView(stage) {
   const v = stageViews.get(stage);
   if (!v || v.cx === null) return;
-  const frame = projectFrame();
+  const frame = stageFrameSize(stage);
   v.cx = clamp(v.cx, -frame.width, 2 * frame.width);
   v.cy = clamp(v.cy, -frame.height, 2 * frame.height);
 }
@@ -137,13 +147,13 @@ function showStageZoom(stage) {
  * `redraw(quick)` puts everything on the stage where the view now says;
  * `quick` is true while the view is still moving.
  */
-function bindStageView(stage, { open, empty, redraw }) {
+function bindStageView(stage, { open, empty, redraw, size }) {
   const label = document.createElement('div');
   label.className = 'stage-zoom';
   label.dataset.noTranslate = '';
   label.hidden = true;
   stage.appendChild(label);
-  stageViews.set(stage, { zoom: 1, cx: null, cy: null, label });
+  stageViews.set(stage, { zoom: 1, cx: null, cy: null, label, size: size || null });
   stage.dataset.zoomable = 'true';
 
   // The full paint once the wheel has been still for a moment, since a text
@@ -189,7 +199,7 @@ function bindStageView(stage, { open, empty, redraw }) {
     if (!open()) return;
     if (!(evt.button === 1 || (evt.button === 0 && empty(evt)))) return;
     const v = stageViews.get(stage);
-    const frame = projectFrame();
+    const frame = stageFrameSize(stage);
     const r = stageFrameRect(stage);
     const cx0 = v.cx === null ? frame.width / 2 : v.cx;
     const cy0 = v.cy === null ? frame.height / 2 : v.cy;

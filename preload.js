@@ -30,6 +30,8 @@ contextBridge.exposeInMainWorld('lwclipper', {
   filmstrip: (filePath, duration, tiles, at) =>
     ipcRenderer.invoke('video:filmstrip', { filePath, duration, tiles, at }),
   openAudioTrack: () => ipcRenderer.invoke('dialog:openAudio'),
+  // V3.6. Edit Mask's Custom.
+  openMaskImage: () => ipcRenderer.invoke('dialog:openMaskImage'),
   saveAsDialog: (title, isAudio, format, isProject) =>
     ipcRenderer.invoke('dialog:saveAs', { title, isAudio, format, isProject }),
   quickSaveTarget: (title, isAudio, format) =>

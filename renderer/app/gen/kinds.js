@@ -147,6 +147,16 @@ function openClipMenu(evt, track) {
   // V3.5. A generated clip's settings, the ones its cogwheel opens. Only on
   // one, since nothing else has them.
   if (layer && layer.kind === 'gen') item(t('Edit Media'), true, () => openGenSettings(layer.id, false));
+  // V3.6. A video or an image track's mask: "Add Mask", and once it has one
+  // "Edit Mask" with "Remove Mask" below it.
+  if (layer && layer.kind !== 'gen' && layer.type === 'video') {
+    if (!layer.mask) {
+      item(t('Add Mask'), true, () => openMask(layer.id, at));
+    } else {
+      item(t('Edit Mask'), true, () => openMask(layer.id, at));
+      item(t('Remove Mask'), true, () => removeMaskFrom(layer.id));
+    }
+  }
   // V3.3. Keyframes, on a clip that can have them and within it. On anything
   // else they are there and greyed, so the menu keeps its shape.
   const keyable = !!layer && timelineModel.keyframable(layer) && timelineModel.covers(layer, at);

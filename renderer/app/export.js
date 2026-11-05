@@ -167,10 +167,104 @@ async function exportGenFrames(l, motion, frame) {
   };
 }
 
+/**
+ * V3.6. A masked picture's mask for the export, drawn by drawMask like the
+ * preview's, white where the picture shows on black: at the size the picture
+ * is placed at, or the largest it gets when it moves, since composer.js scales
+ * it to the picture on every frame. One PNG when the mask holds still on the
+ * picture, which it does even while the picture moves; the frames of its own
+ * change when its keyframes move it. Cached like a generated layer's.
+ */
+async function exportMask(l, frame) {
+  const source = layerSource(l);
+  if (!source) return { ok: true, file: null };
+  const motion = layerGeometry.motionOf(l, source, frame);
+  const still = layerGeometry.placementAt(l, 0, source, frame);
+  const dests = motion ? motion.map((k) => k.dest) : (still ? [still.dest] : []);
+  if (!dests.length) return { ok: true, file: null };
+  const side = (v) => Math.max(2, Math.min(GEN_SURFACE_MAX, Math.round(v)));
+  const w = side(Math.max(...dests.map((d) => d.width)));
+  const h = side(Math.max(...dests.map((d) => d.height)));
+  let picture = null;
+  let pictureSize = null;
+  if (l.mask.kind === 'custom') {
+    try {
+      picture = await loadMaskPicture(l.mask);
+      pictureSize = [picture.width, picture.height];
+    } catch {
+      return { ok: false, error: 'The mask picture ' + l.mask.src + ' could not be read.' };
+    }
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  const ink = new OffscreenCanvas(w, h).getContext('2d');
+  const draw = (t) => {
+    genDraw.drawMask(ink, timelineModel.maskAt(l, t), w, h, picture);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(ink.canvas, 0, 0);
+  };
+  const png = async () => {
+    const blob = await new Promise((done) => canvas.toBlob(done, 'image/png'));
+    return blob ? new Uint8Array(await blob.arrayBuffer()) : null;
+  };
+  const moving = timelineModel.maskMotion(l);
+  if (!moving) {
+    const key = JSON.stringify(['mask', timelineModel.maskAt(l, 0), w, h, pictureSize]);
+    let saved = await window.lwclipper.genImage(key, null);
+    if (saved.ok && !saved.path) {
+      draw(0);
+      const bytes = await png();
+      if (!bytes) return { ok: false, error: 'canvas toBlob gave no PNG' };
+      saved = await window.lwclipper.genImage(key, bytes);
+    }
+    if (!saved.ok || !saved.path) return { ok: false, error: saved.error || 'no PNG path' };
+    return { ok: true, file: { src: saved.path } };
+  }
+  const fps = Number(frame.fps) || 30;
+  const total = Math.max(1, Math.round(l.duration * fps));
+  const first = Math.min(total - 1, Math.max(0, Math.floor(moving.from * fps)));
+  const last = Math.min(total - 1, Math.max(first, Math.ceil(moving.to * fps)));
+  const key = JSON.stringify(['maskframes', l.mask, timelineModel.keyframesFor(l).map((k) => [k.t, k.mask]),
+    l.duration, fps, w, h, first, last, pictureSize]);
+  const begun = await window.lwclipper.genFrames(key, { start: true });
+  if (!begun.ok) return { ok: false, error: begun.error || 'no folder for the mask frames' };
+  if (!begun.have) {
+    for (let i = first; i <= last; i += 1) {
+      draw(i / fps);
+      const bytes = await png();
+      if (!bytes) return { ok: false, error: 'canvas toBlob gave no PNG' };
+      const wrote = await window.lwclipper.genFrame(key, i - first, bytes);
+      if (!wrote.ok) return { ok: false, error: wrote.error };
+    }
+    const done = await window.lwclipper.genFrames(key, { finish: true });
+    if (!done.ok) return { ok: false, error: done.error };
+  }
+  return {
+    ok: true,
+    file: {
+      frames: {
+        pattern: begun.dir.replace(/\\/g, '/') + '/%05d.png',
+        lead: first / fps,
+        tail: Math.max(0, l.duration - (last + 1) / fps),
+      },
+    },
+  };
+}
+
 async function exportLayers() {
   const frame = projectFrame();
   const out = [];
   for (const l of layers) {
+    // V3.6. A masked picture goes with its mask.
+    if (l.kind !== 'gen' && l.enabled && l.type === 'video' && l.mask) {
+      const m = await exportMask(l, frame);
+      if (!m.ok) return m;
+      out.push(m.file ? { ...l, maskFile: m.file } : l);
+      continue;
+    }
     if (l.kind !== 'gen' || !l.enabled) {
       out.push(l);
       continue;

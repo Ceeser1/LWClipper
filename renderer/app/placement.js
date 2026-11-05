@@ -1168,12 +1168,13 @@ function openCrop(layerId) {
   // be asked for with one already open. On the same layer and keyframe it is
   // brought forward; anything else asks before the open one is thrown away,
   // and so does Crop Render Frame, whose Accept would move the frame under it.
-  if (!cropModal.hidden || !renderModal.hidden) {
+  // V3.6. And so does a mask window, which shows its draft in the same preview.
+  if (!cropModal.hidden || !renderModal.hidden || !maskModal.hidden) {
     const want = timelineDriving()
       ? ((layerId && timelineModel.layerById(layers, layerId)) || cropTargetLayer())
       : null;
     const same = !cropModal.hidden && (!timelineDriving() || sameCropTarget(want));
-    if (same && renderModal.hidden) {
+    if (same && renderModal.hidden && maskModal.hidden) {
       focusPopOut(cropModal);
       return;
     }
@@ -1183,6 +1184,7 @@ function openCrop(layerId) {
         close: closeCrop,
       },
       renderWindowConflict(),
+      maskWindowConflict(),
     ], () => openCrop(layerId));
     return;
   }

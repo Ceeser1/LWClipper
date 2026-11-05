@@ -105,6 +105,35 @@ function piecewise(times, values) {
   return '(' + expr + ')';
 }
 
+// ---- V3.6. Masks ----
+//
+// A mask arrives as the window drew it, white where the picture shows and
+// black where it does not, the size of the picture or of the largest the
+// picture gets: one PNG, or the frames of the stretch where the mask itself
+// changes, held at either end like a moving generated layer's. It is the
+// picture's own shape, so it is scaled to the picture as it is placed, on
+// every frame where the picture moves, and becomes the picture's alpha
+// before the turn, the fades and the ceiling, which all act on that alpha.
+
+/** The mask's input, on the timeline's clock and in grey, ready to scale. */
+function maskSource(l, input, fps) {
+  return '[' + input + ':v]' + chain([
+    l.maskFile.frames ? holdFrames(l.maskFile.frames) : null,
+    'fps=' + fps,
+    'setpts=PTS-STARTPTS+' + fixed(l.start) + '/TB',
+    'format=gray',
+  ]);
+}
+
+/**
+ * Whether the picture has an alpha of its own that the mask must keep: a
+ * PNG's, which alphamerge would otherwise replace. A video has none, and its
+ * picture is opaque wherever the mask does not cut it.
+ */
+function ownAlpha(l) {
+  return l.kind === 'image' && timeline.seeThrough(l);
+}
+
 const evenDown = (v) => Math.floor(v / 2) * 2;
 const evenUp = (v) => Math.ceil(v / 2) * 2;
 
@@ -120,7 +149,7 @@ function unionOf(rects) {
  * The filters for one moving layer, composited onto `prev`. Hands back the
  * label of what it made, the next layer's `prev`.
  */
-function movingLayer(graph, l, n, motion, prev, { input, fps, source, projW, projH }) {
+function movingLayer(graph, l, n, motion, prev, { input, fps, source, projW, projH, mask }) {
   const times = motion.map((k) => l.start + k.t);
   const at = (pick) => piecewise(times, motion.map(pick));
   // 1. The fixed cut. Every crop is even and inside the source already, so
@@ -167,8 +196,9 @@ function movingLayer(graph, l, n, motion, prev, { input, fps, source, projW, pro
   graph.push('[' + tag('mc') + '][' + tag('mv') + "]overlay=x='" + dx + '-' + bx + '-(' + sx + '-' + cut.x + ')*' + kx
     + "':y='" + dy + '-' + by + '-(' + sy + '-' + cut.y + ')*' + ky
     + "':eval=frame:eof_action=pass:format=yuv420[" + tag('mp') + ']');
-  // 4. The mask: the moment's destination, white on black.
-  graph.push(canvas('white', 16, 16, 'gray')
+  // 4. The mask: the moment's destination, white on black. V3.6. Or the
+  // layer's own mask, scaled the same way, so it moves with the picture.
+  graph.push((mask === undefined ? canvas('white', 16, 16, 'gray') : maskSource(l, mask, fps))
     + ",scale=w='max(1\\,round(" + dw + "))':h='max(1\\,round(" + dh + "))':eval=frame[" + tag('mw') + ']');
   graph.push(canvas('black', bw, bh, 'gray') + '[' + tag('md') + ']');
   graph.push('[' + tag('md') + '][' + tag('mw') + "]overlay=x='round(" + dx + '-' + bx + ")':y='round(" + dy + '-' + by
@@ -205,7 +235,7 @@ function movingLayer(graph, l, n, motion, prev, { input, fps, source, projW, pro
  * the move, with what it uncovers left clear, and laid on the frame with its
  * middle on the moment's middle.
  */
-function movingTurnedLayer(graph, l, n, motion, prev, { input, fps, source }) {
+function movingTurnedLayer(graph, l, n, motion, prev, { input, fps, source, mask }) {
   const times = motion.map((k) => l.start + k.t);
   const at = (pick) => piecewise(times, motion.map(pick));
   const cut = unionOf(motion.map((k) => k.src));
@@ -245,7 +275,7 @@ function movingTurnedLayer(graph, l, n, motion, prev, { input, fps, source }) {
   graph.push('[' + tag('mc') + '][' + tag('mv') + "]overlay=x='" + half + '-' + dw + '/2-(' + sx + '-' + cut.x + ')*' + kx
     + "':y='" + half + '-' + dh + '/2-(' + sy + '-' + cut.y + ')*' + ky
     + "':eval=frame:eof_action=pass:format=yuv420[" + tag('mp') + ']');
-  graph.push(canvas('white', 16, 16, 'gray')
+  graph.push((mask === undefined ? canvas('white', 16, 16, 'gray') : maskSource(l, mask, fps))
     + ",scale=w='max(1\\,round(" + dw + "))':h='max(1\\,round(" + dh + "))':eval=frame[" + tag('mw') + ']');
   graph.push(canvas('black', side, side, 'gray') + '[' + tag('md') + ']');
   graph.push('[' + tag('md') + '][' + tag('mw') + "]overlay=x='round(" + half + '-' + dw + "/2)':y='round(" + half + '-' + dh
@@ -325,6 +355,18 @@ function buildComposeArgs({
   // index juggling that saves is exactly the kind of cleverness that produces a
   // silently wrong graph.
   const indexOf = new Map();
+  // V3.6. Each masked picture's mask is an input of its own, after its layer's.
+  const maskIndexOf = new Map();
+  const addMask = (l) => {
+    if (!l.maskFile || l.type !== 'video') return;
+    maskIndexOf.set(l.id, inputs.length);
+    inputs.push(null);
+    if (l.maskFile.frames) {
+      args.push('-framerate', String(fps), '-start_number', '0', '-i', l.maskFile.frames.pattern);
+    } else {
+      args.push('-loop', '1', '-framerate', String(fps), '-t', fixed(l.duration), '-i', l.maskFile.src);
+    }
+  };
   for (const l of live) {
     indexOf.set(l.id, inputs.length);
     inputs.push(l);
@@ -347,6 +389,7 @@ function buildComposeArgs({
     } else {
       args.push('-ss', fixed(l.sourceIn), '-t', fixed(l.duration), '-i', l.src);
     }
+    addMask(l);
   }
 
   const graph = [];
@@ -374,7 +417,7 @@ function buildComposeArgs({
         // V3.4. One that also turns takes the square road above.
         const mover = motion.some((k) => k.turn) ? movingTurnedLayer : movingLayer;
         prev = mover(graph, l, n, motion, prev, {
-          input: indexOf.get(l.id), fps, source: sources[l.src] || null, projW, projH,
+          input: indexOf.get(l.id), fps, source: sources[l.src] || null, projW, projH, mask: maskIndexOf.get(l.id),
         });
         return;
       }
@@ -426,8 +469,10 @@ function buildComposeArgs({
       }
       // V2.4. An alpha channel is now wanted for two reasons rather than one,
       // so the name says what it is for rather than which of them asked.
-      const needsAlpha = fades.in > 0 || fades.out > 0 || alpha < 1 || !!rotate;
-      graph.push('[' + indexOf.get(l.id) + ':v]'
+      // V3.6. A mask is a third.
+      const maskInput = placement ? maskIndexOf.get(l.id) : undefined;
+      const needsAlpha = fades.in > 0 || fades.out > 0 || alpha < 1 || !!rotate || maskInput !== undefined;
+      const picture = '[' + indexOf.get(l.id) + ':v]'
         + chain([
           l.frames ? holdFrames(l.frames) : null,
           'fps=' + fps,
@@ -438,6 +483,26 @@ function buildComposeArgs({
           // carried would be a conversion on every frame of every project to
           // no end.
           needsAlpha ? 'format=yuva420p' : null,
+        ]);
+      // V3.6. The mask scaled to the picture as it is placed and made its
+      // alpha, multiplied into the alpha a PNG already has rather than put in
+      // its place. Then on through the turn and the fades as any picture.
+      let head = picture;
+      if (maskInput !== undefined) {
+        const d = placement.dest;
+        graph.push(picture + '[mp' + n + ']');
+        graph.push(maskSource(l, maskInput, fps) + ',scale=' + d.width + ':' + d.height + '[mk' + n + ']');
+        if (ownAlpha(l)) {
+          graph.push('[mp' + n + ']split[mq' + n + '][mr' + n + ']');
+          graph.push('[mr' + n + ']alphaextract[ma' + n + ']');
+          graph.push('[ma' + n + '][mk' + n + ']blend=all_mode=multiply[mb' + n + ']');
+          head = '[mq' + n + '][mb' + n + ']alphamerge';
+        } else {
+          head = '[mp' + n + '][mk' + n + ']alphamerge';
+        }
+      }
+      graph.push(chain([
+          head,
           rotate,
           fades.in > 0
             ? 'fade=t=in:st=' + fixed(l.start) + ':d=' + fixed(fades.in) + ':alpha=1'

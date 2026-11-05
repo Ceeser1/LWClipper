@@ -557,11 +557,11 @@ function openRenderCrop() {
     focusPopOut(renderModal);
     return;
   }
-  if (!cropModal.hidden) {
-    confirmPopoutConflict([{
+  if (!cropModal.hidden || !maskModal.hidden) {
+    confirmPopoutConflict([!cropModal.hidden && {
       message: t('Another crop window is open. Going on closes it and discards what it has not accepted.'),
       close: closeCrop,
-    }], openRenderCrop);
+    }, maskWindowConflict()], openRenderCrop);
     return;
   }
   renderFromFrame = { ...compositeFrame };

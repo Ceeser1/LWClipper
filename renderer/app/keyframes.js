@@ -117,19 +117,27 @@ function keyframeSeed(layer, t) {
     if (k.t <= t) a = k;
     else if (!b) b = k;
   }
+  // V3.6. The mask's box and soft edge there too, when either side holds its
+  // own; a keyframe holding none goes on standing for the layer's.
+  const maskThere = () => {
+    if (!layer.mask || !((a && a.mask) || (b && b.mask))) return null;
+    const m = timelineModel.maskAt(layer, t);
+    return { box: { ...m.box }, soft: m.soft };
+  };
   if (!a || !b) {
     const k = a || b;
-    return { crop: k.crop, render: k.render, anchor: k.anchor, rotation: k.rotation || 0 };
+    return { crop: k.crop, render: k.render, anchor: k.anchor, rotation: k.rotation || 0, mask: k.mask || null };
   }
   const source = layerSource(layer);
   const p = source && layerGeometry.placementAt(layer, t, source, projectFrame());
-  if (!p) return { crop: a.crop, render: a.render, anchor: a.anchor, rotation: a.rotation || 0 };
+  if (!p) return { crop: a.crop, render: a.render, anchor: a.anchor, rotation: a.rotation || 0, mask: maskThere() };
   return {
     crop: a.crop || b.crop ? wholeRect(p.src, true) : null,
     render: a.render || b.render ? wholeRect(p.dest, false) : null,
     anchor: a.anchor,
     // V3.4. The turn there, blended the short way round.
     rotation: p.rotation || 0,
+    mask: maskThere(),
   };
 }
 

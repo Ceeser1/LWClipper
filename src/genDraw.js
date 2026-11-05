@@ -185,6 +185,12 @@ const genDraw = (() => {
    * a ring's band runs round its hole as well as its outside.
    */
   function inkShape(ctx, shape, b, band, color) {
+    // V3.6. A custom mask's picture, already white wherever it shows, see
+    // maskPicture. Its colour is its own; only its alpha is ever used.
+    if (shape.kind === 'custom') {
+      if (shape.image) ctx.drawImage(shape.image, b.x, b.y, b.w, b.h);
+      return;
+    }
     if (!band) {
       fillShape(ctx, shape, b, color);
       return;
@@ -258,12 +264,20 @@ const genDraw = (() => {
    */
   function drawShape(ctx, gen, width, height, surface) {
     const s = gen.shape;
-    const b = shapeBox(gen, width, height);
     const k = scaleOf(gen, height);
-    const soft = Math.max(0, (s.soft || 0) * k);
-    const band = s.outline ? Math.max(0.5, s.line * k) : 0;
+    paintShape(ctx, s, shapeBox(gen, width, height), Math.max(0, (s.soft || 0) * k),
+      s.outline ? Math.max(0.5, s.line * k) : 0, width, height, surface);
+  }
+
+  /**
+   * A shape in its box, `soft` and `band` in the canvas's pixels, onto a
+   * cleared canvas whose frame is `width` by `height`: drawShape's, and V3.6's
+   * masks', whose frame is the picture they belong to.
+   */
+  function paintShape(ctx, s, b, soft, band, width, height, surface) {
     if (!s.invert && !soft && !band) {
-      fillShape(ctx, s, b, s.color);
+      if (s.kind === 'custom') inkShape(ctx, s, b, 0, s.color);
+      else fillShape(ctx, s, b, s.color);
       return;
     }
     ctx.save();
@@ -279,6 +293,68 @@ const genDraw = (() => {
     const ink = s.invert ? '#000000' : s.color;
     if (!(soft && surface && softInk(ctx, s, b, band, ink, soft, surface))) inkShape(ctx, s, b, band, ink);
     ctx.restore();
+  }
+
+  // ---- V3.6. Masks ----
+
+  /** A mask's box in the pixels of a picture `width` by `height`. */
+  function maskBox(mask, width, height) {
+    const b = mask.box;
+    return { x: b.x * width, y: b.y * height, w: b.w * width, h: b.h * height };
+  }
+
+  /**
+   * The box a new mask starts in, as fractions of a picture `width` by
+   * `height`: the largest in the shape's proportions, or a custom picture's,
+   * that fits inside it, centred. So Add Mask's circle is a round picture
+   * straight away.
+   */
+  function maskStartBox(mask, width, height) {
+    const a = mask.kind === 'custom' ? mask.aspect || 1 : shapeAspect(mask);
+    const pic = Math.max(1e-6, width) / Math.max(1e-6, height);
+    const w = a <= pic ? a / pic : 1;
+    const h = a <= pic ? 1 : pic / a;
+    return { x: (1 - w) / 2, y: (1 - h) / 2, w, h };
+  }
+
+  /**
+   * A mask onto a cleared canvas the size of the picture it belongs to, white
+   * wherever the picture shows and clear wherever it does not: drawn exactly
+   * as a white shape is, Invert and Soft Edge included, so a mask and a shape
+   * with the same settings are the same picture. `image` is a custom mask's
+   * picture, see maskPicture, and nothing is drawn of one not loaded yet.
+   */
+  function drawMask(ctx, mask, width, height, image, surface) {
+    ctx.clearRect(0, 0, width, height);
+    const s = { ...mask, color: '#ffffffff', outline: false, image: image || null };
+    paintShape(ctx, s, maskBox(mask, width, height), Math.max(0, (mask.soft || 0) * height), 0,
+      width, height, surface === undefined ? defaultShapeSurface : surface);
+  }
+
+  /**
+   * A custom mask's picture as a mask: every pixel white, with the alpha of
+   * what shows. By its alpha, a PNG's transparency is what hides; by its
+   * brightness, white shows, black hides and grey shows in part, the way a
+   * matte is painted. `data` is RGBA as getImageData gives it, changed in
+   * place.
+   */
+  function maskPixels(data, by) {
+    for (let i = 0; i < data.length; i += 4) {
+      const a = by === 'luma'
+        ? (0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2]) * (data[i + 3] / 255)
+        : data[i + 3];
+      data[i] = 255;
+      data[i + 1] = 255;
+      data[i + 2] = 255;
+      data[i + 3] = Math.round(a);
+    }
+    return data;
+  }
+
+  /** Whether a picture has any pixel that is not wholly opaque. */
+  function hasTransparency(data) {
+    for (let i = 3; i < data.length; i += 4) if (data[i] < 255) return true;
+    return false;
   }
 
   /**
@@ -790,9 +866,12 @@ const genDraw = (() => {
     shapeBox,
     fillShape,
     drawShapeIcon,
-    // V3.6's masks draw the same shapes, in their own box.
-    tracePath,
-    inkShape,
+    // V3.6. Masks.
+    maskBox,
+    maskStartBox,
+    drawMask,
+    maskPixels,
+    hasTransparency,
     drawGen,
     genAt,
     genMotion,

@@ -18,6 +18,8 @@ function resetApp() {
   closeCrop();
   // V3.3. Crop Render Frame can be open beside the main window now.
   if (!renderModal.hidden) closeRenderCrop();
+  // V3.6. And a mask window.
+  if (!maskModal.hidden) closeMask();
   // V3.3. A cleared project has no views; done after closeCrop, which keeps
   // the view of whatever it was open on.
   adoptViews(null);

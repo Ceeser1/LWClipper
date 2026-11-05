@@ -586,6 +586,17 @@ ipcMain.handle('dialog:openAudio', async () => {
   };
 });
 
+// V3.6. Edit Mask's Custom: a picture of the user's own, from pictures only.
+ipcMain.handle('dialog:openMaskImage', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Choose a picture for the mask',
+    properties: ['openFile'],
+    filters: [{ name: 'Images', extensions: IMAGE_EXTS.map((e) => e.slice(1)) }],
+  });
+  if (result.canceled || !result.filePaths.length) return { ok: false, cancelled: true };
+  return { ok: true, path: result.filePaths[0] };
+});
+
 // `steps` is what the compression slider reads at each of its four positions,
 // or null for a format with nothing to compress, which is how WAV switches the
 // control off without the renderer needing its own list of special cases.
@@ -911,6 +922,11 @@ function openProject(filePath) {
       .map((p) => ({ path: p, stat: statOrNull(p) }));
     statuses[layer.id] = projectFile.statusFor(ref, found);
   }
+  // V3.6. A custom mask's picture that is no longer where it was. The track
+  // still opens, without its mask, rather than being left out.
+  const masksMissing = parsed.doc.layers
+    .filter((l) => l.mask && typeof l.mask === 'object' && l.mask.src && !statOrNull(l.mask.src))
+    .map((l) => l.id);
   const name = path.basename(filePath, '.' + PROJECT_EXT);
   // Opening is when the app learns this project exists, so it claims here too.
   // The identity to match on is what the file says it was last called, which is
@@ -930,6 +946,7 @@ function openProject(filePath) {
     // V3.3. The undo stack the project was saved with.
     history: parsed.history,
     statuses,
+    masksMissing,
   };
 }
 
