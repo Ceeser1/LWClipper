@@ -180,6 +180,7 @@ function sameKeyed(a, b) {
   if ('span' in a && !close(a.span, b.span, 0.005)) return false;
   if ('thickness' in a && !close(a.thickness, b.thickness, 0.75)) return false;
   if ('rotation' in a && !close(a.rotation, b.rotation, 0.75)) return false;
+  if ('soft' in a && !close(a.soft, b.soft, 0.75)) return false;
   if ('box' in a) {
     if (!a.box !== !b.box) return false;
     if (a.box && !['x', 'y', 'w', 'h'].every((f) => close(a.box[f], b.box[f], 0.75))) return false;

@@ -144,6 +144,9 @@ function openClipMenu(evt, track) {
     menu.appendChild(b);
   };
   addMediaEntry(menu, type === 'video', at);
+  // V3.5. A generated clip's settings, the ones its cogwheel opens. Only on
+  // one, since nothing else has them.
+  if (layer && layer.kind === 'gen') item(t('Edit Media'), true, () => openGenSettings(layer.id, false));
   // V3.3. Keyframes, on a clip that can have them and within it. On anything
   // else they are there and greyed, so the menu keeps its shape.
   const keyable = !!layer && timelineModel.keyframable(layer) && timelineModel.covers(layer, at);
@@ -237,8 +240,16 @@ function drawClipShape(layer, ctx, leftX, width, height) {
   const clipX = timelineView.timeToX(tlView, layer.start);
   const x = Math.max(0, clipX - leftX) + 6;
   const h = Math.max(4, Math.round(height * 0.6));
-  const w = h * (genDraw.SHAPE_ASPECT[shape.kind] || 1);
-  genDraw.fillShape(ctx, shape.kind, { x, y: (height - h) / 2, w, h }, shape.color);
+  const w = h * genDraw.shapeAspect(shape);
+  // V3.5. Outline Only as the band it is in the picture, at the share of the
+  // shape's height it has there, and never thinner than a pixel.
+  let band = 0;
+  if (shape.outline) {
+    const frame = projectFrame();
+    const full = genDraw.shapeBox(layer.gen, frame.width, frame.height);
+    band = Math.max(1, h * shape.line * genDraw.scaleOf(layer.gen, frame.height) / Math.max(1, full.h));
+  }
+  genDraw.drawShapeIcon(ctx, shape, { x, y: (height - h) / 2, w, h }, band);
   ctx.lineWidth = 1;
   ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
   ctx.stroke();

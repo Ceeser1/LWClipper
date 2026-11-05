@@ -389,8 +389,148 @@ test('a circle is an ellipse filling its box; a ring cuts its hole by the even-o
   D.drawGen(ring, gen({ form: 'shape', shape: { kind: 'ring', box: { x: 0, y: 0, w: 200, h: 200 } } }), 1920, 1080);
   const ellipses = ring.calls.filter((c) => c[0] === 'ellipse');
   assert.equal(ellipses.length, 2);
-  assert.deepEqual(ellipses[1].slice(1, 5), [100, 100, 100 * D.RING_HOLE, 100 * D.RING_HOLE]);
+  // The hole every ring had: 60% of the width, a band of 40% of the radius.
+  assert.deepEqual(ellipses[1].slice(1, 5), [100, 100, 60, 60]);
   assert.equal(ring.calls.find((c) => c[0] === 'fill')[2], 'evenodd');
+});
+
+// ---- V3.5, the shapes version ----
+
+// The recording context with what an inverted, outlined or soft shape asks
+// of a canvas as well, the compositing and the blur written down with each
+// call that draws.
+function shapeCtx(width = 1920, height = 1080) {
+  const ctx = fakeCtx();
+  const calls = ctx.calls;
+  const state = [];
+  Object.assign(ctx, {
+    canvas: { width, height },
+    globalCompositeOperation: 'source-over',
+    filter: 'none',
+    lineJoin: 'miter',
+    miterLimit: 10,
+    transform: [1, 0, 0, 1, 0, 0],
+    save() {
+      state.push([this.globalCompositeOperation, this.filter, this.transform]);
+      calls.push(['save']);
+    },
+    restore() {
+      [this.globalCompositeOperation, this.filter, this.transform] = state.pop();
+      calls.push(['restore']);
+    },
+    rect(...a) { calls.push(['rect', ...a]); },
+    clip(rule) { calls.push(['clip', rule]); },
+    stroke() { calls.push(['stroke', this.strokeStyle, this.lineWidth, this.globalCompositeOperation]); },
+    fill(rule) { calls.push(['fill', this.fillStyle, rule, this.globalCompositeOperation]); },
+    fillRect(...a) { calls.push(['fillRect', this.fillStyle, ...a, this.globalCompositeOperation]); },
+    setTransform(...m) { this.transform = m; },
+    getTransform() {
+      const [a, b, c, d, e, f] = this.transform;
+      return { a, b, c, d, e, f };
+    },
+    drawImage(img, x, y) { calls.push(['drawImage', img, x, y, this.filter, this.globalCompositeOperation]); },
+  });
+  return ctx;
+}
+
+function shapeGen(shape) {
+  return gen({ form: 'shape', refHeight: 1080, shape: { box: { x: 100, y: 100, w: 200, h: 200 }, ...shape } });
+}
+
+test('a star has its points, its inner corners at its inner radius, and fills its box', () => {
+  const ctx = fakeCtx();
+  D.drawGen(ctx, shapeGen({ kind: 'star', points: 7, inner: 0.5, box: { x: 0, y: 0, w: 100, h: 100 } }), 1920, 1080);
+  const pts = ctx.calls.filter((c) => c[0] === 'moveTo' || c[0] === 'lineTo');
+  assert.equal(pts.length, 14);
+  const xs = pts.map((p) => p[1]);
+  const ys = pts.map((p) => p[2]);
+  assert.ok(near(Math.min(...xs), 0) && near(Math.max(...xs), 100));
+  assert.ok(near(Math.min(...ys), 0) && near(Math.max(...ys), 100));
+  // The regular five-point star is the one every star from before 3.5 is.
+  assert.ok(near(D.shapeAspect({ kind: 'star', points: 5, inner: 0.381966 }), D.SHAPE_ASPECT.star));
+  assert.ok(near(D.shapeAspect({ kind: 'star', points: 6, inner: 0.5 }), Math.sqrt(3) / 2), 'six points, flat sides');
+  assert.equal(D.shapeAspect({ kind: 'triangle' }), D.SHAPE_ASPECT.triangle);
+});
+
+test('a ring is as thick as its setting, a share of its radius', () => {
+  const ctx = fakeCtx();
+  D.drawGen(ctx, shapeGen({ kind: 'ring', ring: 0.25, box: { x: 0, y: 0, w: 200, h: 100 } }), 1920, 1080);
+  const ellipses = ctx.calls.filter((c) => c[0] === 'ellipse');
+  assert.deepEqual(ellipses[1].slice(1, 5), [100, 50, 75, 37.5]);
+});
+
+test('an inverted shape colours the frame and nothing past it, then cuts the shape out', () => {
+  const ctx = shapeCtx();
+  D.drawGen(ctx, shapeGen({ kind: 'circle', color: '#00000099', invert: true }), 1920, 1080, null);
+  const c = ctx.calls;
+  const at = (name) => c.findIndex((x) => x[0] === name);
+  assert.deepEqual(c[at('rect')], ['rect', 0, 0, 1920, 1080]);
+  assert.ok(at('clip') > at('rect'));
+  assert.deepEqual(c.find((x) => x[0] === 'fillRect'), ['fillRect', '#00000099', 0, 0, 1920, 1080, 'source-over'],
+    'its own alpha kept');
+  const cut = c.find((x) => x[0] === 'fill');
+  assert.deepEqual(cut, ['fill', '#000000', 'nonzero', 'destination-out'], 'opaque, so the hole is clear');
+  assert.equal(ctx.globalCompositeOperation, 'source-over', 'left as it was found');
+});
+
+test('Outline Only strokes twice the band inside the shape, held there by a clip', () => {
+  const ctx = shapeCtx();
+  D.drawGen(ctx, shapeGen({ kind: 'square', color: '#ff0000ff', outline: true, line: 12 }), 960, 540, null);
+  const c = ctx.calls;
+  // At half the reference height: 6 pixels of band, a 12 pixel stroke.
+  assert.deepEqual(c.find((x) => x[0] === 'clip'), ['clip', 'nonzero']);
+  assert.deepEqual(c.find((x) => x[0] === 'stroke'), ['stroke', '#ff0000ff', 12, 'source-over']);
+  assert.equal(c.filter((x) => x[0] === 'fill').length, 0, 'nothing filled');
+  const ring = shapeCtx();
+  D.drawGen(ring, shapeGen({ kind: 'ring', outline: true }), 1920, 1080, null);
+  assert.deepEqual(ring.calls.find((x) => x[0] === 'clip'), ['clip', 'evenodd'], 'round the hole too');
+});
+
+test('a soft edge is the sharp shape blurred back from a surface with room for the blur', () => {
+  const ctx = shapeCtx(1920, 1080);
+  let asked = null;
+  const surface = (w, h) => {
+    asked = shapeCtx(w, h);
+    return asked;
+  };
+  D.drawGen(ctx, shapeGen({ kind: 'circle', color: '#ffffffff', soft: 25 }), 1920, 1080, surface);
+  const sigma = 25 / D.SOFT_SPREAD;
+  const pad = Math.ceil(sigma * 3) + 2;
+  assert.deepEqual([asked.canvas.width, asked.canvas.height], [1920 + pad * 2, 1080 + pad * 2]);
+  assert.deepEqual(asked.calls.find((x) => x[0] === 'fill'), ['fill', '#ffffffff', 'nonzero', 'source-over']);
+  const blit = ctx.calls.find((x) => x[0] === 'drawImage');
+  assert.equal(blit[1], asked.canvas);
+  assert.deepEqual(blit.slice(2), [-pad, -pad, 'blur(' + sigma + 'px)', 'source-over']);
+  assert.equal(ctx.filter, 'none', 'the blur ends with the drawing');
+  // Inverted, the blurred shape is what cuts the hole.
+  const inv = shapeCtx();
+  D.drawGen(inv, shapeGen({ kind: 'circle', invert: true, soft: 25 }), 1920, 1080, surface);
+  assert.equal(inv.calls.find((x) => x[0] === 'drawImage')[5], 'destination-out');
+  // With no surface to be had, a sharp shape rather than none.
+  const bare = shapeCtx();
+  D.drawGen(bare, shapeGen({ kind: 'circle', soft: 25 }), 1920, 1080, null);
+  assert.equal(bare.calls.filter((x) => x[0] === 'fill').length, 1);
+});
+
+test('a soft edge follows the canvas the frame is drawn into, offset or not', () => {
+  const ctx = shapeCtx(3000, 2000);
+  ctx.transform = [1, 0, 0, 1, 400, 300];
+  let asked = null;
+  D.drawGen(ctx, shapeGen({ kind: 'square', soft: 10 }), 1920, 1080, (w, h) => (asked = shapeCtx(w, h)));
+  const pad = Math.ceil((10 / D.SOFT_SPREAD) * 3) + 2;
+  assert.deepEqual([asked.canvas.width, asked.canvas.height], [3000 + pad * 2, 2000 + pad * 2]);
+  // The ink is laid in the frame's own units, under the canvas's offset and
+  // the margin, which the surface's transform carries.
+  assert.deepEqual(asked.calls.find((x) => x[0] === 'moveTo'), ['moveTo', 100, 100]);
+});
+
+test('an inverted shape on its clip is its colour round the shape, cut by the even-odd rule', () => {
+  const ctx = shapeCtx();
+  D.drawShapeIcon(ctx, { kind: 'circle', color: '#ff0000ff', invert: true }, { x: 10, y: 10, w: 20, h: 20 }, 0);
+  const c = ctx.calls;
+  assert.deepEqual(c.find((x) => x[0] === 'rect'), ['rect', 6, 6, 28, 28]);
+  assert.deepEqual(c.find((x) => x[0] === 'fill'), ['fill', '#ff0000ff', 'evenodd', 'source-over']);
+  assert.equal(c.filter((x) => x[0] === 'clip').length, 0, 'nothing that could cut into the clip');
 });
 
 test('a shape has no fonts', () => {

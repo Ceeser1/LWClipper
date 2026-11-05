@@ -3534,16 +3534,26 @@ button.color-swatch:hover:not(:disabled) {
   margin-bottom: 12px;
 }
 
-/* One field on its own, the Shape Settings colour, centred rather than sat in
-   the left of two columns. */
-.gen-grid--one {
-  grid-template-columns: max-content;
-}
-
 .gen-field {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* V3.5. A field only one kind of shape has. The display above would win over
+   the attribute otherwise. */
+.gen-field[hidden] {
+  display: none;
+}
+
+/* V3.5. A checkbox that is a field of the grid, or leads one, sits on the
+   row's line rather than under it the way Enable Background does. */
+.gen-check--field {
+  margin-top: 0;
+}
+
+.gen-field__slider.gen-field__slider--short {
+  width: 120px;
 }
 
 .gen-field__caption {

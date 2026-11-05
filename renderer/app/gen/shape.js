@@ -1,6 +1,8 @@
 'use strict';
 
-// Shape Settings: a shape's colour, and its box on the render preview.
+// Shape Settings: a shape's colour, and its box on the render preview. Since
+// 3.5 also Invert Shape, Soft Edge, Outline Only, and a ring's thickness and a
+// star's points and inner radius.
 
 // The user: "Each shape can be colored, scaled and positioned - thats all".
 // The draft is in the project's own pixels, like the bar's, and Accept writes
@@ -18,18 +20,47 @@ const shapeGuideY = el('shapeGuideY');
 const shapeBackground = el('shapeBackground');
 const shapeAcceptBtn = el('shapeAcceptBtn');
 const shapeCancelBtn = el('shapeCancelBtn');
+// V3.5, the shapes version.
+const shapeInvert = el('shapeInvert');
+const shapeSoftSlider = el('shapeSoftSlider');
+const shapeSoftBox = el('shapeSoftBox');
+const shapeOutline = el('shapeOutline');
+const shapeLineSlider = el('shapeLineSlider');
+const shapeLineBox = el('shapeLineBox');
+const shapeRingField = el('shapeRingField');
+const shapeRingSlider = el('shapeRingSlider');
+const shapeRingBox = el('shapeRingBox');
+const shapePointsField = el('shapePointsField');
+const shapePointsSlider = el('shapePointsSlider');
+const shapePointsBox = el('shapePointsBox');
+const shapeInnerField = el('shapeInnerField');
+const shapeInnerSlider = el('shapeInnerSlider');
+const shapeInnerBox = el('shapeInnerBox');
 
 let shapeLayerId = null;
 let shapeFirst = false;
-let shapeDraft = null;    // { kind, color, box: null or whole project pixels }
+// { kind, color, box: null or whole project pixels, invert, soft and line in
+// whole project pixels, outline, ring and inner as shares, points }
+let shapeDraft = null;
 let shapeOpened = null;   // the draft as it opened, as JSON
 
 function shapeGenOf(draft) {
   return {
     form: 'shape',
     refHeight: projectFrame().height,
-    shape: { kind: draft.kind, color: draft.color, box: draft.box },
+    shape: { ...draft },
   };
+}
+
+// V3.5. How far the sliders reach, by the frame: a soft edge up to half its
+// height, which fades a spotlight over most of the picture, and an outline up
+// to a quarter, the bar's ceiling. The boxes take the same.
+function shapeSoftCeiling() {
+  return Math.max(1, Math.round(projectFrame().height / 2));
+}
+
+function shapeLineCeiling() {
+  return Math.max(1, Math.round(projectFrame().height / 4));
 }
 
 function openShapeSettings(layer, first) {
@@ -42,14 +73,66 @@ function openShapeSettings(layer, first) {
     kind: shape.kind,
     color: shape.color,
     box: b ? { x: Math.round(b.x * k), y: Math.round(b.y * k), w: Math.round(b.w * k), h: Math.round(b.h * k) } : null,
+    invert: shape.invert,
+    soft: Math.min(shapeSoftCeiling(), Math.round(shape.soft * k)),
+    outline: shape.outline,
+    line: Math.min(shapeLineCeiling(), Math.max(1, Math.round(shape.line * k))),
+    ring: shape.ring,
+    points: shape.points,
+    inner: shape.inner,
   };
   shapeOpened = JSON.stringify(shapeDraft);
   shapeBackground.checked = genBackdropOn;
   shapeModal.hidden = false;
   recallStageView(shapeStage, shapeLayerId, genKeyframeOf(shapeLayerId));
-  paintSwatch(shapeColorBtn, shapeDraft.color);
+  showShapeDraft(null);
   sizeShapeStage();
   paintShapePreview();
+}
+
+// V3.5. The settings as the draft has them, except the box being typed in.
+function showShapeDraft(except) {
+  const d = shapeDraft;
+  if (!d) return;
+  paintSwatch(shapeColorBtn, d.color);
+  shapeInvert.checked = d.invert;
+  const show = (slider, box, value) => {
+    slider.value = String(value);
+    if (except !== box) box.value = String(value);
+  };
+  shapeSoftSlider.max = String(shapeSoftCeiling());
+  show(shapeSoftSlider, shapeSoftBox, d.soft);
+  shapeOutline.checked = d.outline;
+  shapeLineSlider.max = String(shapeLineCeiling());
+  shapeLineSlider.disabled = !d.outline;
+  shapeLineBox.disabled = !d.outline;
+  show(shapeLineSlider, shapeLineBox, d.line);
+  shapeRingField.hidden = d.kind !== 'ring';
+  show(shapeRingSlider, shapeRingBox, Math.round(d.ring * 100));
+  shapePointsField.hidden = d.kind !== 'star';
+  shapeInnerField.hidden = d.kind !== 'star';
+  show(shapePointsSlider, shapePointsBox, d.points);
+  show(shapeInnerSlider, shapeInnerBox, Math.round(d.inner * 100));
+}
+
+function changeShape(props, except, quick) {
+  if (!shapeDraft) return;
+  shapeDraft = { ...shapeDraft, ...props };
+  showShapeDraft(except);
+  placeShapeBox();
+  paintShapePreview(quick);
+}
+
+// V3.5. A star given other points or another depth keeps the proportions the
+// box had against the old figure, about the box's middle, so a regular star
+// stays regular and one stretched by hand stays stretched by as much.
+function restar(props) {
+  const d = shapeDraft;
+  if (!d.box) return props;
+  const was = genDraw.shapeAspect(d);
+  const now = genDraw.shapeAspect({ ...d, ...props });
+  const w = Math.max(1, Math.round(d.box.w * now / was));
+  return { ...props, box: { ...d.box, x: Math.round(d.box.x + (d.box.w - w) / 2), w } };
 }
 
 function closeShapeSettings() {
@@ -213,6 +296,55 @@ shapeColorBtn.addEventListener('click', async () => {
 shapeBackground.addEventListener('change', () => {
   genBackdropOn = shapeBackground.checked;
   paintShapePreview();
+});
+
+// ---- V3.5, the shapes version ----
+
+shapeInvert.addEventListener('change', () => changeShape({ invert: shapeInvert.checked }, null));
+shapeOutline.addEventListener('change', () => changeShape({ outline: shapeOutline.checked }, null));
+
+// The soft edge is drawn at the stage's size while its slider moves, since a
+// blur over the whole frame on every step is work nobody sees, and at the
+// project's once it is let go.
+bindNumberField({
+  slider: shapeSoftSlider,
+  box: shapeSoftBox,
+  range: () => [0, shapeSoftCeiling()],
+  set: (n, except, quick) => changeShape({ soft: n }, except, quick),
+  settle: () => paintShapePreview(),
+  show: () => showShapeDraft(null),
+});
+
+bindNumberField({
+  slider: shapeLineSlider,
+  box: shapeLineBox,
+  range: () => [1, shapeLineCeiling()],
+  set: (n, except) => changeShape({ line: n }, except),
+  show: () => showShapeDraft(null),
+});
+
+bindNumberField({
+  slider: shapeRingSlider,
+  box: shapeRingBox,
+  range: () => [5, 95],
+  set: (n, except) => changeShape({ ring: n / 100 }, except),
+  show: () => showShapeDraft(null),
+});
+
+bindNumberField({
+  slider: shapePointsSlider,
+  box: shapePointsBox,
+  range: () => [3, 12],
+  set: (n, except) => changeShape(restar({ points: n }), except),
+  show: () => showShapeDraft(null),
+});
+
+bindNumberField({
+  slider: shapeInnerSlider,
+  box: shapeInnerBox,
+  range: () => [10, 90],
+  set: (n, except) => changeShape(restar({ inner: n / 100 }), except),
+  show: () => showShapeDraft(null),
 });
 
 window.addEventListener('resize', () => {

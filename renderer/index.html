@@ -677,10 +677,45 @@
     <div class="modal__panel modal__panel--crop" role="dialog" aria-modal="true"
       aria-labelledby="shapeTitle">
       <div id="shapeTitle" class="modal__title">Shape Settings</div>
-      <div class="gen-grid gen-grid--one">
+      <!-- V3.5. Two by two like the bar's, and a third row for what only a
+           ring or a star has, shown for that kind alone. -->
+      <div class="gen-grid">
         <div class="gen-field">
           <span class="gen-field__caption">Color:</span>
           <button id="shapeColorBtn" class="color-swatch"><span class="color-swatch__fill"></span></button>
+        </div>
+        <div class="gen-field">
+          <label class="gen-check gen-check--field"><input id="shapeInvert" type="checkbox" /> Invert Shape</label>
+        </div>
+        <div class="gen-field">
+          <span class="gen-field__caption">Soft Edge:</span>
+          <input id="shapeSoftSlider" class="gen-field__slider" type="range" min="0" max="540" step="1" value="0" />
+          <input id="shapeSoftBox" class="gen-num" type="text" inputmode="numeric" maxlength="4" />
+          <span class="gen-field__unit">px</span>
+        </div>
+        <div class="gen-field">
+          <label class="gen-check gen-check--field"><input id="shapeOutline" type="checkbox" /> Outline Only</label>
+          <input id="shapeLineSlider" class="gen-field__slider gen-field__slider--short" type="range" min="1" max="270" step="1" value="20" />
+          <input id="shapeLineBox" class="gen-num" type="text" inputmode="numeric" maxlength="4" />
+          <span class="gen-field__unit">px</span>
+        </div>
+        <div id="shapeRingField" class="gen-field" hidden>
+          <span class="gen-field__caption">Ring Thickness:</span>
+          <input id="shapeRingSlider" class="gen-field__slider" type="range" min="5" max="95" step="1" value="40" />
+          <input id="shapeRingBox" class="gen-num" type="text" inputmode="numeric" maxlength="2" />
+          <span class="gen-field__unit">%</span>
+        </div>
+        <div id="shapePointsField" class="gen-field" hidden>
+          <span class="gen-field__caption">Points:</span>
+          <input id="shapePointsSlider" class="gen-field__slider" type="range" min="3" max="12" step="1" value="5" />
+          <input id="shapePointsBox" class="gen-num" type="text" inputmode="numeric" maxlength="2" />
+          <span class="gen-field__unit"></span>
+        </div>
+        <div id="shapeInnerField" class="gen-field" hidden>
+          <span class="gen-field__caption">Inner Radius:</span>
+          <input id="shapeInnerSlider" class="gen-field__slider" type="range" min="10" max="90" step="1" value="38" />
+          <input id="shapeInnerBox" class="gen-num" type="text" inputmode="numeric" maxlength="2" />
+          <span class="gen-field__unit">%</span>
         </div>
       </div>
       <div id="shapeStage" class="gen-stage">

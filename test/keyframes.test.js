@@ -95,7 +95,24 @@ test('a generated keyframe holds what its form places, and nothing of the crop p
   assert.deepEqual(Object.keys(bar.keyframes[0]).sort(), ['color', 'id', 'span', 't', 'thickness']);
   assert.equal(bar.keyframes[0].span, 1, 'held to its range');
   const shape = gen('shape', { shape: { kind: 'star' } }, [{ t: 1, box: null }]);
-  assert.deepEqual(Object.keys(shape.keyframes[0]).sort(), ['box', 'id', 't']);
+  // V3.5. And its soft edge.
+  assert.deepEqual(Object.keys(shape.keyframes[0]).sort(), ['box', 'id', 'soft', 't']);
+});
+
+test('V3.5: a shape blends its soft edge and keeps the rest of its settings at every moment', () => {
+  const l = gen('shape', { shape: { kind: 'ring', invert: true, ring: 0.2 } }, [
+    { t: 0, box: { x: 0, y: 0, w: 100, h: 100 }, soft: 0 },
+    { t: 2, box: { x: 0, y: 0, w: 100, h: 100 }, soft: 40 },
+  ]);
+  const mid = D.genAt(l, 1, 1920, 1080);
+  assert.equal(mid.shape.soft, 20);
+  assert.equal(mid.shape.invert, true);
+  assert.equal(mid.shape.ring, 0.2);
+  assert.deepEqual(D.genMotion(l), { from: 0, to: 2 }, 'a softening alone is a move');
+  assert.equal(T.keyedAt({ soft: 30 }, 2 / 3).soft, 20, 'pixels, so it scales with refHeight');
+  const [after] = T.removeKeyframe(T.removeKeyframe([l], 'g', l.keyframes[1].id), 'g', l.keyframes[0].id);
+  assert.equal(after.gen.shape.soft, 0, 'the first keyframe is written back');
+  assert.equal(after.gen.shape.invert, true);
 });
 
 test('the last keyframe of a generated layer deleted leaves its settings on the layer', () => {

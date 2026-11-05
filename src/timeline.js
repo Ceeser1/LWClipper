@@ -334,8 +334,8 @@ const timelineModel = (() => {
 
   /**
    * A shape: which one, its colour, and the box it fills, in pixels at
-   * refHeight. That is all a shape has, the user's "colored, scaled and
-   * positioned". A null box is the shape's own default, centred and a third of
+   * refHeight, the user's "colored, scaled and positioned", and since 3.5 how
+   * it is drawn in that box. A null box is the shape's own default, centred and a third of
    * the frame high, which only the drawing can place because only it knows
    * the frame; like a text's null box it follows the frame through a change.
    */
@@ -345,6 +345,26 @@ const timelineModel = (() => {
       kind: oneOf(src.kind, SHAPE_KINDS, 'circle'),
       color: colourOf(src.color, '#ffffffff'),
       box: boxOf(src.box),
+      // V3.5, the shapes version. Every one of these reads as what a shape
+      // drew before it existed, so a project written by 3.4 opens unchanged.
+      // `invert` colours the whole render frame except the shape, which
+      // becomes the see-through part.
+      invert: bool(src.invert),
+      // How far the shape's edge fades, in pixels at refHeight. 0 is the hard
+      // edge every shape had. Keyed, so a spotlight can soften as it moves.
+      soft: within(src.soft, 0, 100000, 0),
+      // Outline Only: just a band `line` pixels wide, at refHeight, inside
+      // the shape's edge. The width is kept while it is off.
+      outline: bool(src.outline),
+      line: within(src.line, 1, 100000, 20),
+      // The ring's band as a share of its radius, so 0.4 is the hole of 60%
+      // of the width that every ring had.
+      ring: within(src.ring, 0.05, 0.95, 0.4),
+      // The star's points, and how far in its inner corners sit as a share of
+      // the outer radius: by default the regular five-point star, its inner
+      // points at the golden ratio's share.
+      points: Math.round(within(src.points, 3, 12, 5)),
+      inner: within(src.inner, 0.1, 0.9, 0.381966),
     };
   }
 
@@ -1252,9 +1272,13 @@ const timelineModel = (() => {
   // side, stays the layer's own and is the same at every moment. In pixels at
   // the layer's refHeight like the settings they stand for, so a Crop Render
   // Frame carries both the same way.
+  // V3.5. A shape's soft edge too, a number that blends like its box. Its
+  // other new settings, Invert, Outline Only and the ring's and star's
+  // figures, are the layer's: a checkbox cannot be halfway on, and a star
+  // cannot have five and a half points.
   const GEN_KEYED = {
     text: ['box', 'rotation'],
-    shape: ['box'],
+    shape: ['box', 'soft'],
     bar: ['thickness', 'span', 'color'],
   };
 
@@ -1267,7 +1291,7 @@ const timelineModel = (() => {
         color: colourOf(src.color, '#ffffffff'),
       };
     }
-    if (form === 'shape') return { box: boxOf(src.box) };
+    if (form === 'shape') return { box: boxOf(src.box), soft: within(src.soft, 0, 100000, 0) };
     return { box: boxOf(src.box), rotation: rotationOf(src.rotation) };
   }
 
@@ -1422,6 +1446,7 @@ const timelineModel = (() => {
     const out = { ...keyed };
     if (out.box) out.box = { x: out.box.x * k, y: out.box.y * k, w: out.box.w * k, h: out.box.h * k };
     if (Number.isFinite(out.thickness)) out.thickness = out.thickness * k;
+    if (Number.isFinite(out.soft)) out.soft = out.soft * k;
     return out;
   }
 

@@ -60,14 +60,19 @@ const genDraw = (() => {
   // canvas is what already becomes the preview, the export's PNG and the clip.
   // A shape fills its box edge to edge, so the box's grips sit on its ink.
 
-  // Corners as fractions of the box, for the shapes made of straight lines.
-  // The star is a regular five-pointed one, its inner points at the golden
-  // ratio's share of the outer, scaled to fill its box.
-  const STAR_POINTS = (() => {
+  // V3.5. A star's corners, `points` of them on the outside and as many in
+  // between at `inner` of the outer radius, the first point straight up, then
+  // scaled to fill the unit box. Worked out once per figure, since a slider
+  // being dragged asks for the same one on every frame.
+  const starCache = new Map();
+  function starPolygon(points, inner) {
+    const key = points + ':' + inner;
+    const kept = starCache.get(key);
+    if (kept) return kept;
     const pts = [];
-    for (let i = 0; i < 10; i += 1) {
-      const r = i % 2 ? 0.381966 : 1;
-      const a = -Math.PI / 2 + i * Math.PI / 5;
+    for (let i = 0; i < points * 2; i += 1) {
+      const r = i % 2 ? inner : 1;
+      const a = -Math.PI / 2 + i * Math.PI / points;
       pts.push([Math.cos(a) * r, Math.sin(a) * r]);
     }
     const xs = pts.map((p) => p[0]);
@@ -76,16 +81,24 @@ const genDraw = (() => {
     const y0 = Math.min(...ys);
     const w = Math.max(...xs) - x0;
     const h = Math.max(...ys) - y0;
-    return pts.map(([x, y]) => [(x - x0) / w, (y - y0) / h]);
-  })();
+    const out = {
+      pts: pts.map(([x, y]) => [(x - x0) / w, (y - y0) / h]),
+      aspect: w / h,
+    };
+    starCache.set(key, out);
+    return out;
+  }
+
+  // Corners as fractions of the box, for the shapes made of straight lines.
+  // The star's are its own figures', above.
   const SHAPE_POLYGONS = {
     square: [[0, 0], [1, 0], [1, 1], [0, 1]],
     triangle: [[0.5, 0], [1, 1], [0, 1]],
-    star: STAR_POINTS,
   };
 
   // Width over height of a shape's default box, so a new one is the regular
-  // shape: an equilateral triangle, a star with its own proportions.
+  // shape: an equilateral triangle, a star with its own proportions (the
+  // regular five-point one's here, any other's from shapeAspect).
   const SHAPE_ASPECT = {
     circle: 1,
     square: 1,
@@ -94,8 +107,16 @@ const genDraw = (() => {
     star: Math.cos(Math.PI / 10) / (0.5 + 0.5 * Math.cos(Math.PI / 5)),
   };
 
-  // How much of a ring's width its hole takes.
-  const RING_HOLE = 0.6;
+  // The defaults a shape from before 3.5 is drawn with, the model's own.
+  const SHAPE_DEFAULTS = { ring: 0.4, points: 5, inner: 0.381966 };
+
+  /** Width over height of a shape's regular box: a star's by its figures. */
+  function shapeAspect(shape) {
+    if (shape && shape.kind === 'star') {
+      return starPolygon(shape.points || SHAPE_DEFAULTS.points, shape.inner || SHAPE_DEFAULTS.inner).aspect;
+    }
+    return SHAPE_ASPECT[shape && shape.kind] || 1;
+  }
 
   /**
    * A shape's box in the frame's pixels: its own scaled, or with none the
@@ -108,24 +129,36 @@ const genDraw = (() => {
       return { x: s.box.x * k, y: s.box.y * k, w: s.box.w * k, h: s.box.h * k };
     }
     const h = height / 3;
-    const w = h * (SHAPE_ASPECT[s.kind] || 1);
+    const w = h * shapeAspect(s);
     return { x: (width - w) / 2, y: (height - h) / 2, w, h };
   }
 
-  /** The outline of a shape in a box, as a path on `ctx`, ready to fill. */
-  function traceShape(ctx, kind, b) {
-    ctx.beginPath();
+  // The ring's hole is the inner ellipse, left out by the even-odd rule.
+  function fillRule(shape) {
+    return shape.kind === 'ring' ? 'evenodd' : 'nonzero';
+  }
+
+  /**
+   * The outline of a shape in a box added to the path on `ctx`, which is how
+   * an inverted one puts the frame's rectangle round it first.
+   */
+  function tracePath(ctx, shape, b) {
+    const kind = shape.kind;
     if (kind === 'circle' || kind === 'ring') {
       const cx = b.x + b.w / 2;
       const cy = b.y + b.h / 2;
+      ctx.moveTo(cx + b.w / 2, cy);
       ctx.ellipse(cx, cy, b.w / 2, b.h / 2, 0, 0, Math.PI * 2);
       if (kind === 'ring') {
-        ctx.moveTo(cx + b.w / 2 * RING_HOLE, cy);
-        ctx.ellipse(cx, cy, b.w / 2 * RING_HOLE, b.h / 2 * RING_HOLE, 0, 0, Math.PI * 2);
+        const hole = 1 - (Number.isFinite(shape.ring) ? shape.ring : SHAPE_DEFAULTS.ring);
+        ctx.moveTo(cx + b.w / 2 * hole, cy);
+        ctx.ellipse(cx, cy, b.w / 2 * hole, b.h / 2 * hole, 0, 0, Math.PI * 2);
       }
       return;
     }
-    const pts = SHAPE_POLYGONS[kind] || SHAPE_POLYGONS.square;
+    const pts = kind === 'star'
+      ? starPolygon(shape.points || SHAPE_DEFAULTS.points, shape.inner || SHAPE_DEFAULTS.inner).pts
+      : SHAPE_POLYGONS[kind] || SHAPE_POLYGONS.square;
     pts.forEach(([x, y], i) => {
       if (i) ctx.lineTo(b.x + x * b.w, b.y + y * b.h);
       else ctx.moveTo(b.x + x * b.w, b.y + y * b.h);
@@ -133,15 +166,139 @@ const genDraw = (() => {
     ctx.closePath();
   }
 
-  // The ring's hole is the inner ellipse, left out by the even-odd rule.
-  function fillShape(ctx, kind, b, color) {
-    traceShape(ctx, kind, b);
-    ctx.fillStyle = color;
-    ctx.fill(kind === 'ring' ? 'evenodd' : 'nonzero');
+  /** The outline of a shape in a box, as a path on `ctx`, ready to fill. */
+  function traceShape(ctx, shape, b) {
+    ctx.beginPath();
+    tracePath(ctx, shape, b);
   }
 
-  function drawShape(ctx, gen, width, height) {
-    fillShape(ctx, gen.shape.kind, shapeBox(gen, width, height), gen.shape.color);
+  function fillShape(ctx, shape, b, color) {
+    traceShape(ctx, shape, b);
+    ctx.fillStyle = color;
+    ctx.fill(fillRule(shape));
+  }
+
+  /**
+   * The shape's ink in one colour: all of it, or with `band` only that many
+   * pixels inside its edge. The band is a stroke twice as wide held to the
+   * inside by a clip, so it never reaches past the box the grips sit on, and
+   * a ring's band runs round its hole as well as its outside.
+   */
+  function inkShape(ctx, shape, b, band, color) {
+    if (!band) {
+      fillShape(ctx, shape, b, color);
+      return;
+    }
+    ctx.save();
+    traceShape(ctx, shape, b);
+    ctx.clip(fillRule(shape));
+    ctx.lineWidth = band * 2;
+    ctx.lineJoin = 'miter';
+    ctx.miterLimit = 10;
+    ctx.strokeStyle = color;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // The soft edge as a blur: a figure of N pixels is a Gaussian whose ramp
+  // from a tenth to nine tenths is about N pixels wide.
+  const SOFT_SPREAD = 2.5;
+
+  // V3.5. The surface the soft edge is drawn on before it is blurred, kept
+  // like the shadow's: the window has OffscreenCanvas, node has neither.
+  let softSurface = null;
+  function defaultShapeSurface(w, h) {
+    if (typeof OffscreenCanvas === 'undefined') return null;
+    if (!softSurface) softSurface = new OffscreenCanvas(w, h).getContext('2d');
+    const c = softSurface.canvas;
+    if (c.width !== w) c.width = w;
+    if (c.height !== h) c.height = h;
+    return softSurface;
+  }
+
+  /**
+   * The ink with a soft edge: drawn sharp onto a surface the size of the
+   * canvas, in whatever transform `ctx` is in, and blurred back onto it. The
+   * surface has a margin of the blur's reach on every side, so a shape that
+   * hangs off the edge of the frame still blurs as the whole shape rather
+   * than fading where the canvas stops. False when there is no surface.
+   */
+  function softInk(ctx, shape, b, band, color, soft, surface) {
+    if (!ctx.canvas) return false;
+    const T = typeof ctx.getTransform === 'function' ? ctx.getTransform() : { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+    const sigma = (soft / SOFT_SPREAD) * Math.hypot(T.a, T.b);
+    const pad = Math.ceil(sigma * 3) + 2;
+    const cw = ctx.canvas.width + pad * 2;
+    const ch = ctx.canvas.height + pad * 2;
+    const m = surface(cw, ch);
+    if (!m) return false;
+    m.setTransform(1, 0, 0, 1, 0, 0);
+    m.clearRect(0, 0, cw, ch);
+    m.setTransform(T.a, T.b, T.c, T.d, T.e + pad, T.f + pad);
+    inkShape(m, shape, b, band, color);
+    m.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.filter = 'blur(' + sigma + 'px)';
+    ctx.drawImage(m.canvas, -pad, -pad);
+    ctx.restore();
+    return true;
+  }
+
+  /**
+   * A shape onto its own cleared canvas, which drawGen always hands it, so the
+   * inverted one can cut its hole out of what is already there.
+   *
+   * Inverted, the colour covers the render frame and nothing past it, the
+   * user's "everything becomes the color except the circle", and the shape is
+   * then taken out of it: so a ring's hole is coloured again and only its band
+   * is see-through, and a colour with alpha keeps its alpha everywhere but the
+   * hole, which is a spotlight. A soft edge blurs the shape before the cut,
+   * so the hole's edge fades and the frame's own edges stay solid.
+   */
+  function drawShape(ctx, gen, width, height, surface) {
+    const s = gen.shape;
+    const b = shapeBox(gen, width, height);
+    const k = scaleOf(gen, height);
+    const soft = Math.max(0, (s.soft || 0) * k);
+    const band = s.outline ? Math.max(0.5, s.line * k) : 0;
+    if (!s.invert && !soft && !band) {
+      fillShape(ctx, s, b, s.color);
+      return;
+    }
+    ctx.save();
+    if (s.invert) {
+      ctx.beginPath();
+      ctx.rect(0, 0, width, height);
+      ctx.clip();
+      ctx.fillStyle = s.color;
+      ctx.fillRect(0, 0, width, height);
+      ctx.globalCompositeOperation = 'destination-out';
+    }
+    // Opaque black to cut with, which takes out all of whatever alpha is under it.
+    const ink = s.invert ? '#000000' : s.color;
+    if (!(soft && surface && softInk(ctx, s, b, band, ink, soft, surface))) inkShape(ctx, s, b, band, ink);
+    ctx.restore();
+  }
+
+  /**
+   * V3.5. A shape on its clip, which is drawn over the checkerboard of the
+   * clip itself, so nothing here may cut into what is under it: an inverted
+   * one is its colour in a margin round the shape with the shape left out, by
+   * the even-odd rule alone. The path is left traced for the clip's dark edge.
+   */
+  function drawShapeIcon(ctx, shape, b, band) {
+    if (shape.invert) {
+      const m = Math.max(2, b.h * 0.2);
+      ctx.beginPath();
+      ctx.rect(b.x - m, b.y - m, b.w + m * 2, b.h + m * 2);
+      tracePath(ctx, shape, b);
+      ctx.fillStyle = shape.color;
+      ctx.fill('evenodd');
+      return;
+    }
+    inkShape(ctx, shape, b, band, shape.color);
+    traceShape(ctx, shape, b);
   }
 
   /** The measuring textLayout wants, done by canvas in the font a style names. */
@@ -478,7 +635,8 @@ const genDraw = (() => {
       if (gen.text) drawText(ctx, gen, width, height, surface);
     },
     bar: (ctx, gen, width, height) => drawBar(ctx, gen, width, height),
-    shape: (ctx, gen, width, height) => drawShape(ctx, gen, width, height),
+    shape: (ctx, gen, width, height, surface) => drawShape(ctx, gen, width, height,
+      surface === undefined ? defaultShapeSurface : surface),
   };
 
   /**
@@ -553,7 +711,9 @@ const genDraw = (() => {
       const q = keyedBox(b, width, height);
       box = { x: lerp(p.x, q.x), y: lerp(p.y, q.y), w: lerp(p.w, q.w), h: lerp(p.h, q.h) };
     }
-    if (own === 'shape') return { ...a, shape: { ...a.shape, box } };
+    if (own === 'shape') {
+      return { ...a, shape: { ...a.shape, box, soft: lerp(a.shape.soft || 0, b.shape.soft || 0) } };
+    }
     const turn = ((((b.text.rotation - a.text.rotation) % 360) + 540) % 360) - 180;
     return { ...a, text: { ...a.text, box, rotation: a.text.rotation + turn * u } };
   }
@@ -625,9 +785,14 @@ const genDraw = (() => {
     scaleOf,
     barRect,
     SHAPE_ASPECT,
-    RING_HOLE,
+    SOFT_SPREAD,
+    shapeAspect,
     shapeBox,
     fillShape,
+    drawShapeIcon,
+    // V3.6's masks draw the same shapes, in their own box.
+    tracePath,
+    inkShape,
     drawGen,
     genAt,
     genMotion,

@@ -310,13 +310,32 @@ test('reframeGen: a whole frame text and a bar follow the frame, sizes held', ()
 
 // ---- shapes ----
 
+// V3.5. What every shape from before the shapes version reads as.
+const SHAPE_DEFAULTS = { invert: false, soft: 0, outline: false, line: 20, ring: 0.4, points: 5, inner: 0.381966 };
+
 test('a shape keeps its kind, colour and box, and nothing else', () => {
   const g = T.genOf({ form: 'shape', shape: { kind: 'star', color: '#FF0000', box: { x: 1, y: 2, w: 3, h: 4 }, text: 'x' } });
-  assert.deepEqual(g, { form: 'shape', refHeight: 1080, shape: { kind: 'star', color: '#ff0000ff', box: { x: 1, y: 2, w: 3, h: 4 } } });
-  assert.deepEqual(T.genOf({ form: 'shape' }).shape, { kind: 'circle', color: '#ffffffff', box: null });
+  assert.deepEqual(g, { form: 'shape', refHeight: 1080,
+    shape: { kind: 'star', color: '#ff0000ff', box: { x: 1, y: 2, w: 3, h: 4 }, ...SHAPE_DEFAULTS } });
+  assert.deepEqual(T.genOf({ form: 'shape' }).shape, { kind: 'circle', color: '#ffffffff', box: null, ...SHAPE_DEFAULTS });
   assert.equal(T.genOf({ form: 'shape', shape: { kind: 'hexagon' } }).shape.kind, 'circle');
   assert.equal(T.genOf({ form: 'shape', shape: { box: { x: 0, y: 0, w: 0, h: 5 } } }).shape.box, null);
   assert.deepEqual(T.SHAPE_KINDS, ['circle', 'square', 'triangle', 'star', 'ring']);
+});
+
+test('V3.5: a shape keeps Invert, Soft Edge, Outline Only and its figures, held to their ranges', () => {
+  const s = T.genOf({ form: 'shape', shape: {
+    kind: 'star', invert: true, soft: 30, outline: true, line: 6, ring: 0.7, points: 7.4, inner: 0.5,
+  } }).shape;
+  assert.deepEqual([s.invert, s.soft, s.outline, s.line, s.ring, s.points, s.inner], [true, 30, true, 6, 0.7, 7, 0.5]);
+  const wild = T.genOf({ form: 'shape', shape: {
+    invert: 'yes', soft: -5, outline: 1, line: 0, ring: 2, points: 40, inner: 0,
+  } }).shape;
+  assert.equal(wild.invert, false, 'only true is on');
+  assert.equal(wild.outline, false);
+  assert.deepEqual([wild.soft, wild.line, wild.ring, wild.points, wild.inner], [0, 1, 0.95, 12, 0.1]);
+  const junk = T.genOf({ form: 'shape', shape: { soft: 'x', line: null, points: 'many' } }).shape;
+  assert.deepEqual([junk.soft, junk.line, junk.points], [0, 20, 5], 'nonsense is the default');
 });
 
 test('a shape layer is a generated picture like the others', () => {
