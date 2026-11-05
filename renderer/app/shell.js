@@ -172,6 +172,7 @@ const placePanel = el('placePanel');
 const placeStage = el('placeStage');
 const placeCanvas = el('placeCanvas');
 const placeBox = el('placeBox');
+const placeAngle = el('placeAngle');
 const placeSize = el('placeSize');
 const placeHint = el('placeHint');
 const placeZoomHint = el('placeZoomHint');

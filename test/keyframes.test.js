@@ -23,7 +23,40 @@ function vid(props) {
 test('a layer written before keyframes opens with none, and places as it always did', () => {
   const l = vid({ crop: CROP });
   assert.deepEqual(l.keyframes, []);
-  assert.deepEqual(G.placementAt(l, 3, SRC, HD), G.placeLayer({ source: SRC, crop: CROP, project: HD }));
+  // V3.4. With the turn beside it, none on a layer written before turns.
+  assert.deepEqual(G.placementAt(l, 3, SRC, HD), { ...G.placeLayer({ source: SRC, crop: CROP, project: HD }), rotation: 0 });
+});
+
+// ---- V3.4. Turned pictures ----
+
+test('a turn is kept on the layer and each keyframe, and blends the short way round', () => {
+  const l = vid({
+    rotation: 190,
+    keyframes: [
+      { id: 'a', t: 0, crop: null, render: INSET, rotation: 170 },
+      { id: 'b', t: 2, crop: null, render: INSET, rotation: -170 },
+    ],
+  });
+  assert.equal(l.rotation, -170, 'held to -180..180');
+  assert.deepEqual(l.keyframes.map((k) => k.rotation), [170, -170]);
+  assert.equal(G.placementAt(l, 1, SRC, HD).rotation, 180);
+  assert.equal(G.placementAt(l, 0.5, SRC, HD).rotation, 175);
+  // The export's view of the same move: turns carried on, never jumping.
+  const m = G.motionOf(l, SRC, HD);
+  assert.deepEqual(m.map((k) => k.turn), [170, 190]);
+  // Keyframes that differ only in their turn still move.
+  assert.ok(m);
+});
+
+test('a turned picture takes the room of the box round it', () => {
+  const r = G.turnedSize(400, 200, 90);
+  assert.ok(Math.abs(r.width - 200) < 1e-9 && Math.abs(r.height - 400) < 1e-9);
+  const d = G.turnedSize(100, 100, 45);
+  assert.ok(Math.abs(d.width - 100 * Math.SQRT2) < 1e-9);
+  assert.equal(G.turnOf(540), 180);
+  assert.equal(G.turnOf(-190), 170);
+  assert.equal(G.turnBetween(170, -170), 20);
+  assert.equal(G.turnBetween(-170, 170), -20);
 });
 
 test('keyframes come back in time order, one to a moment, held to their shape', () => {

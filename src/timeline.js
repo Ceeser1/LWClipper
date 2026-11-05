@@ -437,6 +437,11 @@ const timelineModel = (() => {
       // it is a string and not which string it is. null is a picture that was
       // put somewhere by hand and sticks to nothing.
       anchor: kind !== 'gen' && typeof props.anchor === 'string' && props.anchor ? props.anchor : null,
+      // V3.4. How far a picture is turned about its middle, in degrees, -180
+      // to 180, clockwise positive like a text's. The user: "A video should
+      // have the rotation-circles at its corners like texts do". A generated
+      // layer turns inside its own settings, and a sound has nothing to turn.
+      rotation: kind !== 'gen' && props.type !== 'audio' ? rotationOf(props.rotation) : 0,
       // V3.3. The crop, placement and ring at moments of the clip, and empty on
       // everything written before them. See "Keyframes" below. Declared here
       // for the reason render is: a field createLayer does not name is a field
@@ -997,6 +1002,24 @@ const timelineModel = (() => {
     }));
   }
 
+  /**
+   * V3.4. A lane carried from `from` to `to` with everything on it, the lanes
+   * between closing up behind it: the held and dragged row header. One step
+   * of reorderLane at a time, so it keeps every rule the arrows keep. Hands
+   * back the list it was given when it goes nowhere.
+   */
+  function moveLane(layers, type, from, to, rows) {
+    if (from === to) return layers;
+    const delta = to > from ? 1 : -1;
+    let next = layers;
+    for (let lane = from; lane !== to; lane += delta) {
+      const step = reorderLane(next, type, lane, delta, rows);
+      if (step === next) return lane === from ? layers : next;
+      next = step;
+    }
+    return next;
+  }
+
   /** The lane a layer is on, moved. What the arrows did before lanes existed. */
   function reorderLayer(layers, id, delta) {
     const settled = arrangeLanes(layers);
@@ -1281,6 +1304,8 @@ const timelineModel = (() => {
       crop: rectOf(v.crop),
       render: rectOf(v.render),
       anchor: typeof v.anchor === 'string' && v.anchor ? v.anchor : null,
+      // V3.4. The turn at that moment.
+      rotation: rotationOf(v.rotation),
     };
   }
 
@@ -1363,7 +1388,9 @@ const timelineModel = (() => {
       if (keyframes.length > 1) return { ...l, keyframes };
       const keep = list[0];
       if (l.kind === 'gen') return { ...l, keyframes: [], gen: withKeyed(l.gen, keep) };
-      return { ...l, keyframes: [], crop: keep.crop, render: keep.render, anchor: keep.anchor };
+      return {
+        ...l, keyframes: [], crop: keep.crop, render: keep.render, anchor: keep.anchor, rotation: keep.rotation || 0,
+      };
     });
   }
 
@@ -1847,6 +1874,7 @@ const timelineModel = (() => {
     lanesOf,
     overlapsOf,
     crossfade,
+    moveLane,
     seeThrough,
     fadesOutUnder,
     laneCount,

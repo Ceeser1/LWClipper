@@ -523,7 +523,14 @@
       <div id="placePanel" class="place-panel" hidden>
         <div id="placeStage" class="place-stage">
           <canvas id="placeCanvas" class="place-canvas"></canvas>
-          <div id="placeBox" class="place-box"></div>
+          <div id="placeBox" class="place-box">
+            <!-- V3.4. Turning circles, the text box's own. -->
+            <div class="crop-corner crop-corner--tl text-rotor place-rotor" data-corner="tl"></div>
+            <div class="crop-corner crop-corner--tr text-rotor place-rotor" data-corner="tr"></div>
+            <div class="crop-corner crop-corner--bl text-rotor place-rotor" data-corner="bl"></div>
+            <div class="crop-corner crop-corner--br text-rotor place-rotor" data-corner="br"></div>
+          </div>
+          <div id="placeAngle" class="text-angle" data-no-translate hidden></div>
         </div>
       </div>
       <div id="placeHint" class="hint-label crop-hint" hidden>Drag the picture to place it, and the scale to resize it</div>

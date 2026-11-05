@@ -88,6 +88,18 @@ const PLACE_ANCHORS = [
 // is why it is here and not only in the stylesheet.
 const PLACE_RING_R = 9;
 const PLACE_RING_INSET = 10;
+// V3.4. The user: "The clickable fixed-position-circles at Render Position
+// should shrink accordingly when the user zooms out". Below 100% the rings and
+// their inset scale with the frame, down to this radius; zooming in leaves
+// them as they are. The hit radius is the drawn one, as it always was.
+const PLACE_RING_MIN_R = 4;
+
+/** How big a ring is at the stage's zoom, as a share of its full size. */
+function placeRingScale() {
+  const v = stageViews.get(placeStage);
+  const zoom = v ? v.zoom : 1;
+  return Math.max(PLACE_RING_MIN_R / PLACE_RING_R, Math.min(1, zoom));
+}
 // How far the pointer may wander between going down and coming up and still
 // have been a click. Past it the press was the start of a drag, and the user
 // was plain about which of the two wins: "dragging the image disables
@@ -107,6 +119,15 @@ let placeRingPress = null;
 // which is the whole of what was asked for.
 let placeAnchor = null;
 const placeRingEls = new Map();
+// V3.4. How far the picture is turned, degrees clockwise, the layer's own or
+// the keyframe's, and written back by Accept beside the placement. The user:
+// "A video should have the rotation-circles at its corners like texts do".
+let placeRotation = 0;
+
+/** The room the picture takes on the frame at this size, turned as it is. */
+function placeTurnedSize(size) {
+  return layerGeometry.turnedSize(size.width, size.height, placeRotation);
+}
 
 const sameRect = (a, b) => !!a && !!b && a.x === b.x && a.y === b.y
   && a.width === b.width && a.height === b.height;
@@ -195,15 +216,20 @@ function showCropTab(which) {
  * re-fitting that item forbids. The ring stays lit and takes hold again the
  * next time the picture is scaled.
  */
-function holdPlaceAnchor(fit) {
+function holdPlaceAnchor(fit, turned = false) {
   const held = placeAnchor && PLACE_ANCHORS.find((a) => a.key === placeAnchor);
   if (!held || !fit || !placeDraft) return;
   const size = placeDraftSize(fit);
-  if (size.width === placeDraft.width && size.height === placeDraft.height) return;
+  // V3.4. A turn changes the room the picture takes as much as a scale does,
+  // so it re-sticks it too.
+  if (!turned && size.width === placeDraft.width && size.height === placeDraft.height) return;
   const frame = projectFrame();
+  // V3.4. By the box round the turned picture, the user's choice, so a picture
+  // at 45 degrees touches the corner rather than hanging over it.
+  const room = placeTurnedSize(size);
   placeCentre = {
-    cx: layerGeometry.anchorCentre(held.ax, frame.width, size.width),
-    cy: layerGeometry.anchorCentre(held.ay, frame.height, size.height),
+    cx: layerGeometry.anchorCentre(held.ax, frame.width, room.width),
+    cy: layerGeometry.anchorCentre(held.ay, frame.height, room.height),
   };
 }
 
@@ -254,7 +280,8 @@ function placeRings() {
   const r = stageFrameRect(placeStage);
   // What the ring occupies end to end, so that anchorCentre insets it by the
   // gap plus its own radius at 0 and at 1, and leaves it in the middle at half.
-  const span = 2 * (PLACE_RING_INSET + PLACE_RING_R);
+  const k = placeRingScale();
+  const span = 2 * (PLACE_RING_INSET + PLACE_RING_R) * k;
   return PLACE_ANCHORS.map((a) => ({
     ...a,
     cx: r.left + layerGeometry.anchorCentre(a.ax, r.width, span),
@@ -282,13 +309,19 @@ function layoutPlaceRings() {
     node.classList.toggle('place-ring--held', on && ring.key === placeAnchor);
     node.style.left = ring.cx + 'px';
     node.style.top = ring.cy + 'px';
+    // V3.4. Sized with the zoom, the margin keeping its centre on the spot.
+    const d = 2 * PLACE_RING_R * placeRingScale();
+    node.style.width = d + 'px';
+    node.style.height = d + 'px';
+    node.style.margin = (-d / 2) + 'px 0 0 ' + (-d / 2) + 'px';
+    node.style.borderWidth = Math.max(1, Math.round(2 * placeRingScale())) + 'px';
   }
 }
 
 /** Which ring a point on the stage is inside, if any. */
 function ringAt(p) {
   for (const ring of placeRings()) {
-    if (Math.hypot(p.x - ring.cx, p.y - ring.cy) <= PLACE_RING_R) return ring;
+    if (Math.hypot(p.x - ring.cx, p.y - ring.cy) <= PLACE_RING_R * placeRingScale()) return ring;
   }
   return null;
 }
@@ -303,7 +336,8 @@ function snapPlaceTo(key) {
   // or another ring is clicked.
   placeAnchor = key;
   const frame = projectFrame();
-  const size = placeDraftSize(fit);
+  // V3.4. The box round the picture as it is turned.
+  const size = placeTurnedSize(placeDraftSize(fit));
   // The centre rather than the corner, because the centre is what a placement
   // is carried as. rebuildPlaceDraft turns it back into the rectangle, so a
   // snapped picture and a dragged one are the same kind of thing afterwards and
@@ -389,8 +423,18 @@ function placePointAt(evt) {
   return stageProjectPoint(placeStage, evt);
 }
 
-const onPicture = (p) => !!placeDraft && p.x >= placeDraft.x && p.y >= placeDraft.y
-  && p.x <= placeDraft.x + placeDraft.width && p.y <= placeDraft.y + placeDraft.height;
+const onPicture = (p) => {
+  if (!placeDraft) return false;
+  const d = placeDraft;
+  // V3.4. Turned back about the picture's middle first, so a press is on the
+  // picture where the turned picture is, corners included.
+  const cx = d.x + d.width / 2;
+  const cy = d.y + d.height / 2;
+  const a = -placeRotation * Math.PI / 180;
+  const x = cx + (p.x - cx) * Math.cos(a) - (p.y - cy) * Math.sin(a);
+  const y = cy + (p.x - cx) * Math.sin(a) + (p.y - cy) * Math.cos(a);
+  return x >= d.x && y >= d.y && x <= d.x + d.width && y <= d.y + d.height;
+};
 
 // Anywhere on the picture, because the box is moved whole and there is nothing
 // on it to grab. Outside it nothing happens, so a click on the grey beside a
@@ -436,8 +480,13 @@ placeStage.addEventListener('pointermove', (evt) => {
   // V3.3. As far as wholly off the frame and 1% past it, the same reach a
   // shape or a text box has: "it should be able to let it spawn outside".
   const frame = projectFrame();
-  const x = layerGeometry.holdOffFrame(p.x - placeDrag.dx, placeDraft.width, frame.width);
-  const y = layerGeometry.holdOffFrame(p.y - placeDrag.dy, placeDraft.height, frame.height);
+  // V3.4. Held by the box round the turned picture, so it can still leave
+  // the frame wholly whichever way it is turned.
+  const room = placeTurnedSize(placeDraft);
+  const ox = (room.width - placeDraft.width) / 2;
+  const oy = (room.height - placeDraft.height) / 2;
+  const x = layerGeometry.holdOffFrame(p.x - placeDrag.dx - ox, room.width, frame.width) + ox;
+  const y = layerGeometry.holdOffFrame(p.y - placeDrag.dy - oy, room.height, frame.height) + oy;
   placeDraft = { ...placeDraft, x: Math.round(x), y: Math.round(y) };
   // The drag is what decides where the middle is from here on, so it is written
   // unrounded: the rectangle above is what is drawn, this is what it is drawn
@@ -466,6 +515,50 @@ function endPlaceDrag(evt, released) {
   if (snap) snapPlaceTo(snap);
 }
 placeStage.addEventListener('pointerup', (evt) => endPlaceDrag(evt, true));
+
+// ---- V3.4. Turning the picture ----
+//
+// Any corner circle turns it about its middle by as far as the pointer goes
+// round that middle, in whole degrees, landing on a quarter turn within two of
+// one: the text box's rule, through the same textTurnDrag. The angle shows by
+// the middle while it is dragged.
+
+function setPlaceRotation(deg) {
+  if (placeRotation === deg) return;
+  placeRotation = deg;
+  placeTouched = true;
+  if (!placeCentre) adoptPlaceRect(placeDraft, placeFitRect(cropTargetLayer()));
+  // A picture stuck to a ring stays on it, by the box round it as it turns.
+  holdPlaceAnchor(placeFitRect(cropTargetLayer()), true);
+  rebuildPlaceDraft();
+  drawPlaceStage();
+}
+
+for (const rotor of placeBox.querySelectorAll('.place-rotor')) {
+  rotor.addEventListener('pointerdown', (evt) => {
+    if (evt.button !== 0 || !placeDraft || cropTab !== 'place') return;
+    // Or the stage underneath would take it as a move or a pan as well.
+    evt.stopPropagation();
+    const d = placeDraft;
+    const r = stageFrameRect(placeStage);
+    const box = placeStageBox();
+    const cx = box.left + r.left + (d.x + d.width / 2) * r.s;
+    const cy = box.top + r.top + (d.y + d.height / 2) * r.s;
+    const start = placeRotation;
+    const from = [evt.clientX - cx, evt.clientY - cy];
+    placeAngle.style.left = (cx - box.left) + 'px';
+    placeAngle.style.top = (cy - box.top) + 'px';
+    placeAngle.textContent = start + '°';
+    placeAngle.hidden = false;
+    beginDrag(rotor, evt, (ev) => {
+      const deg = layerGeometry.textTurnDrag(start, from, [ev.clientX - cx, ev.clientY - cy]);
+      placeAngle.textContent = deg + '°';
+      setPlaceRotation(deg);
+    }, () => {
+      placeAngle.hidden = true;
+    });
+  });
+}
 
 // V3.3. The wheel zooms and empty space pans, so a picture put off the frame
 // can be seen and grabbed there. Empty is neither the picture nor a ring.
@@ -526,7 +619,7 @@ function drawPlaceStage() {
   // is not on screen is placing it blind. Its decoder was parked on that
   // layer's own first frame when the popup opened.
   paintLayers(ctx, virtual, compositeAt, null, target ? target.id : null);
-  if (target) drawLayerInto(ctx, virtual, target, cropDraft, placeDraft);
+  if (target) drawLayerInto(ctx, virtual, { ...target, rotation: placeRotation }, cropDraft, placeDraft);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   dimOutsideFrame(ctx, placeCanvas, placeStage);
   drawPlaceBox();
@@ -547,6 +640,8 @@ function drawPlaceBox() {
   placeBox.style.top = Math.round(r.top + d.y * r.s) + 'px';
   placeBox.style.width = Math.round(d.width * r.s) + 'px';
   placeBox.style.height = Math.round(d.height * r.s) + 'px';
+  // V3.4. Turned about its middle, as the picture is.
+  placeBox.style.transform = placeRotation ? 'rotate(' + placeRotation + 'deg)' : '';
   // Said rather than left to be worked out: a draft that is still the fit is
   // what Accept will store as no position at all.
   //
@@ -559,6 +654,8 @@ function drawPlaceBox() {
     placeSize.textContent = t('{w} x {h} at {x}, {y}',
       { w: d.width, h: d.height, x: d.x, y: d.y });
   }
+  // V3.4. The turn, when there is one.
+  if (placeRotation) placeSize.textContent += ', ' + placeRotation + '°';
 }
 
 cropTabFrame.addEventListener('click', () => showCropTab('frame'));
@@ -1166,6 +1263,8 @@ function openCrop(layerId) {
   // V2.8 item 8. Whatever this layer was stuck to last time, so the ring is lit
   // and the scale slider goes on growing it about the same corner.
   placeAnchor = (target && target.anchor) || null;
+  // V3.4. And however far it is turned.
+  placeRotation = (target && target.rotation) || 0;
   placeDraft = target ? (target.render ? { ...target.render } : placeFitRect(target)) : null;
   // The scale and the centre are what the placement really is, so they are
   // taken from whatever it opens on rather than being left at their defaults
@@ -1186,7 +1285,7 @@ let cropPreviewAt = -1;
 function previewCropDraft() {
   if (cropModal.hidden || !cropDraft) return;
   const render = placeTouched && placeDraft ? { ...placeDraft } : null;
-  const key = JSON.stringify([cropLayerId, cropDraft, render, placeAnchor]);
+  const key = JSON.stringify([cropLayerId, cropDraft, render, placeAnchor, placeRotation]);
   // V3.3. The main window stays usable, so the Render Position tab's picture
   // of the other layers follows the playhead and any edit made there too.
   if (cropTab === 'place' && placeDraft && (layers !== cropPreviewLayers || compositeAt !== cropPreviewAt)) {
@@ -1219,12 +1318,20 @@ function cropDraftLayer(render) {
   if (!layer) return null;
   const size = sourceSize();
   const crop = (size && !isFullFrame(cropDraft, size)) ? { ...cropDraft } : null;
-  if (!cropKeyframe) return { ...layer, crop, render, anchor: placeAnchor };
+  if (!cropKeyframe) return { ...layer, crop, render, anchor: placeAnchor, rotation: placeRotation };
   const live = cropKeyframe.id
     ? timelineModel.keyframesFor(layer).find((k) => k.id === cropKeyframe.id)
     : null;
   const next = timelineModel.putKeyframe([layer], layer.id,
-    { ...cropKeyframe, ...(live || {}), crop, render, anchor: placeAnchor, id: cropKeyframe.id || 'draft' });
+    {
+      ...cropKeyframe,
+      ...(live || {}),
+      crop,
+      render,
+      anchor: placeAnchor,
+      rotation: placeRotation,
+      id: cropKeyframe.id || 'draft',
+    });
   return next[0];
 }
 
@@ -1262,6 +1369,7 @@ function closeCrop() {
   // the layer as it is, which Accept has by now made it.
   cropFrozen = null;
   cropPreviewLayers = null;
+  placeAngle.hidden = true;
   const wasPopped = isPoppedOut(cropModal);
   popIn(cropModal);
   if (popoutPreview) {
@@ -1276,6 +1384,7 @@ function closeCrop() {
   placeRingPress = null;
   placeTouched = false;
   placeAnchor = null;
+  placeRotation = 0;
   // Back to following the selection. Cleared after the modal is hidden and
   // before anything redraws, so nothing reads it as still open on a layer.
   cropLayerId = null;
@@ -1304,7 +1413,7 @@ cropRemoveBtn.addEventListener('click', () => {
   // V3.3. On a keyframe it is that keyframe's crop or placement that goes,
   // and a keyframe the popup was about to make is made without it.
   if (cropKeyframe && cropLayerId) {
-    saveCropKeyframe(cropTab === 'place' ? { render: null } : { crop: null });
+    saveCropKeyframe(cropTab === 'place' ? { render: null, rotation: 0 } : { crop: null });
     commitHistory();
     closeCrop();
     updateCropOverlays();
@@ -1313,7 +1422,7 @@ cropRemoveBtn.addEventListener('click', () => {
   }
   if (cropTab === 'place') {
     if (cropLayerId) {
-      setLayers(timelineModel.setLayer(layers, cropLayerId, { render: null }));
+      setLayers(timelineModel.setLayer(layers, cropLayerId, { render: null, rotation: 0 }));
       commitHistory();
     }
     closeCrop();
@@ -1359,7 +1468,7 @@ cropAcceptBtn.addEventListener('click', () => {
   if (cropKeyframe && cropLayerId) {
     rememberView('crop', cropLayerId, cropKeyframe,
       rect ? { zoom: viewZoom, panX: viewPanX, panY: viewPanY } : null);
-    saveCropKeyframe({ crop: rect, render, anchor: placeAnchor });
+    saveCropKeyframe({ crop: rect, render, anchor: placeAnchor, rotation: placeRotation });
     commitHistory();
     closeCrop();
     updateCropOverlays();
@@ -1373,7 +1482,7 @@ cropAcceptBtn.addEventListener('click', () => {
     // V2.8 item 8. The ring travels with the placement, so reopening this layer
     // finds the same one lit and scaling goes on sticking to it.
     setLayers(timelineModel.setLayer(layers, cropLayerId,
-      { render, anchor: placeAnchor }));
+      { render, anchor: placeAnchor, rotation: placeRotation }));
   }
   commitHistory();
   closeCrop();

@@ -194,6 +194,83 @@ function movingLayer(graph, l, n, motion, prev, { input, fps, source, projW, pro
 }
 
 /**
+ * V3.4. A picture that moves between keyframes and turns as it does.
+ *
+ * rotate turns about the middle of what it is handed, and the picture's middle
+ * travels, so the reach canvas movingLayer lays the picture on will not do.
+ * Here each frame's picture is laid, cut and masked the same way, but on a
+ * square centred on the moment's destination and big enough for it at any
+ * turn, which is the longest diagonal any keyframe gives it. The square is
+ * turned by the moment's angle, an expression of t like every other number of
+ * the move, with what it uncovers left clear, and laid on the frame with its
+ * middle on the moment's middle.
+ */
+function movingTurnedLayer(graph, l, n, motion, prev, { input, fps, source }) {
+  const times = motion.map((k) => l.start + k.t);
+  const at = (pick) => piecewise(times, motion.map(pick));
+  const cut = unionOf(motion.map((k) => k.src));
+  const whole = source && cut.x === 0 && cut.y === 0
+    && cut.width >= evenDown(Number(source.width)) && cut.height >= evenDown(Number(source.height));
+  // A multiple of four, so its half is even: overlay rounds an odd position on
+  // a subsampled picture to an even one, which measured two pixels high.
+  const side = Math.ceil(Math.max(...motion.map((k) => Math.hypot(k.dest.width, k.dest.height))) / 4) * 4 + 4;
+  const half = side / 2;
+
+  const sx = at((k) => k.src.x);
+  const sy = at((k) => k.src.y);
+  const sw = at((k) => k.src.width);
+  const sh = at((k) => k.src.height);
+  const dx = at((k) => k.dest.x);
+  const dy = at((k) => k.dest.y);
+  const dw = at((k) => k.dest.width);
+  const dh = at((k) => k.dest.height);
+  const turn = at((k) => k.turn * Math.PI / 180);
+  const kx = '(' + dw + '/' + sw + ')';
+  const ky = '(' + dh + '/' + sh + ')';
+
+  const shift = 'setpts=PTS-STARTPTS+' + fixed(l.start) + '/TB';
+  const canvas = (colour, w, h, format) => 'color=c=' + colour + ':s=' + w + 'x' + h
+    + ':r=' + fps + ':d=' + fixed(l.duration) + ',' + shift + ',format=' + format;
+  const tag = (s) => s + n;
+
+  graph.push('[' + input + ':v]' + chain([
+    'fps=' + fps,
+    whole ? null : 'crop=' + cut.width + ':' + cut.height + ':' + cut.x + ':' + cut.y,
+    shift,
+    'format=yuva420p',
+    "scale=w='max(2\\,round(" + cut.width + '*' + kx + "))':h='max(2\\,round(" + cut.height + '*' + ky
+      + "))':eval=frame",
+  ]) + '[' + tag('mv') + ']');
+  graph.push(canvas('black@0', side, side, 'yuva420p') + '[' + tag('mc') + ']');
+  graph.push('[' + tag('mc') + '][' + tag('mv') + "]overlay=x='" + half + '-' + dw + '/2-(' + sx + '-' + cut.x + ')*' + kx
+    + "':y='" + half + '-' + dh + '/2-(' + sy + '-' + cut.y + ')*' + ky
+    + "':eval=frame:eof_action=pass:format=yuv420[" + tag('mp') + ']');
+  graph.push(canvas('white', 16, 16, 'gray')
+    + ",scale=w='max(1\\,round(" + dw + "))':h='max(1\\,round(" + dh + "))':eval=frame[" + tag('mw') + ']');
+  graph.push(canvas('black', side, side, 'gray') + '[' + tag('md') + ']');
+  graph.push('[' + tag('md') + '][' + tag('mw') + "]overlay=x='round(" + half + '-' + dw + "/2)':y='round(" + half + '-' + dh
+    + "/2)':eval=frame:eof_action=pass[" + tag('mm') + ']');
+
+  const fades = timeline.fadesOf(l);
+  const alpha = timeline.alphaOf(l);
+  const label = 'v' + n;
+  graph.push('[' + tag('mp') + '][' + tag('mm') + ']' + chain([
+    'alphamerge',
+    fades.in > 0 ? 'fade=t=in:st=' + fixed(l.start) + ':d=' + fixed(fades.in) + ':alpha=1' : null,
+    fades.out > 0
+      ? 'fade=t=out:st=' + fixed(l.start + l.duration - fades.out) + ':d=' + fixed(fades.out) + ':alpha=1'
+      : null,
+    alpha < 1 ? 'colorchannelmixer=aa=' + fixed(alpha) : null,
+    "rotate=a='" + turn + "':ow=" + side + ':oh=' + side + ':c=none',
+  ]) + '[' + label + ']');
+  const next = 'bg' + n;
+  graph.push('[' + prev + '][' + label + "]overlay=x='round(" + dx + '+' + dw + '/2-' + half + ")':y='round("
+    + dy + '+' + dh + '/2-' + half + ")':eval=frame:eof_action=pass:" + enableExpr(l.start, timeline.endOf(l))
+    + '[' + next + ']');
+  return next;
+}
+
+/**
  * Works out the span of timeline the output covers. `trim` is the project's in
  * and out markers; without them the output is everything up to the last layer's
  * end.
@@ -294,7 +371,9 @@ function buildComposeArgs({
       // its keyframe when it has a single one.
       const motion = geometry.motionOf(l, sources[l.src] || null, project);
       if (motion) {
-        prev = movingLayer(graph, l, n, motion, prev, {
+        // V3.4. One that also turns takes the square road above.
+        const mover = motion.some((k) => k.turn) ? movingTurnedLayer : movingLayer;
+        prev = mover(graph, l, n, motion, prev, {
           input: indexOf.get(l.id), fps, source: sources[l.src] || null, projW, projH,
         });
         return;
@@ -320,9 +399,34 @@ function buildComposeArgs({
       // measured in here. The audio side below is the other way round.
       const fades = timeline.fadesOf(l);
       const alpha = timeline.alphaOf(l);
+      // V3.4. A still turn: rotate on the placed picture, into the box round
+      // it with what the turn uncovers left clear, laid with its middle on the
+      // picture's middle. Even sides, for yuva420p.
+      const turn = placement ? placement.rotation || 0 : 0;
+      let rotate = null;
+      let turnedXY = null;
+      if (turn && placement) {
+        const d = placement.dest;
+        const room = geometry.turnedSize(d.width, d.height, turn);
+        // Even sides, and two more when that leaves the corner on an odd
+        // pixel: overlay rounds an odd position on a subsampled picture to an
+        // even one, a pixel off the middle.
+        const cx = d.x + d.width / 2;
+        const cy = d.y + d.height / 2;
+        // A millionth off first: cos 90 is not quite 0 in floating point, and
+        // 360.0000001 must not come out as a wider box.
+        const fit = (need, c) => {
+          const side = evenUp(Math.ceil(need - 1e-6));
+          return Math.round(c - side / 2) % 2 ? side + 2 : side;
+        };
+        const ow = fit(room.width, cx);
+        const oh = fit(room.height, cy);
+        rotate = 'rotate=a=' + fixed(turn * Math.PI / 180) + ':ow=' + ow + ':oh=' + oh + ':c=none';
+        turnedXY = Math.round(cx - ow / 2) + ':' + Math.round(cy - oh / 2);
+      }
       // V2.4. An alpha channel is now wanted for two reasons rather than one,
       // so the name says what it is for rather than which of them asked.
-      const needsAlpha = fades.in > 0 || fades.out > 0 || alpha < 1;
+      const needsAlpha = fades.in > 0 || fades.out > 0 || alpha < 1 || !!rotate;
       graph.push('[' + indexOf.get(l.id) + ':v]'
         + chain([
           l.frames ? holdFrames(l.frames) : null,
@@ -334,6 +438,7 @@ function buildComposeArgs({
           // carried would be a conversion on every frame of every project to
           // no end.
           needsAlpha ? 'format=yuva420p' : null,
+          rotate,
           fades.in > 0
             ? 'fade=t=in:st=' + fixed(l.start) + ':d=' + fixed(fades.in) + ':alpha=1'
             : null,
@@ -352,7 +457,7 @@ function buildComposeArgs({
         + '[' + label + ']');
 
       const next = 'bg' + n;
-      const xy = parts ? parts.overlay.slice('overlay='.length) : '0:0';
+      const xy = turnedXY || (parts ? parts.overlay.slice('overlay='.length) : '0:0');
       graph.push('[' + prev + '][' + label + ']overlay=' + xy
         + ':eof_action=pass:' + enableExpr(l.start, timeline.endOf(l))
         + '[' + next + ']');

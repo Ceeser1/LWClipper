@@ -572,3 +572,46 @@ test('a still fades like any other picture', () => {
   assert.ok(chain.includes('fade=t=in:st=0.0:d=2.0:alpha=1'), chain);
   assert.ok(chain.includes('yuva420p'), chain);
 });
+
+// ---- V3.4. Turned pictures ----
+
+test('a still turn is rotate into the box round it, laid with its middle on the middle', () => {
+  const R = { x: 640, y: 360, width: 640, height: 360 };
+  const layers = [vid({ id: 'v', duration: 4, render: R, rotation: 90 })];
+  const graph = graphOf(buildComposeArgs({ layers, project: HD, output: 'out.mp4', sources: SOURCES }));
+  const [picture] = find(graph, '[0:v]');
+  assert.ok(picture.includes('format=yuva420p'), 'a turn wants the clear it uncovers');
+  assert.match(picture, /rotate=a=1\.570796:ow=360:oh=640:c=none/);
+  // Middle 960, 540: the 360 by 640 box at 780, 220.
+  assert.ok(find(graph, 'overlay=780:220').length === 1);
+});
+
+test('an unturned layer has no rotate in its graph', () => {
+  const layers = [vid({ id: 'v', duration: 4, render: { x: 0, y: 0, width: 640, height: 360 } })];
+  const graph = graphOf(buildComposeArgs({ layers, project: HD, output: 'out.mp4', sources: SOURCES }));
+  assert.equal(find(graph, 'rotate=').length, 0);
+});
+
+test('a move that turns takes the square road, its angle an expression of t', () => {
+  const R = { x: 640, y: 360, width: 640, height: 360 };
+  const layers = [vid({
+    id: 'v', duration: 4, render: R,
+    keyframes: [
+      { id: 'a', t: 0, render: R, rotation: 170 },
+      { id: 'b', t: 2, render: R, rotation: -170 },
+    ],
+  })];
+  const graph = graphOf(buildComposeArgs({ layers, project: HD, output: 'out.mp4', sources: SOURCES }));
+  const [turn] = find(graph, 'rotate=');
+  assert.ok(turn, 'there is a rotate');
+  // 170 to 190 degrees, the short way, in radians: from 2.96706 by 0.349066.
+  assert.ok(turn.includes('2.96706+0.349066*'), turn);
+  // The square: the diagonal of 640 by 360 is 734.3, up to a multiple of four and four more.
+  assert.ok(turn.includes(':ow=740:oh=740:c=none'), turn);
+  // A move without a turn keeps the reach canvas.
+  const plain = [vid({
+    id: 'w', duration: 4, render: R,
+    keyframes: [{ id: 'a', t: 0, render: R }, { id: 'b', t: 2, render: { ...R, x: 0 } }],
+  })];
+  assert.equal(find(graphOf(buildComposeArgs({ layers: plain, project: HD, output: 'o.mp4', sources: SOURCES })), 'rotate=').length, 0);
+});

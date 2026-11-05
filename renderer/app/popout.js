@@ -7,7 +7,7 @@
 // window / side screens with an X close button", "separately moveable but
 // bound to the main window. If you minimize the main window all goes down, if
 // you close a single child only that closes". Only the crops: the layer and
-// media Crop popup (which is also Crop Keyframe on a video) and Crop Render
+// media Crop popup (which is also Edit Keyframe on a video) and Crop Render
 // Frame. And "even tho the main window is unusable during a pop-out window, it
 // should still update (maybe not live, but at 10 fps to 30 fps rate)".
 //

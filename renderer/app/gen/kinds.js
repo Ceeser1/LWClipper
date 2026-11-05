@@ -149,7 +149,7 @@ function openClipMenu(evt, track) {
   const keyable = !!layer && timelineModel.keyframable(layer) && timelineModel.covers(layer, at);
   item(t('Add Keyframe'), keyable, () => addKeyframeAt(layer.id, at - layer.start));
   item(t('Delete Keyframe'), !!layer && !!keyEl, () => deleteKeyframe(layer.id, keyEl.dataset.keyId));
-  item(t('Crop Keyframe'), !!layer && !!keyEl, () => editKeyframe(layer.id, keyEl.dataset.keyId));
+  item(t('Edit Keyframe'), !!layer && !!keyEl, () => editKeyframe(layer.id, keyEl.dataset.keyId));
   item(t('Split here'), !!layer && timelineModel.canSplitAt(layer, at),
     () => splitSelected(at));
   item(t('Copy'), !!layer, () => copySelected());

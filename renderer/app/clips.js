@@ -299,6 +299,7 @@ function buildLaneRow(type, lane, members) {
 
   const head = document.createElement('div');
   head.className = 'layer-head';
+  bindLaneLift(head, row, type, lane);
 
   const top = document.createElement('div');
   top.className = 'layer-head__top';
@@ -413,6 +414,116 @@ function buildLaneRow(type, lane, members) {
     selectLayer(members[0].id);
   });
   return row;
+}
+
+// ---- V3.4. A row held and dragged ----
+//
+// The user: "Holding left-click for >200 [ms] on a layer column should make it
+// highlight across the width in gold and drag-able up and down above/below
+// other layers showing a faint gold glow between the layers it will be dropped
+// in when click is released. While dragged the layer (e.g. Video 1 and all its
+// contents, but not the track, just layer-column) should be tilted 10°".
+//
+// A press on the header that is held still that long lifts the row; one let
+// go sooner, or moved first, or on one of the header's own controls, is what
+// it always was. Among rows of its own kind, the way the arrows go; the clips
+// stay where they are until the drop, then the whole lane moves, one undo step.
+
+const LANE_HOLD_MS = 200;
+const LANE_TILT_DEG = 10;
+
+function bindLaneLift(head, row, type, lane) {
+  head.addEventListener('pointerdown', (evt) => {
+    if (evt.button !== 0 || busy || !timelineDriving()) return;
+    if (evt.target.closest('button, input, select, textarea, label')) return;
+    const x0 = evt.clientX;
+    const y0 = evt.clientY;
+    head.setPointerCapture(evt.pointerId);
+    let lift = null;
+    const stopWaiting = (ev) => {
+      if (ev.type === 'pointermove' && Math.hypot(ev.clientX - x0, ev.clientY - y0) <= TIMELINE_DRAG_SLOP) return;
+      clearTimeout(timer);
+      head.removeEventListener('pointermove', stopWaiting);
+      head.removeEventListener('pointerup', stopWaiting);
+      head.removeEventListener('pointercancel', stopWaiting);
+    };
+    const timer = setTimeout(() => {
+      stopWaiting({ type: 'held' });
+      if (!head.hasPointerCapture(evt.pointerId)) return;
+      lift = liftLane(head, row, type, lane, y0);
+      const move = (ev) => lift.move(ev.clientY);
+      const drop = (ev) => {
+        head.removeEventListener('pointermove', move);
+        head.removeEventListener('pointerup', drop);
+        head.removeEventListener('pointercancel', drop);
+        if (head.hasPointerCapture(ev.pointerId)) head.releasePointerCapture(ev.pointerId);
+        lift.drop(ev.type === 'pointerup');
+      };
+      head.addEventListener('pointermove', move);
+      head.addEventListener('pointerup', drop);
+      head.addEventListener('pointercancel', drop);
+    }, LANE_HOLD_MS);
+    head.addEventListener('pointermove', stopWaiting);
+    head.addEventListener('pointerup', stopWaiting);
+    head.addEventListener('pointercancel', stopWaiting);
+  });
+}
+
+/**
+ * A row lifted: gold across its width, its header tilted and following the
+ * pointer, a gold glow in the gap it would land in. `move(y)` follows the
+ * pointer, `drop(keep)` puts it down, moving the lane when `keep`.
+ */
+function liftLane(head, row, type, lane, y0) {
+  const rows = [...timelineStack.querySelectorAll('.layer-row--' + type)];
+  const from = rows.indexOf(row);
+  const glow = document.createElement('div');
+  glow.className = 'lane-drop-glow';
+  glow.hidden = true;
+  document.body.appendChild(glow);
+  row.classList.add('layer-row--lifted');
+  head.classList.add('layer-head--lifted');
+  document.body.classList.add('lane-lifting');
+  let to = from;
+  const place = (y) => {
+    head.style.transform = 'translateY(' + (y - y0) + 'px) rotate(' + LANE_TILT_DEG + 'deg)';
+    // The gap the pointer is nearest: before the first row whose middle it is
+    // above, or after the last.
+    let gap = rows.length;
+    for (let i = 0; i < rows.length; i += 1) {
+      const r = rows[i].getBoundingClientRect();
+      if (y < r.top + r.height / 2) {
+        gap = i;
+        break;
+      }
+    }
+    to = gap > from ? gap - 1 : gap;
+    glow.hidden = to === from;
+    if (glow.hidden) return;
+    const stack = timelineStack.getBoundingClientRect();
+    const edge = gap < rows.length
+      ? rows[gap].getBoundingClientRect().top
+      : rows[rows.length - 1].getBoundingClientRect().bottom;
+    glow.style.left = stack.left + 'px';
+    glow.style.width = stack.width + 'px';
+    glow.style.top = edge + 'px';
+  };
+  place(y0);
+  return {
+    move: place,
+    drop(keep) {
+      glow.remove();
+      head.style.transform = '';
+      row.classList.remove('layer-row--lifted');
+      head.classList.remove('layer-head--lifted');
+      document.body.classList.remove('lane-lifting');
+      if (!keep || to === from || from < 0) return;
+      const next = timelineModel.moveLane(layers, type, lane, to, rowsOf(type));
+      if (next === layers) return;
+      setLayers(next);
+      commitHistory();
+    },
+  };
 }
 
 /**
@@ -768,6 +879,10 @@ function snapClipValue(layer, edge, value, lane) {
     : { value: value + best, line: hit, side };
 }
 
+// V3.4. How long a press on a clip may last and still be a click that moves
+// the playhead. Longer is a hold, which leaves the playhead where it is.
+const CLIP_CLICK_MS = 250;
+
 function bindClipDrag(clip, layerId) {
   clip.addEventListener('pointerdown', (evt) => {
     if (evt.button !== 0 || busy) return;
@@ -794,6 +909,8 @@ function bindClipDrag(clip, layerId) {
     const drag = {
       anchorX: evt.clientX,
       anchorY: evt.clientY,
+      // V3.4. When it went down, for telling a quick click from a hold.
+      pressedAt: performance.now(),
       anchorValue: valueOf(layer),
       factor: modifierFactor(evt),
       moved: false,
@@ -887,6 +1004,14 @@ function bindClipDrag(clip, layerId) {
       if (drag.moved) {
         setLayers(layers);
         commitHistory();
+      }
+      // V3.4. The user: "A single fast click on a track should bring the
+      // playhead right at that position". Empty track space already seeks on
+      // the press; a clip takes the press to select and drag, so a quick
+      // click that never became a drag seeks here, on its release. Not on a
+      // trim edge, whose press means the edge.
+      else if (!edge && ev.type === 'pointerup' && performance.now() - drag.pressedAt <= CLIP_CLICK_MS) {
+        seekTimeline(timelineView.xToTime(tlView, ev.clientX - rect.left));
       }
     };
     beginDrag(clip, evt, onMove, onUp);
@@ -1136,6 +1261,7 @@ function buildEmptyRow(type, lane, removable) {
 
   const head = document.createElement('div');
   head.className = 'layer-head';
+  bindLaneLift(head, row, type, lane);
   const top = document.createElement('div');
   top.className = 'layer-head__top';
   const name = document.createElement('div');

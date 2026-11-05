@@ -437,6 +437,9 @@ function drawLayerInto(ctx, canvas, layer, crop = layer.crop, render = layer.ren
     });
   const d = layerGeometry.drawImageArgs(placement, frame, canvas);
   if (!d) return;
+  // V3.4. Turned about its own middle, by the moment's turn when it moves and
+  // by the layer's own otherwise.
+  const turn = keyed ? (placement.rotation || 0) : (layer.rotation || 0);
   // drawImage measures its source rectangle in the element's own intrinsic
   // size, which need not be the coded size the crop was set against. So the
   // rectangle is carried across as a fraction, exactly as paintCropFrame
@@ -445,8 +448,17 @@ function drawLayerInto(ctx, canvas, layer, crop = layer.crop, render = layer.ren
   // where kx and ky come out at 1 and nothing is scaled at all.
   const kx = entry.width / source.width;
   const ky = entry.height / source.height;
+  if (!turn) {
+    ctx.drawImage(entry.el, d.sx * kx, d.sy * ky, d.sw * kx, d.sh * ky,
+      d.dx, d.dy, d.dw, d.dh);
+    return;
+  }
+  ctx.save();
+  ctx.translate(d.dx + d.dw / 2, d.dy + d.dh / 2);
+  ctx.rotate(turn * Math.PI / 180);
   ctx.drawImage(entry.el, d.sx * kx, d.sy * ky, d.sw * kx, d.sh * ky,
-    d.dx, d.dy, d.dw, d.dh);
+    -d.dw / 2, -d.dh / 2, d.dw, d.dh);
+  ctx.restore();
 }
 
 // V3.3. What a popped out crop window is doing, for the main window's preview

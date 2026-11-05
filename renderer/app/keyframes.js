@@ -107,7 +107,9 @@ function keyframeSeed(layer, t) {
   }
   const list = timelineModel.keyframesFor(layer);
   if (!list.length) {
-    return { crop: layer.crop || null, render: layer.render || null, anchor: layer.anchor || null };
+    return {
+      crop: layer.crop || null, render: layer.render || null, anchor: layer.anchor || null, rotation: layer.rotation || 0,
+    };
   }
   let a = null;
   let b = null;
@@ -117,15 +119,17 @@ function keyframeSeed(layer, t) {
   }
   if (!a || !b) {
     const k = a || b;
-    return { crop: k.crop, render: k.render, anchor: k.anchor };
+    return { crop: k.crop, render: k.render, anchor: k.anchor, rotation: k.rotation || 0 };
   }
   const source = layerSource(layer);
   const p = source && layerGeometry.placementAt(layer, t, source, projectFrame());
-  if (!p) return { crop: a.crop, render: a.render, anchor: a.anchor };
+  if (!p) return { crop: a.crop, render: a.render, anchor: a.anchor, rotation: a.rotation || 0 };
   return {
     crop: a.crop || b.crop ? wholeRect(p.src, true) : null,
     render: a.render || b.render ? wholeRect(p.dest, false) : null,
     anchor: a.anchor,
+    // V3.4. The turn there, blended the short way round.
+    rotation: p.rotation || 0,
   };
 }
 
@@ -235,7 +239,7 @@ function removeKeyframeNow(layerId, id) {
 }
 
 /**
- * The right click's Crop Keyframe: that keyframe chosen, the playhead on it,
+ * The right click's Edit Keyframe (Crop Keyframe until V3.4): that keyframe chosen, the playhead on it,
  * and the window that edits it opened there. On a video or an image that is
  * the crop popup; a text, a shape or a bar has nothing to crop and its
  * keyframes are edited in its own settings, so that is what opens.
@@ -279,7 +283,7 @@ function buildClipKeyframes(track, layer) {
     key.className = 'clip-key';
     key.dataset.layerId = layer.id;
     key.dataset.keyId = k.id;
-    key.title = t('Keyframe, click to go to it, drag to move it');
+    key.title = t('Keyframe, click to go to it, drag to move it, double-click to edit it');
     track.appendChild(key);
     bindKeyframeDrag(key, layer.id, k.id);
   }
@@ -357,11 +361,21 @@ function bindKeyframeDrag(node, layerId, keyId) {
       updatePlayhead();
     };
     const onUp = () => {
+      node.dataset.dragged = String(drag.moved);
       if (!drag.moved) return;
       setLayers(layers);
       commitHistory();
     };
     beginDrag(node, evt, onMove, onUp);
+  });
+  // V3.4. The user: "A double-click on a keyframe should bring up its render
+  // crop/settings", the right click's Edit Keyframe: the crop window for a
+  // video or an image, the settings for a text, a shape or a bar. Not after a
+  // press that dragged it, which was a move.
+  node.addEventListener('dblclick', (evt) => {
+    evt.stopPropagation();
+    if (busy || node.dataset.dragged === 'true') return;
+    editKeyframe(layerId, keyId);
   });
 }
 

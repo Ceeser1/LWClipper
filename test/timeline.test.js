@@ -1093,6 +1093,26 @@ test('an empty clipboard pastes nothing', () => {
   assert.equal(T.pasteInto(list, { items: [] }, 5, 0), list);
 });
 
+// ---- V3.4. A row held and dragged ----
+
+test('moveLane carries a lane past the others, which close up behind it', () => {
+  const list = T.arrangeLanes([
+    video({ id: 'a', lane: 0 }), video({ id: 'b', lane: 1 }),
+    video({ id: 'c', lane: 2 }), video({ id: 'd', lane: 3 }),
+    audio({ id: 's', lane: 0 }),
+  ]);
+  const laneOf = (l, id) => T.layerById(l, id).lane;
+  const down = T.moveLane(list, 'video', 0, 2, 4);
+  assert.deepEqual(['a', 'b', 'c', 'd'].map((id) => laneOf(down, id)), [2, 0, 1, 3]);
+  const up = T.moveLane(list, 'video', 3, 1, 4);
+  assert.deepEqual(['a', 'b', 'c', 'd'].map((id) => laneOf(up, id)), [0, 2, 3, 1]);
+  // Audio is not touched by a video row, and nowhere to go is the same list.
+  assert.equal(laneOf(down, 's'), 0);
+  assert.equal(T.moveLane(list, 'video', 1, 1, 4), list);
+  // An empty row below the last full one is somewhere to go too.
+  assert.equal(laneOf(T.moveLane(list, 'video', 0, 4, 5), 'a'), 4);
+});
+
 // ---- v2.9 transitions ----
 
 function pair(type, bStart, props) {

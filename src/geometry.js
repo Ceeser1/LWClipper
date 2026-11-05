@@ -565,6 +565,34 @@ const layerGeometry = (() => {
   // draws, and composer.js asks motionOf for the keyframes it turns into
   // ffmpeg expressions of t, whose blend is this blend.
 
+  // ---- V3.4. A picture turned about its middle ----
+
+  /** A turn held to -180 up to and including 180 degrees. */
+  function turnOf(deg) {
+    const n = finite(deg, 0) % 360;
+    let a = n <= -180 ? n + 360 : (n > 180 ? n - 360 : n);
+    if (a === -180) a = 180;
+    return a === 0 ? 0 : a;
+  }
+
+  /** From turn a to turn b the short way round, as a signed number of degrees. */
+  function turnBetween(a, b) {
+    const d = ((((finite(b, 0) - finite(a, 0)) % 360) + 540) % 360) - 180;
+    return d === -180 ? 180 : d;
+  }
+
+  /**
+   * How much room a w by h picture takes on the frame once turned: the box
+   * round it, which is what the corner and side rings line it up by and what
+   * has to be wholly off the frame for it to have left.
+   */
+  function turnedSize(width, height, deg) {
+    const a = finite(deg, 0) * Math.PI / 180;
+    const c = Math.abs(Math.cos(a));
+    const s = Math.abs(Math.sin(a));
+    return { width: width * c + height * s, height: width * s + height * c };
+  }
+
   function blendRect(a, b, u) {
     return {
       x: a.x + (b.x - a.x) * u,
@@ -579,7 +607,7 @@ const layerGeometry = (() => {
     const out = [];
     for (const k of list) {
       const p = placeLayer({ source, crop: k.crop, render: k.render, project });
-      if (p) out.push({ t: k.t, src: p.src, dest: p.dest });
+      if (p) out.push({ t: k.t, src: p.src, dest: p.dest, rotation: turnOf(k.rotation) });
     }
     return out;
   }
@@ -593,18 +621,25 @@ const layerGeometry = (() => {
   function placementAt(layer, t, source, project) {
     const keyed = keyedPlacements(layer, source, project);
     if (!keyed.length) {
-      return placeLayer({ source, crop: layer && layer.crop, render: layer && layer.render, project });
+      const p = placeLayer({ source, crop: layer && layer.crop, render: layer && layer.render, project });
+      return p ? { ...p, rotation: turnOf(layer && layer.rotation) } : null;
     }
     const at = finite(t, 0);
-    if (at <= keyed[0].t) return { src: keyed[0].src, dest: keyed[0].dest };
+    const first = keyed[0];
+    if (at <= first.t) return { src: first.src, dest: first.dest, rotation: first.rotation };
     const last = keyed[keyed.length - 1];
-    if (at >= last.t) return { src: last.src, dest: last.dest };
+    if (at >= last.t) return { src: last.src, dest: last.dest, rotation: last.rotation };
     let i = 0;
     while (keyed[i + 1].t <= at) i += 1;
     const a = keyed[i];
     const b = keyed[i + 1];
     const u = (at - a.t) / (b.t - a.t);
-    return { src: blendRect(a.src, b.src, u), dest: blendRect(a.dest, b.dest, u) };
+    // V3.4. The turn goes the short way round, as a text's does.
+    return {
+      src: blendRect(a.src, b.src, u),
+      dest: blendRect(a.dest, b.dest, u),
+      rotation: turnOf(a.rotation + turnBetween(a.rotation, b.rotation) * u),
+    };
   }
 
   /**
@@ -615,8 +650,18 @@ const layerGeometry = (() => {
     const keyed = keyedPlacements(layer, source, project);
     if (keyed.length < 2) return null;
     const same = (a, b) => a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
-    const still = keyed.every((k) => same(k.src, keyed[0].src) && same(k.dest, keyed[0].dest));
-    return still ? null : keyed;
+    const still = keyed.every((k) => same(k.src, keyed[0].src) && same(k.dest, keyed[0].dest)
+      && k.rotation === keyed[0].rotation);
+    if (still) return null;
+    // V3.4. Each turn carried on from the one before it the short way round,
+    // so a straight blend between neighbours, which is what the export's
+    // expressions are, turns the way the preview does: 170 then -170 is 170
+    // then 190, twenty degrees and not three hundred and forty.
+    let turn = keyed[0].rotation;
+    return keyed.map((k, i) => {
+      if (i) turn += turnBetween(keyed[i - 1].rotation, k.rotation);
+      return { ...k, turn };
+    });
   }
 
   /**
@@ -1012,6 +1057,9 @@ const layerGeometry = (() => {
   }
 
   return {
+    turnOf,
+    turnBetween,
+    turnedSize,
     OFF_FRAME_SHARE,
     holdOffFrame,
     offFrameReach,

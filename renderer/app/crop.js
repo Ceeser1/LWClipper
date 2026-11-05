@@ -139,7 +139,13 @@ function cropTargetLayer() {
     // the popup reads, the crop, the placement, the ring and the fit, is the
     // keyframe's without any of it having to know.
     return open && cropKeyframe
-      ? { ...open, crop: cropKeyframe.crop, render: cropKeyframe.render, anchor: cropKeyframe.anchor }
+      ? {
+        ...open,
+        crop: cropKeyframe.crop,
+        render: cropKeyframe.render,
+        anchor: cropKeyframe.anchor,
+        rotation: cropKeyframe.rotation || 0,
+      }
       : open;
   }
   const l = selectedLayerId ? timelineModel.layerById(layers, selectedLayerId) : null;
