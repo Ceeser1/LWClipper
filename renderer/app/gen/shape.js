@@ -44,17 +44,33 @@ const shapeRadiusSlider = el('shapeRadiusSlider');
 const shapeRadiusBox = el('shapeRadiusBox');
 // V3.6.5. Which shape it is.
 const shapeKinds = el('shapeKinds');
+// V3.7. The clip's keyframes.
+const shapeKeys = el('shapeKeys');
+// V3.7. Color or Gradient, and the gradient's own controls.
+const shapeFill = el('shapeFill');
+const shapeFillHint = el('shapeFillHint');
+const shapeGradient = el('shapeGradient');
+const shapeGradBar = el('shapeGradBar');
+const shapeGradCanvas = el('shapeGradCanvas');
+const shapeGradStart = el('shapeGradStart');
+const shapeGradEnd = el('shapeGradEnd');
+const shapeGradAngle = el('shapeGradAngle');
+const shapeGradLine = el('shapeGradLine');
+const shapeHint = el('shapeHint');
+const shapeStrip = makeGenStrip(shapeModal, shapeKeys, el('shapeKeysReadout'), el('shapeKeysCanvas'), shapeStage);
 
 let shapeLayerId = null;
 let shapeFirst = false;
 // { kind, color, box: null or whole project pixels, invert, soft and line in
 // whole project pixels, outline, ring and inner as shares, points, and since
-// 3.6.2 rotation in whole degrees and radius in whole project pixels }
+// 3.6.2 rotation in whole degrees and radius in whole project pixels, and
+// since 3.7 fill, and gradient with its start and end in whole project
+// pixels and its angle in whole degrees }
 let shapeDraft = null;
 let shapeOpened = null;   // the draft as it opened, as JSON
-// V3.6.5. The figure it opened as, the kind and a star's points and depth,
-// which Accept measures every keyframe's box against when it changed.
-let shapeOpenedFigure = null;
+// V3.7. The gradient a shape that never had one has, in the draft's measure,
+// as JSON: picking Gradient for it first lays it across the shape.
+let shapeGradientUnset = null;
 
 function shapeGenOf(draft) {
   return {
@@ -102,9 +118,12 @@ function openShapeSettings(layer, first) {
     inner: shape.inner,
     rotation: Math.round(shape.rotation),
     radius: Math.round(shape.radius * k),
+    // V3.7.
+    fill: shape.fill,
+    gradient: shapeDraftGradient(shape.gradient, k),
   };
   shapeOpened = JSON.stringify(shapeDraft);
-  shapeOpenedFigure = { kind: shape.kind, points: shape.points, inner: shape.inner };
+  shapeGradientUnset = JSON.stringify(shapeDraftGradient(timelineModel.gradientOf(null), k));
   shapeBackground.checked = genBackdropOn;
   shapeModal.hidden = false;
   recallStageView(shapeStage, shapeLayerId, genKeyframeOf(shapeLayerId));
@@ -117,6 +136,11 @@ function openShapeSettings(layer, first) {
       paintShapePreview();
     },
     draftGen: () => (shapeDraft ? shapeGenOf(shapeDraft) : null),
+    // V3.7. The keyframe editor's side of it.
+    changed: () => !!shapeDraft && JSON.stringify(shapeDraft) !== shapeOpened,
+    reload: reloadShapeKeyed,
+    strip: shapeStrip,
+    fold: refitShapeLayer,
   });
   showShapeDraft(null);
   sizeShapeStage();
@@ -131,6 +155,24 @@ function showShapeDraft(except) {
     b.classList.toggle('btn--active', b.dataset.kind === d.kind);
   }
   paintSwatch(shapeColorBtn, d.color);
+  // V3.7. Color shows the swatch; Gradient its hint in the swatch's place and
+  // the gradient's controls under the settings.
+  const grad = d.fill === 'gradient';
+  for (const b of shapeFill.querySelectorAll('button')) {
+    b.classList.toggle('btn--active', b.dataset.fill === d.fill);
+  }
+  shapeColorBtn.hidden = grad;
+  shapeFillHint.hidden = !grad;
+  shapeGradient.hidden = !grad;
+  // Two calls, so check-locales sees both literals.
+  if (grad) {
+    shapeHint.textContent = t('Drag the sides to stretch the shape, a corner to scale it, Ctrl and drag inside it to move it and the dot above it to turn it, hold Shift to keep its centre');
+  } else {
+    shapeHint.textContent = t('Drag the sides to stretch the shape, a corner to scale it, inside it to move it and the dot above it to turn it, hold Shift to keep its centre');
+  }
+  if (except !== shapeGradStart) shapeGradStart.value = String(d.gradient.start);
+  if (except !== shapeGradEnd) shapeGradEnd.value = String(d.gradient.end);
+  if (except !== shapeGradAngle) shapeGradAngle.value = String(d.gradient.angle);
   shapeInvert.checked = d.invert;
   const show = (slider, box, value) => {
     slider.value = String(value);
@@ -190,17 +232,21 @@ function refitShapeBox(box, from, to, whole) {
 /**
  * V3.6.5. The kind is the whole clip's, so a clip with keyframes given another
  * one, or a star given other points, has every keyframe's box and its own
- * refitted the way the draft's was, before Accept writes the draft over the
- * one it is on. Not committed here: Accept's own step takes it in.
+ * refitted the way the draft's was, before the draft is written over the one
+ * it is on. V3.7: the media window's fold hook, so the clip's draft takes it
+ * whenever the modal's settings are folded in. Hands back the layer.
  */
-function refitShapeClip(id, from, to) {
-  const layer = timelineModel.layerById(layers, id);
-  const list = layer ? timelineModel.keyframesFor(layer) : [];
-  if (!list.length || genDraw.shapeAspect(from) === genDraw.shapeAspect(to)) return;
+function refitShapeLayer(layer, gen) {
+  const list = timelineModel.keyframesFor(layer);
+  const from = layer.gen.shape;
+  const to = gen.shape;
+  if (!list.length || genDraw.shapeAspect(from) === genDraw.shapeAspect(to)) return layer;
   const fit = (box) => refitShapeBox(box, from, to, false);
-  const gen = { ...layer.gen, shape: { ...layer.gen.shape, box: fit(layer.gen.shape.box) } };
-  const keyframes = list.map((k) => (k.box ? { ...k, box: fit(k.box) } : k));
-  setLayers(timelineModel.setLayer(timelineModel.setGen(layers, id, gen), id, { keyframes }));
+  return {
+    ...layer,
+    gen: { ...layer.gen, shape: { ...layer.gen.shape, box: fit(layer.gen.shape.box) } },
+    keyframes: list.map((k) => (k.box ? { ...k, box: fit(k.box) } : k)),
+  };
 }
 
 function closeShapeSettings() {
@@ -215,13 +261,48 @@ function closeShapeSettings() {
   shapeLayerId = null;
   shapeDraft = null;
   shapeOpened = null;
-  shapeOpenedFigure = null;
   shapeFirst = false;
 }
 
 function sizeShapeStage() {
+  // V3.7. The kind can be changed in the window since 3.6.5, and a ring, a
+  // star or a square has a third row of fields the others have not. It is
+  // always counted, so picking one never pushes the buttons out of the
+  // window, the way the Layer Mask view counts its second row.
+  const noThird = shapeRingField.hidden && shapePointsField.hidden
+    && shapeInnerField.hidden && shapeRadiusField.hidden;
+  if (noThird) shapeRingField.hidden = false;
   sizeGenStage(shapeStage, shapeCanvas);
+  if (noThird) shapeRingField.hidden = true;
+  // V3.7. The gradient's bar as wide as the preview.
+  shapeGradBar.style.width = shapeStage.style.width;
+  paintShapeGradBar(true);
   placeShapeBox();
+  shapeStrip.draw();
+}
+
+/**
+ * V3.7. The keyed settings, the box, the soft edge, the turn and the corners,
+ * read out of `gen` into the draft: the clip's draft at another keyframe. The
+ * rest is the whole clip's and is the draft's already.
+ */
+function reloadShapeKeyed(gen) {
+  if (!shapeDraft) return;
+  const shape = gen.shape;
+  const k = genDraw.scaleOf(gen, projectFrame().height);
+  const b = shape.box;
+  shapeDraft = {
+    ...shapeDraft,
+    box: b ? { x: Math.round(b.x * k), y: Math.round(b.y * k), w: Math.round(b.w * k), h: Math.round(b.h * k) } : null,
+    soft: Math.min(shapeSoftCeiling(), Math.round(shape.soft * k)),
+    rotation: Math.round(shape.rotation),
+    radius: Math.round(shape.radius * k),
+  };
+  shapeOpened = JSON.stringify(shapeDraft);
+  showShapeDraft(null);
+  placeShapeBox();
+  paintShapePreview();
+  shapeStrip.draw();
 }
 
 function paintShapePreview(quick) {
@@ -258,6 +339,7 @@ function placeShapeBox() {
   shapeBoxEl.style.height = (b.h * s) + 'px';
   // V3.6.2. Turned about its centre, the point the drawing turns it about.
   shapeBoxEl.style.transform = shapeDraft.rotation ? 'rotate(' + shapeDraft.rotation + 'deg)' : '';
+  placeShapeGradLine();
 }
 
 function setShapeBox(box) {
@@ -291,7 +373,10 @@ function showShapeGuides(x, y) {
 // frame and found there again.
 bindStageView(shapeStage, {
   open: () => !!shapeDraft && !shapeModal.hidden,
-  empty: (evt) => evt.target === shapeStage || evt.target === shapeCanvas,
+  // V3.7. In Gradient a left drag on the preview draws the gradient, so only
+  // the middle button pans there; a double click still fits the frame.
+  empty: (evt) => (evt.target === shapeStage || evt.target === shapeCanvas)
+    && (evt.type === 'dblclick' || !shapeGradientMode()),
   redraw: (quick) => {
     placeShapeBox();
     paintShapePreview(quick);
@@ -359,6 +444,9 @@ for (const corner of shapeBoxEl.querySelectorAll('.crop-corner')) {
 
 shapeBoxEl.addEventListener('pointerdown', (evt) => {
   if (evt.button !== 0 || !shapeDraft || evt.target !== shapeBoxEl) return;
+  // V3.7. In Gradient a plain drag draws the gradient and Ctrl moves the
+  // shape, the user's choice; the stage below takes the plain one.
+  if (shapeGradientMode() && !evt.ctrlKey) return;
   const start = shapeBoxNow();
   const frame = projectFrame();
   const s = shapeStageScale();
@@ -501,10 +589,8 @@ shapeAcceptBtn.addEventListener('click', () => {
   const changed = JSON.stringify(shapeDraft) !== shapeOpened;
   const first = shapeFirst;
   const gen = shapeGenOf(shapeDraft);
-  const from = shapeOpenedFigure;
   closeShapeSettings();
-  if (changed && from) refitShapeClip(id, from, gen.shape);
-  acceptGenSettings(id, gen, changed, first);
+  acceptGenSettings(id, gen, changed, first, refitShapeLayer);
 });
 
 function cancelShapeSettings() {
@@ -516,3 +602,311 @@ function cancelShapeSettings() {
 shapeCancelBtn.addEventListener('click', cancelShapeSettings);
 
 bindPopup(shapeModal, cancelShapeSettings);
+
+// ---- V3.7. Color or Gradient ----
+//
+// The user: "Make shapes Color a 2-way button selector Color | Gradient. Color
+// only shows the clickable color display/selector button, gradient adds hint
+// Modify your gradient below instead ... In the new row below show a bar
+// ranging across the preview width with white left transitioning into black
+// on the right with clickable dots that open the color picker for that region.
+// Double-click somewhere empty on this bar adds a new dot inbetween as a
+// transition point. Below the bar show a text Click somewhere on the preview
+// and drag any direction to apply a gradient with 3 text-/editboxes below
+// Start: [Start-pixel], End: [End-pixel], Rotation: [gradient-rotation]. Each
+// Editbox should be drag-able. So clicking and moving the mouse right/left
+// should increase/decrease their values."
+//
+// The gradient belongs to the shape: Start and End are pixels from its centre
+// along the gradient's direction, and Rotation is measured from the shape, so
+// it turns and moves with it. It is the whole clip's, not keyed. A stop is
+// moved by dragging it along the bar and taken away by dragging it off it,
+// two staying at least; a box moves one a pixel, ten with Shift.
+
+// How far off the bar a dot has to be dragged to go.
+const GRAD_STOP_OFF = 28;
+// How far a press on a dot or a box goes before it is a drag.
+const GRAD_SLOP = 3;
+// Start and End reach this far either way, in project pixels.
+const GRAD_REACH = 100000;
+
+function shapeGradientMode() {
+  return !!shapeDraft && shapeDraft.fill === 'gradient';
+}
+
+/** A model gradient in the draft's measure: `k` project pixels to one at refHeight. */
+function shapeDraftGradient(g, k) {
+  return {
+    stops: g.stops.map((stop) => ({ at: stop.at, color: stop.color })),
+    start: Math.round(g.start * k),
+    end: Math.round(g.end * k),
+    angle: Math.round(g.angle),
+  };
+}
+
+/** An angle wrapped into -180 up to 180, the way the model keeps one. */
+function wrapDegrees(deg) {
+  const r = ((Math.round(deg) % 360) + 360) % 360;
+  return r > 180 ? r - 360 : r;
+}
+
+/**
+ * The gradient changed: `quick` while something is being dragged, which
+ * leaves the dots where they are, since one of them is the thing dragged.
+ */
+function setShapeGradient(props, quick, except) {
+  if (!shapeDraft) return;
+  shapeDraft = { ...shapeDraft, gradient: { ...shapeDraft.gradient, ...props } };
+  showShapeDraft(except || null);
+  paintShapeGradBar(!quick);
+  placeShapeGradLine();
+  paintShapePreview(quick);
+}
+
+/** The bar: the stops' colours over a checkerboard, and a dot at each. */
+function paintShapeGradBar(withDots) {
+  if (!shapeDraft || shapeGradient.hidden) return;
+  const w = Math.max(1, shapeGradBar.clientWidth);
+  const h = Math.max(1, shapeGradBar.clientHeight);
+  const dpr = hostWindowOf(shapeGradCanvas).devicePixelRatio || 1;
+  const bw = Math.max(1, Math.round(w * dpr));
+  const bh = Math.max(1, Math.round(h * dpr));
+  if (shapeGradCanvas.width !== bw) shapeGradCanvas.width = bw;
+  if (shapeGradCanvas.height !== bh) shapeGradCanvas.height = bh;
+  const ctx = shapeGradCanvas.getContext('2d');
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = checkerPattern(ctx, dpr);
+  ctx.fillRect(0, 0, bw, bh);
+  const lin = ctx.createLinearGradient(0, 0, bw, 0);
+  for (const stop of shapeDraft.gradient.stops) lin.addColorStop(stop.at, stop.color);
+  ctx.fillStyle = lin;
+  ctx.fillRect(0, 0, bw, bh);
+  if (!withDots) return;
+  for (const old of shapeGradBar.querySelectorAll('.gradient-stop')) old.remove();
+  shapeDraft.gradient.stops.forEach((stop, i) => {
+    const dot = shapeGradBar.ownerDocument.createElement('div');
+    dot.className = 'gradient-stop';
+    dot.style.left = (stop.at * 100) + '%';
+    dot.style.background = stop.color;
+    dot.title = t('Color');
+    shapeGradBar.appendChild(dot);
+    bindGradStop(dot, i);
+  });
+}
+
+/** A stop's dot: a click picks its colour, a drag moves it or takes it off. */
+function bindGradStop(dot, index) {
+  dot.addEventListener('pointerdown', (evt) => {
+    if (evt.button !== 0 || !shapeDraft) return;
+    evt.stopPropagation();
+    const bar = shapeGradBar.getBoundingClientRect();
+    const x0 = evt.clientX;
+    const y0 = evt.clientY;
+    const start = shapeDraft.gradient.stops.map((stop) => ({ ...stop }));
+    let moved = false;
+    let off = false;
+    let at = start[index].at;
+    beginDrag(dot, evt, (ev) => {
+      if (!moved && Math.hypot(ev.clientX - x0, ev.clientY - y0) < GRAD_SLOP) return;
+      moved = true;
+      off = start.length > 2 && Math.abs(ev.clientY - y0) > GRAD_STOP_OFF;
+      dot.classList.toggle('gradient-stop--off', off);
+      at = Math.min(1, Math.max(0, (ev.clientX - bar.left) / Math.max(1, bar.width)));
+      dot.style.left = (at * 100) + '%';
+      const stops = off
+        ? start.filter((_, i) => i !== index)
+        : start.map((stop, i) => (i === index ? { ...stop, at } : stop));
+      setShapeGradient({ stops }, true);
+    }, () => {
+      if (!moved) {
+        pickGradStopColour(index);
+        return;
+      }
+      const stops = off
+        ? start.filter((_, i) => i !== index)
+        : start.map((stop, i) => (i === index ? { ...stop, at } : stop));
+      setShapeGradient({ stops: stops.sort((p, q) => p.at - q.at) }, false);
+    });
+  });
+}
+
+async function pickGradStopColour(index) {
+  if (!shapeDraft) return;
+  const id = shapeLayerId;
+  const was = shapeDraft.gradient.stops[index].color;
+  const set = (color) => {
+    const stops = shapeDraft.gradient.stops.map((stop, i) => (i === index ? { ...stop, color } : stop));
+    setShapeGradient({ stops }, false);
+  };
+  const picked = await pickColor(was, (color) => {
+    if (shapeLayerId === id && shapeDraft) set(color);
+  });
+  // The window may have been closed under the picker, by Escape for one.
+  if (shapeLayerId !== id || !shapeDraft) return;
+  set(picked || was);
+}
+
+// A double click on the bar where there is no dot adds a stop there, the
+// colour the gradient has there, so it changes nothing until it is edited.
+shapeGradBar.addEventListener('dblclick', (evt) => {
+  if (!shapeDraft || evt.target.closest('.gradient-stop')) return;
+  const stops = shapeDraft.gradient.stops;
+  if (stops.length >= timelineModel.GRADIENT_STOPS_MAX) return;
+  const bar = shapeGradBar.getBoundingClientRect();
+  const at = Math.min(1, Math.max(0, (evt.clientX - bar.left) / Math.max(1, bar.width)));
+  const color = genDraw.gradientColourAt(stops, at);
+  setShapeGradient({ stops: [...stops, { at, color }].sort((p, q) => p.at - q.at) }, false);
+});
+
+/**
+ * Where the gradient runs, on the preview: a line from its start to its end
+ * through the shape's centre, turned with the shape.
+ */
+function placeShapeGradLine() {
+  const on = shapeGradientMode();
+  shapeGradLine.hidden = !on;
+  if (!on) return;
+  const g = shapeDraft.gradient;
+  const r = stageFrameRect(shapeStage);
+  const b = shapeBoxNow();
+  const cx = r.left + (b.x + b.w / 2) * r.s;
+  const cy = r.top + (b.y + b.h / 2) * r.s;
+  const a = (g.angle + shapeDraft.rotation) * Math.PI / 180;
+  const len = (g.end - g.start) * r.s;
+  shapeGradLine.style.left = (cx + Math.cos(a) * g.start * r.s) + 'px';
+  shapeGradLine.style.top = (cy + Math.sin(a) * g.start * r.s) + 'px';
+  shapeGradLine.style.width = Math.abs(len) + 'px';
+  shapeGradLine.style.transform = 'rotate(' + (a + (len < 0 ? Math.PI : 0)) + 'rad)';
+}
+
+/** A point on the preview, in project pixels. */
+function shapeStagePoint(evt) {
+  const r = stageFrameRect(shapeStage);
+  const b = shapeStage.getBoundingClientRect();
+  return {
+    x: (evt.clientX - b.left - shapeStage.clientLeft - r.left) / r.s,
+    y: (evt.clientY - b.top - shapeStage.clientTop - r.top) / r.s,
+  };
+}
+
+/**
+ * The gradient a drag on the preview draws: from where it was pressed to
+ * where it is now, measured along that direction from the shape's centre,
+ * and the direction measured from the shape.
+ */
+function gradientFromDrag(p0, p1) {
+  const b = shapeBoxNow();
+  const cx = b.x + b.w / 2;
+  const cy = b.y + b.h / 2;
+  const th = Math.atan2(p1.y - p0.y, p1.x - p0.x);
+  const cos = Math.cos(th);
+  const sin = Math.sin(th);
+  return {
+    start: Math.round((p0.x - cx) * cos + (p0.y - cy) * sin),
+    end: Math.round((p1.x - cx) * cos + (p1.y - cy) * sin),
+    angle: wrapDegrees(th * 180 / Math.PI - shapeDraft.rotation),
+  };
+}
+
+// In Gradient a plain left drag on the preview, on the shape or beside it,
+// draws the gradient. The grips, the corners and the turning dot have their
+// own drags and stop the press before it gets here.
+shapeStage.addEventListener('pointerdown', (evt) => {
+  if (evt.button !== 0 || !shapeGradientMode() || evt.ctrlKey) return;
+  if (!(evt.target === shapeStage || evt.target === shapeCanvas || evt.target === shapeBoxEl)) return;
+  const p0 = shapeStagePoint(evt);
+  const s = stageFrameRect(shapeStage).s;
+  let drew = false;
+  beginDrag(shapeStage, evt, (ev) => {
+    const p1 = shapeStagePoint(ev);
+    if (!drew && Math.hypot(p1.x - p0.x, p1.y - p0.y) * s < GRAD_SLOP) return;
+    drew = true;
+    setShapeGradient(gradientFromDrag(p0, p1), true);
+  }, () => {
+    if (drew) paintShapePreview();
+  });
+});
+
+/**
+ * A number box that is also dragged: pressed and moved sideways it changes
+ * by a unit a pixel, ten with Shift, right for more; pressed and let go it is
+ * typed in. `get()` and `set(n, except)` read and write the value, `range()`
+ * is [lo, hi], and `wrap` turns past the ends round, for an angle.
+ */
+function bindScrubBox(box, { get, set, range, wrap }) {
+  const fit = (n) => {
+    if (wrap) return wrapDegrees(n);
+    const [lo, hi] = range();
+    return Math.min(hi, Math.max(lo, Math.round(n)));
+  };
+  box.addEventListener('pointerdown', (evt) => {
+    if (evt.button !== 0 || !shapeDraft) return;
+    // Already being typed in: the press places the caret, as it always has.
+    if (box.ownerDocument.activeElement === box) return;
+    let last = evt.clientX;
+    let value = get();
+    let moved = false;
+    const x0 = evt.clientX;
+    beginDrag(box, evt, (ev) => {
+      if (!moved && Math.abs(ev.clientX - x0) < GRAD_SLOP) return;
+      moved = true;
+      value += (ev.clientX - last) * (ev.shiftKey ? 10 : 1);
+      last = ev.clientX;
+      set(fit(value), null, true);
+    }, () => {
+      if (moved) {
+        set(fit(value), null, false);
+        return;
+      }
+      box.focus();
+      box.select();
+    });
+  });
+  box.addEventListener('input', () => {
+    const text = box.value.trim();
+    if (!/^[-+]?\d+$/.test(text)) return;
+    set(fit(parseInt(text, 10)), box, false);
+  });
+  box.addEventListener('blur', () => showShapeDraft(null));
+  box.addEventListener('keydown', (evt) => {
+    if (evt.key !== 'Enter') return;
+    evt.preventDefault();
+    box.blur();
+  });
+}
+
+bindScrubBox(shapeGradStart, {
+  get: () => shapeDraft.gradient.start,
+  set: (n, except, quick) => setShapeGradient({ start: n }, quick, except),
+  range: () => [-GRAD_REACH, GRAD_REACH],
+});
+
+bindScrubBox(shapeGradEnd, {
+  get: () => shapeDraft.gradient.end,
+  set: (n, except, quick) => setShapeGradient({ end: n }, quick, except),
+  range: () => [-GRAD_REACH, GRAD_REACH],
+});
+
+bindScrubBox(shapeGradAngle, {
+  get: () => shapeDraft.gradient.angle,
+  set: (n, except, quick) => setShapeGradient({ angle: n }, quick, except),
+  range: () => [-180, 180],
+  wrap: true,
+});
+
+// Color or Gradient. A shape that never had a gradient has it laid across
+// itself the first time, white on its left edge into black on its right.
+for (const b of shapeFill.querySelectorAll('button')) {
+  b.addEventListener('click', () => {
+    if (!shapeDraft || b.dataset.fill === shapeDraft.fill) return;
+    const props = { fill: b.dataset.fill };
+    if (props.fill === 'gradient' && JSON.stringify(shapeDraft.gradient) === shapeGradientUnset) {
+      const half = Math.max(1, Math.round(shapeBoxNow().w / 2));
+      props.gradient = { ...shapeDraft.gradient, start: -half, end: half, angle: 0 };
+    }
+    changeShape(props, null);
+    // The gradient's controls come and go, so the preview is fitted again.
+    sizeShapeStage();
+    paintShapePreview();
+  });
+}

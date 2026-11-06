@@ -348,10 +348,52 @@ const genDraw = (() => {
    */
   function drawShape(ctx, gen, width, height, surface) {
     const k = scaleOf(gen, height);
+    const b = shapeBox(gen, width, height);
     // V3.6.2. The rounded corners in the canvas's pixels, which tracePath takes.
-    const s = gen.shape.radius ? { ...gen.shape, radius: gen.shape.radius * k } : gen.shape;
-    paintShape(ctx, s, shapeBox(gen, width, height), Math.max(0, (s.soft || 0) * k),
+    // V3.7. And the gradient as the paint, when it is filled with one.
+    const s = { ...gen.shape, radius: (gen.shape.radius || 0) * k, color: shapePaint(ctx, gen.shape, b, k) };
+    paintShape(ctx, s, b, Math.max(0, (s.soft || 0) * k),
       s.outline ? Math.max(0.5, s.line * k) : 0, width, height, surface);
+  }
+
+  /**
+   * V3.7. What a shape is painted with: its colour, or with Gradient its
+   * gradient on `ctx`, along its line through the middle of the box `b`,
+   * turned with the shape, `k` canvas pixels to one at refHeight. A line of
+   * no length paints nothing in canvas, so it is given half a pixel.
+   */
+  function shapePaint(ctx, shape, b, k) {
+    const g = shape.gradient;
+    if (shape.fill !== 'gradient' || !g || typeof ctx.createLinearGradient !== 'function') return shape.color;
+    const a = ((Number(g.angle) || 0) + (Number(shape.rotation) || 0)) * Math.PI / 180;
+    const cx = b.x + b.w / 2;
+    const cy = b.y + b.h / 2;
+    const from = g.start * k;
+    let to = g.end * k;
+    if (Math.abs(to - from) < 0.5) to = from + 0.5;
+    const cos = Math.cos(a);
+    const sin = Math.sin(a);
+    const lin = ctx.createLinearGradient(cx + cos * from, cy + sin * from, cx + cos * to, cy + sin * to);
+    for (const stop of g.stops) lin.addColorStop(Math.min(1, Math.max(0, stop.at)), stop.color);
+    return lin;
+  }
+
+  /**
+   * V3.7. The colour a gradient's stops give at `at`, 0 to 1, as #rrggbbaa:
+   * what a stop added there starts as, so adding one changes nothing.
+   */
+  function gradientColourAt(stops, at) {
+    const list = [...stops].sort((p, q) => p.at - q.at);
+    if (!list.length) return '#ffffffff';
+    if (at <= list[0].at) return list[0].color;
+    const last = list[list.length - 1];
+    if (at >= last.at) return last.color;
+    let i = 0;
+    while (list[i + 1].at < at) i += 1;
+    const a = list[i];
+    const b = list[i + 1];
+    const u = b.at > a.at ? (at - a.at) / (b.at - a.at) : 0;
+    return blendColour(a.color, b.color, u);
   }
 
   /**
@@ -964,6 +1006,9 @@ const genDraw = (() => {
     shapeAspect,
     shapeBox,
     fillShape,
+    // V3.7.
+    shapePaint,
+    gradientColourAt,
     drawShapeIcon,
     // V3.6. Masks.
     maskBox,

@@ -22,6 +22,8 @@ const barCanvas = el('barCanvas');
 const barBackground = el('barBackground');
 const barAcceptBtn = el('barAcceptBtn');
 const barCancelBtn = el('barCancelBtn');
+// V3.7. The clip's keyframes.
+const barStrip = makeGenStrip(barModal, el('barKeys'), el('barKeysReadout'), el('barKeysCanvas'), barStage);
 
 let barLayerId = null;
 let barFirst = false;
@@ -63,12 +65,38 @@ function openBarSettings(layer, first) {
       if (!barDraft) return;
       sizeGenStage(barStage, barCanvas);
       paintBarPreview();
+      barStrip.draw();
     },
     draftGen: () => (barDraft ? barGenOf(barDraft) : null),
+    // V3.7. The keyframe editor's side of it.
+    changed: () => !!barDraft && JSON.stringify(barDraft) !== barOpened,
+    reload: reloadBarKeyed,
+    strip: barStrip,
   });
   showBarDraft(null);
   sizeGenStage(barStage, barCanvas);
   paintBarPreview();
+  barStrip.draw();
+}
+
+/**
+ * V3.7. The keyed settings, the thickness, the span and the colour, read out
+ * of `gen` into the draft: the clip's draft at another keyframe.
+ */
+function reloadBarKeyed(gen) {
+  if (!barDraft) return;
+  const bar = gen.bar;
+  const scale = genDraw.scaleOf(gen, projectFrame().height);
+  barDraft = {
+    ...barDraft,
+    color: bar.color,
+    thickness: Math.min(barCeiling(barDraft.side), Math.max(1, Math.round(bar.thickness * scale))),
+    span: bar.span,
+  };
+  barOpened = JSON.stringify(barDraft);
+  showBarDraft(null);
+  paintBarPreview();
+  barStrip.draw();
 }
 
 function closeBarSettings() {

@@ -312,7 +312,12 @@ test('reframeGen: a whole frame text and a bar follow the frame, sizes held', ()
 
 // V3.5. What every shape from before the shapes version reads as.
 // V3.6.2 added the turn and the rounded corners.
-const SHAPE_DEFAULTS = { invert: false, soft: 0, outline: false, line: 20, ring: 0.4, points: 5, inner: 0.381966, rotation: 0, radius: 0 };
+const SHAPE_DEFAULTS = {
+  invert: false, soft: 0, outline: false, line: 20, ring: 0.4, points: 5, inner: 0.381966, rotation: 0, radius: 0,
+  // V3.7.
+  fill: 'color',
+  gradient: { stops: [{ at: 0, color: '#ffffffff' }, { at: 1, color: '#000000ff' }], start: -100, end: 100, angle: 0 },
+};
 
 test('a shape keeps its kind, colour and box, and nothing else', () => {
   const g = T.genOf({ form: 'shape', shape: { kind: 'star', color: '#FF0000', box: { x: 1, y: 2, w: 3, h: 4 }, text: 'x' } });

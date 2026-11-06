@@ -757,6 +757,12 @@
       <div id="barStage" class="gen-stage">
         <canvas id="barCanvas" class="gen-canvas"></canvas>
       </div>
+      <!-- V3.7. The clip's keyframes, the media window's keyframe editor,
+           keystrip.js. -->
+      <div id="barKeys" class="crop-keys gen-keys">
+        <div id="barKeysReadout" class="crop-keys__readout"></div>
+        <canvas id="barKeysCanvas" class="crop-keys__canvas"></canvas>
+      </div>
       <label class="gen-check"><input id="barBackground" type="checkbox" /> Enable Background</label>
       <div class="crop-actions">
         <button id="barAcceptBtn" class="crop-accept-btn">Accept</button>
@@ -788,9 +794,16 @@
       <!-- V3.5. Two by two like the bar's, and a third row for what only a
            ring or a star has, shown for that kind alone. -->
       <div class="gen-grid">
+        <!-- V3.7. The user: "Make shapes Color a 2-way button selector Color |
+             Gradient. Color only shows the clickable color display/selector
+             button, gradient adds hint Modify your gradient below instead". -->
         <div class="gen-field">
-          <span class="gen-field__caption">Color:</span>
+          <div id="shapeFill" class="gen-choice shape-fill">
+            <button data-fill="color">Color</button>
+            <button data-fill="gradient">Gradient</button>
+          </div>
           <button id="shapeColorBtn" class="color-swatch"><span class="color-swatch__fill"></span></button>
+          <span id="shapeFillHint" class="shape-fill-hint" hidden>Modify your gradient below</span>
         </div>
         <div class="gen-field">
           <label class="gen-check gen-check--field"><input id="shapeInvert" type="checkbox" /> Invert Shape</label>
@@ -834,8 +847,37 @@
           <span class="gen-field__unit">px</span>
         </div>
       </div>
+      <!-- V3.7. The gradient, in Gradient only: its colours on a bar as wide
+           as the preview, white into black to start with, a dot at each stop
+           that opens the colour picker, is dragged along to move it and off to
+           take it away, and a double click on the bar adds one. Then where it
+           runs: from Start to End through the shape's centre, at Rotation to
+           the shape, drawn on the preview with a drag or scrubbed in the boxes
+           by dragging them sideways. -->
+      <div id="shapeGradient" class="shape-gradient" hidden>
+        <div id="shapeGradBar" class="gradient-bar">
+          <canvas id="shapeGradCanvas" class="gradient-bar__canvas"></canvas>
+        </div>
+        <div class="hint-label crop-hint shape-gradient__hint">Click somewhere on the preview and drag any direction to apply a gradient</div>
+        <div class="shape-gradient__boxes">
+          <span class="gen-field__caption">Start:</span>
+          <input id="shapeGradStart" class="gen-num gen-num--scrub" type="text" inputmode="numeric" maxlength="7" />
+          <span class="gen-field__unit">px</span>
+          <span class="gen-field__caption">End:</span>
+          <input id="shapeGradEnd" class="gen-num gen-num--scrub" type="text" inputmode="numeric" maxlength="7" />
+          <span class="gen-field__unit">px</span>
+          <span class="gen-field__caption">Rotation:</span>
+          <input id="shapeGradAngle" class="gen-num gen-num--scrub" type="text" inputmode="numeric" maxlength="4" />
+          <span class="gen-field__unit gen-field__unit--deg"></span>
+        </div>
+      </div>
       <div id="shapeStage" class="gen-stage">
         <canvas id="shapeCanvas" class="gen-canvas"></canvas>
+        <!-- V3.7. Where the gradient runs, from its start to its end. -->
+        <div id="shapeGradLine" class="gradient-line" hidden>
+          <span class="gradient-line__end gradient-line__end--start"></span>
+          <span class="gradient-line__end gradient-line__end--end"></span>
+        </div>
         <div id="shapeGuideX" class="text-guide text-guide--x" hidden></div>
         <div id="shapeGuideY" class="text-guide text-guide--y" hidden></div>
         <div id="shapeBoxEl" class="crop-box text-box">
@@ -855,7 +897,13 @@
         </div>
         <div id="shapeAngle" class="text-angle" data-no-translate hidden></div>
       </div>
-      <div class="hint-label crop-hint">Drag the sides to stretch the shape, a corner to scale it, inside it to move it and the dot above it to turn it, hold Shift to keep its centre</div>
+      <!-- V3.7. The clip's keyframes, the media window's keyframe editor,
+           keystrip.js. -->
+      <div id="shapeKeys" class="crop-keys gen-keys">
+        <div id="shapeKeysReadout" class="crop-keys__readout"></div>
+        <canvas id="shapeKeysCanvas" class="crop-keys__canvas"></canvas>
+      </div>
+      <div id="shapeHint" class="hint-label crop-hint">Drag the sides to stretch the shape, a corner to scale it, inside it to move it and the dot above it to turn it, hold Shift to keep its centre</div>
       <div class="hint-label crop-hint">Scroll to zoom, drag empty space or with the middle button to pan, double-click empty space to fit the frame</div>
       <label class="gen-check"><input id="shapeBackground" type="checkbox" /> Enable Background</label>
       <div class="crop-actions">
@@ -937,6 +985,12 @@
           <div class="crop-corner crop-corner--br text-rotor" data-corner="br"></div>
         </div>
         <div id="textAngle" class="text-angle" data-no-translate hidden></div>
+      </div>
+      <!-- V3.7. The clip's keyframes, the media window's keyframe editor,
+           keystrip.js. -->
+      <div id="textKeys" class="crop-keys gen-keys">
+        <div id="textKeysReadout" class="crop-keys__readout"></div>
+        <canvas id="textKeysCanvas" class="crop-keys__canvas"></canvas>
       </div>
       <div id="textHint" class="hint-label crop-hint">Drag the sides to size the text box and inside it to move it, hold Shift to move opposite sides together, drag a corner to turn it</div>
       <div class="hint-label crop-hint">Scroll to zoom, drag empty space or with the middle button to pan, double-click empty space to fit the frame</div>
@@ -1103,7 +1157,9 @@
   <script src="app/stageView.js"></script>
   <script src="app/placement.js"></script>
   <script src="app/renderFrame.js"></script>
+  <script src="app/keystrip.js"></script>
   <script src="app/keyframes.js"></script>
+  <script src="app/cropKeys.js"></script>
   <script src="app/gen/kinds.js"></script>
   <script src="app/gen/colorPicker.js"></script>
   <script src="app/gen/preview.js"></script>

@@ -101,6 +101,8 @@ function openGenSettings(id, first) {
   // layer as that keyframe has it, so no modal has to know about keyframes;
   // acceptGenSettings sorts what comes back.
   genKeyframe = first ? null : genKeyframeToEdit(layer);
+  // V3.7. The window's draft of the whole clip, its keyframes and all.
+  startGenWork(layer);
   const shown = genKeyframe ? { ...layer, gen: timelineModel.withKeyed(layer.gen, genKeyframe) } : layer;
   genKind(layer.gen).open(shown, first);
 }
@@ -114,12 +116,10 @@ let genKeyframe = null;
  * already has open: the same keyframe, or the same new keyframe's moment, or
  * neither having any. sameCropTarget's rule.
  */
+// V3.7. Since the window holds every keyframe of the clip and follows the
+// playhead, any keyframe of the same clip is the same window.
 function sameGenTarget(layer) {
-  const kf = genKeyframeToEdit(layer);
-  const open = genKeyframeOf(layer.id);
-  if (!kf || !open) return !kf && !open;
-  if (kf.id || open.id) return kf.id === open.id;
-  return Math.abs(kf.t - open.t) < 1e-6;
+  return !!layer && genWindowOn(layer.id);
 }
 
 // V3.3. The keyframe the open modal is on, when it is this layer's: what its
@@ -290,8 +290,13 @@ function drawClipShape(layer, ctx, leftX, width, height) {
   if (shape.outline) band = Math.max(1, shape.line * toIcon);
   // V3.6.2. Turned as it is in the picture, and its corners rounded at the
   // same share of its height.
-  genDraw.drawShapeIcon(ctx, { ...shape, radius: (shape.radius || 0) * toIcon },
-    { x, y: (height - h) / 2, w, h }, band);
+  // V3.7. And its gradient, when it has one, on the picture's own measure.
+  const icon = { x, y: (height - h) / 2, w, h };
+  genDraw.drawShapeIcon(ctx, {
+    ...shape,
+    radius: (shape.radius || 0) * toIcon,
+    color: genDraw.shapePaint(ctx, shape, icon, toIcon),
+  }, icon, band);
   ctx.lineWidth = 1;
   ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
   ctx.stroke();

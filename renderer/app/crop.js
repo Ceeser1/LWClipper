@@ -134,7 +134,8 @@ function layerSource(layer) {
 function cropTargetLayer() {
   if (!timelineDriving()) return null;
   if (cropLayerId) {
-    const open = timelineModel.layerById(layers, cropLayerId);
+    // V3.7. As the window's draft of the clip has it.
+    const open = cropLayerNow();
     // V3.3. On a keyframe, the layer as that keyframe has it, so everything
     // the popup reads, the crop, the placement, the ring and the fit, is the
     // keyframe's without any of it having to know.

@@ -41,6 +41,8 @@ const textHint = el('textHint');
 const textBackground = el('textBackground');
 const textAcceptBtn = el('textAcceptBtn');
 const textCancelBtn = el('textCancelBtn');
+// V3.7. The clip's keyframes.
+const textStrip = makeGenStrip(textModal, el('textKeys'), el('textKeysReadout'), el('textKeysCanvas'), textStage);
 
 let textLayerId = null;
 let textFirst = false;
@@ -661,6 +663,10 @@ function openTextSettings(layer, first) {
       }
     },
     draftGen: () => (textDraft ? textGenOf(textDraft) : null),
+    // V3.7. The keyframe editor's side of it.
+    changed: () => !!textDraft && JSON.stringify(textGenOf(textDraft)) !== textOpened,
+    reload: reloadTextKeyed,
+    strip: textStrip,
   });
   // The selection is followed in whichever document the box is in now.
   const textDoc = textEditBox.ownerDocument;
@@ -745,6 +751,28 @@ function sizeTextStage() {
   sizeGenStage(textStage, textCanvas);
   styleTextEdit();
   placeTextBox();
+  textStrip.draw();
+}
+
+/**
+ * V3.7. The keyed settings, the box and the turn, read out of `gen` into the
+ * draft: the clip's draft at another keyframe. The words and their styles
+ * are the whole clip's, so what is being typed is left as it is.
+ */
+function reloadTextKeyed(gen) {
+  if (!textDraft) return;
+  const k = textDraft.refHeight / gen.refHeight;
+  const b = gen.text.box;
+  textDraft.text = {
+    ...textDraft.text,
+    box: b ? { x: b.x * k, y: b.y * k, w: b.w * k, h: b.h * k } : null,
+    rotation: gen.text.rotation,
+  };
+  textOpened = JSON.stringify(textGenOf(textDraft));
+  styleTextEdit();
+  placeTextBox();
+  paintTextPreview();
+  textStrip.draw();
 }
 
 // ---- 31a. The text box ----

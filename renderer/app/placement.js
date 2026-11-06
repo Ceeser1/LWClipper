@@ -1336,6 +1336,9 @@ function openCrop(layerId, tab = 'frame', addMask = false) {
     // V3. Nothing to crop out of a generated layer, whose picture is the frame.
     if (!target || target.type !== 'video' || target.kind === 'gen') return;
     cropLayerId = target.id;
+    // V3.7. The window's draft of the whole clip, which everything below
+    // reads the clip from.
+    startCropWork(target);
     // V3.3. Before anything reads the crop, since what it reads is this.
     cropKeyframe = keyframeToEdit(target);
   } else {
@@ -1444,11 +1447,19 @@ function cropRenderDraft() {
 function previewCropDraft() {
   if (cropModal.hidden || !cropDraft) return;
   const render = cropRenderDraft();
+  // V3.7. The draft of the clip carried through a trim made in the main
+  // window, and the keyframe edited following the playhead.
+  if (cropWork) {
+    rebaseCropWork();
+    cropSession.follow();
+  }
   // V3.6.2. The Layer Mask view's draft is part of what the preview shows.
-  const key = JSON.stringify([cropLayerId, cropDraft, render, placeAnchor, placeRotation, maskDraft, maskCleared]);
+  // V3.7. And the clip's draft, which the strip changes.
+  const key = JSON.stringify([cropLayerId, cropDraft, render, placeAnchor, placeRotation, maskDraft, maskCleared,
+    cropWork, cropKeyframe && [cropKeyframe.id, cropKeyframe.t]]);
   // V3.6.3. And the keyframe strip follows a keyframe moved, added or deleted
-  // there, or the clip trimmed.
-  if (layers !== cropPreviewLayers) drawCropKeys();
+  // there, or the clip trimmed. V3.7: and the playhead.
+  if (layers !== cropPreviewLayers || compositeAt !== cropPreviewAt) drawCropKeys();
   // V3.3. The main window stays usable, so the Render Position tab's picture
   // of the other layers follows the playhead and any edit made there too.
   if (cropTab === 'place' && placeDraft && (layers !== cropPreviewLayers || compositeAt !== cropPreviewAt)) {
@@ -1478,31 +1489,11 @@ function previewCropDraft() {
  */
 // V3.6.2. With the Layer Mask view's draft as well, unless `withMask` is
 // false, which is how that view asks where the picture it masks lands.
+// V3.7. The clip's draft with the views' drafts folded in, cropFoldedLayer,
+// so the preview shows every keyframe the window has moved, added or deleted.
+// `render` is no longer read: the fold works the placement out itself.
 function cropDraftLayer(render, withMask = true) {
-  const own = cropLayerId ? timelineModel.layerById(layers, cropLayerId) : null;
-  if (!own) return null;
-  const m = withMask ? maskDraftParts(own) : {};
-  // V3.6.4. A mask Remove Mask has taken off goes from its keyframes too.
-  let layer = m.remove ? timelineModel.removeMask([own], own.id)[0] : own;
-  if (m.layer) layer = { ...layer, mask: m.layer };
-  const size = sourceSize();
-  const crop = (size && !isFullFrame(cropDraft, size)) ? { ...cropDraft } : null;
-  if (!cropKeyframe) return { ...layer, crop, render, anchor: placeAnchor, rotation: placeRotation };
-  const live = cropKeyframe.id
-    ? timelineModel.keyframesFor(layer).find((k) => k.id === cropKeyframe.id)
-    : null;
-  const next = timelineModel.putKeyframe([layer], layer.id,
-    {
-      ...cropKeyframe,
-      ...(live || {}),
-      crop,
-      render,
-      anchor: placeAnchor,
-      rotation: placeRotation,
-      ...maskKeyFields(m),
-      id: cropKeyframe.id || 'draft',
-    });
-  return next[0];
+  return cropFoldedLayer('draft', withMask);
 }
 
 /**
@@ -1510,12 +1501,10 @@ function cropDraftLayer(render, withMask = true) {
  * already has open: the same layer and the same keyframe, or the same new
  * keyframe's moment, or neither having any.
  */
+// V3.7. Since the window holds every keyframe of the clip and follows the
+// playhead, any keyframe of the same clip is the same window.
 function sameCropTarget(layer) {
-  if (!layer || layer.id !== cropLayerId) return false;
-  const kf = keyframeToEdit(layer);
-  if (!kf || !cropKeyframe) return !kf && !cropKeyframe;
-  if (kf.id || cropKeyframe.id) return kf.id === cropKeyframe.id;
-  return Math.abs(kf.t - cropKeyframe.t) < 1e-6;
+  return !!layer && layer.id === cropLayerId;
 }
 
 /** V3.3. Whether the crop popup is open on this layer. */
@@ -1551,6 +1540,8 @@ function closeCrop() {
   }
   if (wasPopped && !timelineDriving()) updateCropOverlays();
   cropModal.hidden = true;
+  // V3.7. The clip's draft goes with the window, Accept having written it.
+  stopCropWork();
   cropDraft = null;
   placeDraft = null;
   placeDrag = null;
@@ -1632,12 +1623,6 @@ cropRemoveBtn.addEventListener('click', () => {
 });
 
 cropAcceptBtn.addEventListener('click', () => {
-  const size = sourceSize();
-  // The whole frame is not a crop: storing it would cost a re-encode and show a
-  // box around the entire picture, for nothing.
-  const rect = (size && cropDraft && !isFullFrame(cropDraft, size)) ? { ...cropDraft } : null;
-  // Where the popup was looking from when the crop was settled on. Only worth
-  // keeping alongside a crop: without one it would open zoomed into nothing.
   // One step for the whole popup: opening it on one side and accepting it on
   // the other, with nothing in between. The user set that boundary.
   // V2.1. One Accept settles both tabs, which is the boundary the user drew
@@ -1645,46 +1630,37 @@ cropAcceptBtn.addEventListener('click', () => {
   // and fit is stored as null, for the same reason the whole frame is not a
   // crop: it is what the geometry works out on its own, and writing it down
   // would freeze it against a crop or a project frame that changes later.
-  // V3.3. An untouched placement follows the crop, but it was only brought up
-  // to date when the Render Position tab was opened. Cropping and accepting on
-  // the crop tab alone left it at the rect the popup opened on, the whole
-  // frame, and that was stored as a placement: the crop stretched over the
-  // frame, which is what the user saw. Brought up to date here, it is the fit
-  // again and stored as none.
-  if (!placeTouched) rebuildPlaceDraft();
-  const render = (placeDraft && !sameRect(placeDraft, placeFitRect(cropTargetLayer())))
-    ? { ...placeDraft }
-    : null;
   // V3.3. On a layer with keyframes the popup was editing one, the one at the
   // playhead, and Accept writes that keyframe or makes it there: the user's
   // rule for an edit between two of them.
   // V3.6.2. The mask the Layer Mask view settled on: what the layer keeps,
   // and the box and soft edge for the keyframe when they moved on one.
-  const maskPlan = maskAcceptPlan();
-  if (cropKeyframe && cropLayerId) {
-    rememberView('crop', cropLayerId, cropKeyframe,
-      rect ? { zoom: viewZoom, panX: viewPanX, panY: viewPanY } : null);
-    applyMaskPlan(maskPlan);
-    saveCropKeyframe({
-      crop: rect, render, anchor: placeAnchor, rotation: placeRotation,
-      ...maskKeyFields(maskPlan),
-    });
-    commitHistory();
+  // V3.7. In advanced editing the window holds a draft of the whole clip: the
+  // views' drafts go into it at the keyframe being edited (cropFoldedLayer has
+  // every rule above), and the lot is written onto the clip as one step, or
+  // nothing when nothing changed.
+  if (cropLayerId && cropWork) {
+    cropFold();
+    const live = timelineModel.layerById(layers, cropLayerId);
+    const next = ownedOf(cropLayerNow(), CROP_OWNED);
+    if (live && JSON.stringify(ownedOf(live, CROP_OWNED)) !== JSON.stringify(next)) {
+      setLayers(timelineModel.setLayer(layers, cropLayerId, next));
+      commitHistory();
+    }
+    const kept = cropKeyframe && cropKeyframe.id && next.keyframes.some((k) => k.id === cropKeyframe.id);
+    if (kept) selectKeyframe(cropLayerId, cropKeyframe.id);
     closeCrop();
     updateCropOverlays();
     updateCropBtn();
     return;
   }
+  // Simple editing: the one picture's crop. The whole frame is not a crop:
+  // storing it would cost a re-encode and show a box around the entire
+  // picture, for nothing. Where the popup was looking from when the crop was
+  // settled on is only worth keeping alongside one.
+  const size = sourceSize();
+  const rect = (size && cropDraft && !isFullFrame(cropDraft, size)) ? { ...cropDraft } : null;
   setCurrentCrop(rect, rect ? { zoom: viewZoom, panX: viewPanX, panY: viewPanY } : null);
-  // After the crop, and through the id rather than the layer object: setLayers
-  // has just replaced the array that object came out of.
-  if (cropLayerId) {
-    // V2.8 item 8. The ring travels with the placement, so reopening this layer
-    // finds the same one lit and scaling goes on sticking to it.
-    setLayers(timelineModel.setLayer(layers, cropLayerId,
-      { render, anchor: placeAnchor, rotation: placeRotation }));
-    applyMaskPlan(maskPlan);
-  }
   commitHistory();
   closeCrop();
   updateCropOverlays();

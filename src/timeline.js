@@ -334,6 +334,36 @@ const timelineModel = (() => {
     };
   }
 
+  // V3.7. How a shape is filled: its one colour, or a gradient.
+  const SHAPE_FILLS = ['color', 'gradient'];
+  // Two stops at least, and at most this many.
+  const GRADIENT_STOPS_MAX = 16;
+
+  /**
+   * V3.7. A shape's gradient, the user's "Color | Gradient": colour stops at
+   * shares of its length, `at` 0 to 1, white into black by default, and the
+   * line it runs along. `start` and `end` are in pixels at refHeight from the
+   * shape's centre, along the direction `angle` points in, in degrees: 0 to
+   * the right and positive clockwise, the app's way, and measured from the
+   * shape, so the gradient turns with it. The whole clip's, not keyed.
+   */
+  function gradientOf(v) {
+    const src = v && typeof v === 'object' ? v : {};
+    let stops = Array.isArray(src.stops)
+      ? src.stops
+        .filter((s) => s && typeof s === 'object')
+        .map((s) => ({ at: within(s.at, 0, 1, 0), color: colourOf(s.color, '#ffffffff') }))
+      : [];
+    if (stops.length < 2) stops = [{ at: 0, color: '#ffffffff' }, { at: 1, color: '#000000ff' }];
+    stops = stops.sort((a, b) => a.at - b.at).slice(0, GRADIENT_STOPS_MAX);
+    return {
+      stops,
+      start: within(src.start, -100000, 100000, -100),
+      end: within(src.end, -100000, 100000, 100),
+      angle: rotationOf(src.angle),
+    };
+  }
+
   /**
    * A shape: which one, its colour, and the box it fills, in pixels at
    * refHeight, the user's "colored, scaled and positioned", and since 3.5 how
@@ -373,6 +403,10 @@ const timelineModel = (() => {
       // was. Keyed, so a shape can spin and a square can round off.
       rotation: rotationOf(src.rotation),
       radius: within(src.radius, 0, 100000, 0),
+      // V3.7. The colour, or the gradient, filling it. A shape from before
+      // reads as its one colour.
+      fill: oneOf(src.fill, SHAPE_FILLS, 'color'),
+      gradient: gradientOf(src.gradient),
     };
   }
 
@@ -2052,6 +2086,9 @@ const timelineModel = (() => {
     GEN_FONT_MAX,
     RUN_FIELDS,
     SHAPE_KINDS,
+    SHAPE_FILLS,
+    GRADIENT_STOPS_MAX,
+    gradientOf,
     DEFAULT_FONT,
     colourOf,
     genOf,

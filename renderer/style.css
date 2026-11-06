@@ -2709,6 +2709,11 @@ body.lane-lifting * {
   margin-top: 0;
 }
 
+/* V3.7. The media windows' strips, under their stages. */
+.gen-keys {
+  margin: 8px auto 0;
+}
+
 .crop-keys[hidden] {
   display: none;
 }
@@ -3490,6 +3495,11 @@ button.crop-remove-btn:hover:not(:disabled) {
   overflow: hidden;
 }
 
+/* V3.7. Shape Settings hides it for Gradient. */
+.color-swatch[hidden] {
+  display: none;
+}
+
 .color-swatch__fill {
   display: block;
   width: 100%;
@@ -3733,6 +3743,124 @@ button.color-swatch:hover:not(:disabled) {
 /* V3.6.5. Shape Settings' shapes, over its settings. */
 .shape-kinds {
   margin-bottom: 12px;
+}
+
+/* ---- V3.7. A shape's gradient ---- */
+
+.shape-fill button {
+  min-width: 70px;
+}
+
+.shape-fill-hint {
+  color: #b8b8c0;
+  font-style: italic;
+  white-space: nowrap;
+}
+
+.shape-fill-hint[hidden],
+.shape-gradient[hidden] {
+  display: none;
+}
+
+.shape-gradient {
+  margin: 0 auto 10px;
+}
+
+/* As wide as the preview, set with it; the dots stand on its middle. */
+.gradient-bar {
+  position: relative;
+  height: 22px;
+  margin: 0 auto;
+  cursor: copy;
+  touch-action: none;
+}
+
+.gradient-bar__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 1px solid #3a3a42;
+  box-sizing: border-box;
+  border-radius: 3px;
+}
+
+.gradient-stop {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border: 2px solid #ffffff;
+  border-radius: 50%;
+  box-sizing: border-box;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7);
+  cursor: pointer;
+}
+
+/* Dragged off the bar, it goes when let go. */
+.gradient-stop--off {
+  opacity: 0.3;
+}
+
+.shape-gradient__hint {
+  margin-top: 6px;
+}
+
+.shape-gradient__boxes {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.shape-gradient__boxes .gen-field__caption {
+  min-width: 0;
+  margin-left: 12px;
+}
+
+/* Dragged sideways to change, as well as typed in. */
+.gen-num--scrub {
+  cursor: ew-resize;
+}
+
+.gen-num--scrub:focus {
+  cursor: text;
+}
+
+/* Where the gradient runs on the preview, from its start to its end. */
+.gradient-line {
+  position: absolute;
+  height: 0;
+  border-top: 1px dashed rgba(255, 255, 255, 0.85);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+  transform-origin: 0 0;
+  pointer-events: none;
+}
+
+.gradient-line[hidden] {
+  display: none;
+}
+
+.gradient-line__end {
+  position: absolute;
+  top: -5px;
+  width: 9px;
+  height: 9px;
+  margin-left: -5px;
+  border: 2px solid #ffffff;
+  border-radius: 50%;
+  box-sizing: border-box;
+  background: #e8c860;
+}
+
+.gradient-line__end--start {
+  left: 0;
+  background: #ffffff;
+}
+
+.gradient-line__end--end {
+  left: 100%;
 }
 
 .gen-num {

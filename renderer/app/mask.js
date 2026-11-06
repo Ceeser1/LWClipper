@@ -122,7 +122,8 @@ function maskSoftCeiling() {
  * the moment it is editing: its size in project pixels.
  */
 function maskPictureSize() {
-  const layer = cropLayerId && timelineModel.layerById(layers, cropLayerId);
+  // V3.7. The clip as the window's draft has it, here and below.
+  const layer = cropLayerNow();
   const source = layer && layerSource(layer);
   const draft = layer && cropDraftLayer(cropRenderDraft(), false);
   const t = layer ? (cropKeyframe ? cropKeyframe.t : compositeAt - layer.start) : 0;
@@ -225,16 +226,10 @@ function maskKeyFields(parts) {
   return parts.remove ? { mask: null } : {};
 }
 
-/** V3.6.4. The mask plan written onto the layer: taken off, then put on. */
-function applyMaskPlan(plan) {
-  if (!cropLayerId) return;
-  if (plan.remove) setLayers(timelineModel.removeMask(layers, cropLayerId));
-  if (plan.layer) setLayers(timelineModel.setMask(layers, cropLayerId, plan.layer));
-}
 
 /** What Accept writes, as maskDraftParts, less whatever did not change. */
 function maskAcceptPlan() {
-  const layer = cropLayerId && timelineModel.layerById(layers, cropLayerId);
+  const layer = cropLayerNow();
   if (!layer) return {};
   const parts = maskDraftParts(layer);
   if (parts.remove || !maskDraft || !maskPic) return parts;
@@ -281,7 +276,7 @@ const MASK_STAGE_MAX = 4096;
  */
 function paintMaskStage() {
   if (!maskPic || cropTab !== 'mask') return;
-  const layer = cropLayerId && timelineModel.layerById(layers, cropLayerId);
+  const layer = cropLayerNow();
   const ctx = maskCanvas.getContext('2d');
   const r = stageFrameRect(maskStage);
   const dpr = maskCanvas.width / Math.max(1, r.w);
@@ -372,7 +367,7 @@ function showMaskDraft(except) {
     maskRadiusSlider, maskRadiusBox]) input.disabled = !d;
   // Remove Mask has something to take off once there is a mask or a draft,
   // and nothing once it has been pressed.
-  const own = cropLayerId && timelineModel.layerById(layers, cropLayerId);
+  const own = cropLayerNow();
   if (cropTab === 'mask') cropRemoveBtn.disabled = !d && !(own && own.mask && !maskCleared);
   if (!d) {
     maskInvert.checked = false;
