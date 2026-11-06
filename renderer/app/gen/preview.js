@@ -18,7 +18,8 @@ const genPreviewSurface = document.createElement('canvas');
 
 function sizeGenStage(stage, canvas) {
   const panel = stage.parentElement;
-  let w = Math.round(panel.clientWidth * CROP_FRAME_SHARE);
+  // V3.7.2. By the window's width when it is out, scrollbar or not.
+  let w = Math.round(popupWidth(panel) * CROP_FRAME_SHARE);
   let h = Math.round(w * 9 / 16);
   // V3.6.2. Against whichever window the stage is in: out in its own, as
   // tall as the rest of the panel leaves.

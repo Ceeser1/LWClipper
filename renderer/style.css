@@ -4378,6 +4378,20 @@ body.popout-body {
   background: #2a2a30;
 }
 
+/* V3.7.2. The window scrolls when it is too short for what it holds, the
+   user's "vertical scrollable ... instead of shrinking its contents width",
+   and Remove, Cancel and Accept stay on its bottom edge while it does, over
+   whatever scrolls under them. Out to the panel's edges, so nothing shows
+   beside them. */
+body.popout-body > .modal__panel > .crop-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+  margin: 12px -18px -16px;
+  padding: 8px 18px;
+  background: #2a2a30;
+}
+
 body.popout-body > .modal__panel {
   width: auto;
   max-width: none;

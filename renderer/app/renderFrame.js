@@ -126,9 +126,11 @@ function sizeRenderStage() {
   // Always 16:9 whatever shape the frame is, the same rule the crop stage
   // follows and for the same reason: a portrait project must not make the
   // window narrow and tall.
-  let w = Math.round(panel.clientWidth * CROP_FRAME_SHARE);
+  // V3.7.2. By the window's width when it is out, scrollbar or not.
+  let w = Math.round(popupWidth(panel) * CROP_FRAME_SHARE);
   let h = Math.round(w * 9 / 16);
   // V3.3. In a window of its own, as tall as the rest of the panel leaves.
+  // V3.7.2: as tall as its width makes it, the window scrolling instead.
   const maxH = popupStageRoom(panel, renderStage, CROP_HEIGHT_SHARE, h);
   if (h > maxH) {
     h = maxH;

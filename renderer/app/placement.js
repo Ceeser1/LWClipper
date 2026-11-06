@@ -215,12 +215,13 @@ let cropStageWH = null;
  * the same size at 16:9 ratio in the window." One 16:9 size for the stages of
  * Video Frame, Render Position and Layer Mask, so stepping round the menu
  * never resizes the picture: as wide as Video Frame allows beside its side
- * arrows, and as tall as the view with the most around its stage leaves room
- * for. Each view is put up in turn to be measured, all inside this call, so
- * none of them is ever painted that way.
+ * arrows. In the main window as tall as its share; out in a window of its
+ * own, since V3.7.2, as tall as that width makes it, the window fitted to
+ * the view with the most around its stage. Each view is put up in turn to be
+ * measured, all inside this call, so none of them is ever painted that way.
  *
- * A ring or a star mask has a second row of fields under Invert Mask. It is
- * always counted, so picking a star does not shrink all three stages.
+ * A star mask's two extra fields are always counted, so picking a star does
+ * not change the window's fit.
  */
 function measureCropStage() {
   const panel = cropStage.closest('.modal__panel');
@@ -231,14 +232,16 @@ function measureCropStage() {
   const host = hostWindowOf(panel);
   const style = host.getComputedStyle(panel);
   const padLeft = parseFloat(style.paddingLeft) || 0;
-  const content = panel.clientWidth - padLeft - (parseFloat(style.paddingRight) || 0);
+  // V3.7.2. By the window's width when it is out, scrollbar or not.
+  const across = popupWidth(panel);
+  const content = across - padLeft - (parseFloat(style.paddingRight) || 0);
   // The side arrows may hang into the panel's own padding, which is what lets
   // the frame keep its full share: at that share the frame leaves only about
   // 20px beside it, and an arrow plus its gap wants a little more than that.
   // The cap is only here so a freakishly narrow window cannot push one out
   // past the edge and raise a scrollbar; in practice it never binds.
   const spare = Math.max(0, CROP_ARROW_SHORT + CROP_ARROW_GAP - padLeft + 2);
-  let w = Math.min(Math.round(panel.clientWidth * CROP_FRAME_SHARE), Math.round(content - 2 * spare));
+  let w = Math.min(Math.round(across * CROP_FRAME_SHARE), Math.round(content - 2 * spare));
   let h = Math.round(w * 9 / 16);
   let maxH;
   if (panel.ownerDocument === document) {
@@ -246,8 +249,8 @@ function measureCropStage() {
     // every view.
     maxH = Math.round(window.innerHeight * CROP_HEIGHT_SHARE);
   } else {
-    // Out in its own window: as tall as the window leaves once the most
-    // crowded view's controls are in, popupStageRoom's sum for each view.
+    // Out in its own window: the most crowded view's controls, popupStageRoom's
+    // sum for each view, for the height the window is fitted to.
     const views = timelineDriving() ? CROP_TABS : ['frame'];
     // V3.7.1. A star's Points and Inner Radius are the most fields a kind
     // has, a third row under Color or Gradient, Invert and Soft Edge, so
@@ -269,9 +272,10 @@ function measureCropStage() {
     }
     showCropViewParts(cropTab);
     // V3.7.1. What the window is fitted to: the most crowded view with the
-    // stage at its width.
+    // stage at its width. V3.7.2: and only that, the stage no longer cut
+    // down to the window's height; a window too short for it scrolls.
     notePopoutWant(panel, other + h);
-    maxH = Math.max(120, Math.round(host.innerHeight - other - 6));
+    maxH = Infinity;
   }
   if (h > maxH) {
     h = maxH;

@@ -227,18 +227,43 @@ function confirmPopoutConflict(conflicts, run) {
   return true;
 }
 
+/** V3.7.2. The window `panel` is popped out in, or null. */
+function poppedStateOf(panel) {
+  for (const state of popped.values()) {
+    if (state.panel === panel && !state.gone) return state;
+  }
+  return null;
+}
+
+/**
+ * V3.7.2. The width a popup's stage is sized from: the panel's, or out in a
+ * window of its own the window's, whether a scrollbar is up in it or not. A
+ * stage that gave the scrollbar its width would be shorter for it, which can
+ * take the scrollbar away again, which widens it, and round.
+ */
+function popupWidth(panel) {
+  const state = poppedStateOf(panel);
+  return state ? state.win.innerWidth : panel.clientWidth;
+}
+
 /**
  * The height a popup's stage may take. In the main window it is the share of
- * the window it always was. In a window of its own it is whatever the rest of
- * the panel leaves, the room round the stage included, so a taller window is
- * a taller stage. V3.7.1: `full` is the height the stage has at the window's
- * width, which with the rest of the panel is what the window is fitted to.
+ * the window it always was. V3.7.1: `full` is the height the stage has at the
+ * window's width, which with the rest of the panel is what the window is
+ * fitted to. V3.7.2, the user: "Let the windows be vertical scrollable if
+ * their size doesnt fit instead of shrinking its contents width". Out in its
+ * own window the stage is as tall as its width makes it, and a window too
+ * short for that scrolls. A dialog carried over it, Outline or Shadow, is
+ * still held to the window's height, being a pop-up of its own.
  */
 function popupStageRoom(panel, stage, share, full) {
   if (panel.ownerDocument === document) return Math.round(window.innerHeight * share);
   const win = hostWindowOf(panel);
   const other = panel.scrollHeight - stage.offsetHeight;
-  if (full) notePopoutWant(panel, other + full);
+  if (poppedStateOf(panel)) {
+    if (full) notePopoutWant(panel, other + full);
+    return Infinity;
+  }
   return Math.max(120, Math.round(win.innerHeight - other - 6));
 }
 
