@@ -51,6 +51,18 @@ const maskGuideX = el('maskGuideX');
 const maskGuideY = el('maskGuideY');
 const maskHint = el('maskHint');
 const maskZoomHint = el('maskZoomHint');
+const maskGradHint = el('maskGradHint');
+// V3.7.1. Color or Gradient, Shape Settings' pair, and the gradient's editor.
+const maskFill = el('maskFill');
+const maskColorBtn = el('maskColorBtn');
+const maskFillHint = el('maskFillHint');
+const maskGradient = el('maskGradient');
+const maskGradBar = el('maskGradBar');
+const maskGradCanvas = el('maskGradCanvas');
+const maskGradStart = el('maskGradStart');
+const maskGradEnd = el('maskGradEnd');
+const maskGradAngle = el('maskGradAngle');
+const maskGradLine = el('maskGradLine');
 
 // How faintly what the mask hides is shown on the stage.
 const MASK_GHOST = 0.25;
@@ -63,7 +75,9 @@ let maskFirst = false;
 let maskPic = null;
 // { kind, invert, soft and box in the picture's whole pixels, ring, points,
 // inner, src, by, aspect, and since 3.6.4 radius in the picture's whole
-// pixels }, or null for no mask.
+// pixels, and since 3.7.1 fill, color, and gradient with its start and end
+// in the picture's whole pixels and its angle in whole degrees }, or null
+// for no mask.
 let maskDraft = null;
 // The mask as the window opened on it, in fractions, as JSON, or null.
 let maskOpened = null;
@@ -88,6 +102,20 @@ function maskDraftOf(m) {
     src: m.src,
     by: m.by,
     aspect: m.aspect,
+    // V3.7.1.
+    fill: m.fill || 'color',
+    color: m.color || '#ffffffff',
+    gradient: maskDraftGradient(m.gradient || timelineModel.maskGradientOf(null), H),
+  };
+}
+
+/** V3.7.1. A mask's gradient in the picture's whole pixels, `H` high. */
+function maskDraftGradient(g, H) {
+  return {
+    stops: g.stops.map((stop) => ({ at: stop.at, color: stop.color })),
+    start: Math.round(g.start * H),
+    end: Math.round(g.end * H),
+    angle: Math.round(g.angle),
   };
 }
 
@@ -95,11 +123,13 @@ function maskDraftOf(m) {
 function maskOfDraft(d) {
   const W = Math.max(1, maskPic.width);
   const H = Math.max(1, maskPic.height);
+  const g = d.gradient;
   return timelineModel.maskOf({
     ...d,
     soft: d.soft / H,
     radius: (d.radius || 0) / H,
     box: { x: d.box.x / W, y: d.box.y / H, w: d.box.w / W, h: d.box.h / H },
+    gradient: g ? { ...g, start: g.start / H, end: g.end / H } : null,
   });
 }
 
@@ -175,7 +205,7 @@ function startMaskDraft(kind) {
 /**
  * Remove Mask: the draft goes and the window stays. V3.6.4, the user: "Reset
  * Crop/Mask/Position shouldnt close the window, it should just reset it."
- * On a layer with a mask, Accept then takes it off; Cancel keeps it.
+ * The draft's side of it; V3.7.1's saveCropReset takes it off the clip.
  */
 function dropMaskDraft() {
   maskDraft = null;
@@ -254,6 +284,8 @@ function resizeMaskStage() {
   // V3.6.4. The settings over it as wide, so their columns start at its left
   // edge and at its middle.
   maskGrid.style.width = w + 'px';
+  // V3.7.1. The gradient's bar as wide as the preview too.
+  maskGradBar.style.width = w + 'px';
   maskCanvas.style.left = '0px';
   maskCanvas.style.top = '0px';
   maskCanvas.style.width = w + 'px';
@@ -262,6 +294,7 @@ function resizeMaskStage() {
   maskCanvas.width = Math.max(1, Math.round(w * dpr));
   maskCanvas.height = Math.max(1, Math.round(h * dpr));
   placeMaskBox();
+  maskGrad.paintBar(true);
   paintMaskStage();
 }
 
@@ -315,6 +348,8 @@ function paintMaskStage() {
 
 function placeMaskBox() {
   maskBoxEl.hidden = !maskDraft;
+  // V3.7.1. The gradient's line goes with the box it runs from.
+  maskGrad.placeLine();
   if (!maskDraft) return;
   const r = stageFrameRect(maskStage);
   const b = maskDraft.box;
@@ -364,7 +399,19 @@ function showMaskDraft(except) {
   // With no mask there is nothing for these to say, so they wait, greyed.
   for (const input of [maskInvert, maskSoftSlider, maskSoftBox, maskRingSlider, maskRingBox,
     maskPointsSlider, maskPointsBox, maskInnerSlider, maskInnerBox,
-    maskRadiusSlider, maskRadiusBox]) input.disabled = !d;
+    maskRadiusSlider, maskRadiusBox, maskColorBtn, ...maskFill.querySelectorAll('button')]) input.disabled = !d;
+  // V3.7.1. Color shows the swatch; Gradient the line in its place and the
+  // gradient's controls under the settings, as Shape Settings does.
+  const grad = maskGradientOn();
+  for (const b of maskFill.querySelectorAll('button')) {
+    b.classList.toggle('btn--active', (d ? d.fill : 'color') === b.dataset.fill);
+  }
+  paintSwatch(maskColorBtn, d ? d.color : '#ffffffff');
+  maskColorBtn.hidden = grad;
+  maskFillHint.hidden = !grad;
+  maskGradient.hidden = !grad;
+  maskGradHint.hidden = !grad || cropTab !== 'mask';
+  maskGrad.showBoxes(except);
   // Remove Mask has something to take off once there is a mask or a draft,
   // and nothing once it has been pressed.
   const own = cropLayerNow();
@@ -518,6 +565,81 @@ bindNumberField({
   range: () => [0, maskRadiusCeiling()],
   set: (n, except) => changeMask({ radius: n }, except),
   show: () => showMaskDraft(null),
+});
+
+// ---- V3.7.1. Color or Gradient ----
+//
+// The user: "Layer masks have no color or gradient option yet, add them".
+// The colour is how much of the picture the mask shows, by the rule a custom
+// mask picture already has: white shows, black hides, grey and transparency
+// show in part; the hue says nothing. A gradient is a run of such colours,
+// Shape Settings' editor (gen/gradient.js) on the mask: from the middle of its
+// box, Start and End in the picture's pixels, and Rotation from the picture,
+// which the mask turns with. The whole clip's, not keyed.
+
+function maskGradientOn() {
+  return !!maskDraft && maskDraft.fill === 'gradient';
+}
+
+const maskGrad = makeGradientEditor({
+  bar: maskGradBar,
+  canvas: maskGradCanvas,
+  start: maskGradStart,
+  end: maskGradEnd,
+  angle: maskGradAngle,
+  line: maskGradLine,
+  stage: maskStage,
+  // A hundred picture heights either way, the model's reach.
+  reach: () => Math.round(100 * (maskPic ? maskPic.height : 720)),
+  get: () => (maskDraft ? maskDraft.gradient : null),
+  on: maskGradientOn,
+  set: (props, quick, except) => setMaskGradient(props, quick, except),
+  centre: () => {
+    const b = maskDraft.box;
+    return { x: b.x + b.w / 2, y: b.y + b.h / 2 };
+  },
+  turn: () => 0,
+  pick: (color, live) => pickColor(color, live, cropModal),
+  owner: () => cropLayerId,
+});
+
+function setMaskGradient(props, quick, except) {
+  if (!maskDraft) return;
+  maskDraft = { ...maskDraft, gradient: { ...maskDraft.gradient, ...props } };
+  showMaskDraft(except || null);
+  maskGrad.paintBar(!quick);
+  maskGrad.placeLine();
+  paintMaskStage();
+}
+
+// Color or Gradient. A mask that never had a gradient has it laid across
+// itself the first time, white on its left edge into black on its right.
+for (const b of maskFill.querySelectorAll('button')) {
+  b.addEventListener('click', () => {
+    if (!maskDraft || b.dataset.fill === maskDraft.fill) return;
+    const props = { fill: b.dataset.fill };
+    const unset = JSON.stringify(maskDraftGradient(timelineModel.maskGradientOf(null), maskPic.height));
+    if (props.fill === 'gradient' && JSON.stringify(maskDraft.gradient) === unset) {
+      const half = Math.max(1, Math.round(maskDraft.box.w / 2));
+      props.gradient = { ...maskDraft.gradient, start: -half, end: half, angle: 0 };
+    }
+    changeMask(props, null);
+    // The gradient's controls come and go, so the window is fitted again.
+    cropContentChanged();
+  });
+}
+
+maskColorBtn.addEventListener('click', async () => {
+  if (!maskDraft) return;
+  const was = maskDraft.color;
+  const id = cropLayerId;
+  const live = () => cropLayerId === id && !!maskDraft && !cropModal.hidden;
+  const picked = await pickColor(was, (color) => {
+    if (live()) changeMask({ color }, null);
+  }, cropModal);
+  // The window may have been closed under the picker, by Escape for one.
+  if (!live()) return;
+  changeMask({ color: picked || was }, null);
 });
 
 // ---- the box: the shape's grips, in the picture's pixels ----

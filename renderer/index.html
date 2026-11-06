@@ -478,6 +478,23 @@
   <div id="cropModal" class="modal" hidden>
     <div class="modal__panel modal__panel--crop" role="dialog" aria-modal="true" aria-labelledby="cropTitle">
       <div id="cropTitle" class="modal__title">Crop</div>
+      <!-- V3.7.1. The user: "In all windows remove the hint texts inside the
+           windows and instead on the top right show a hoverable 'Info' button
+           which displays its text below the button in a pop-up while hovered."
+           Each view's lines are shown and hidden as they were in place. -->
+      <div class="info-tip">
+        <button class="info-tip__btn" type="button" tabindex="-1">Info</button>
+        <div class="info-tip__pop">
+          <div id="cropHint" class="hint-label">Hold Shift to move bars mirrored, Ctrl on a corner to move it diagonally, both to keep the shape</div>
+          <div id="cropPanHint" class="hint-label">Click or Hold arrows to pan precise</div>
+          <div id="placeHint" class="hint-label" hidden>Drag the picture to place it, and the scale to resize it</div>
+          <div id="placeZoomHint" class="hint-label" hidden>Scroll to zoom, drag empty space or with the middle button to pan, double-click empty space to fit the frame</div>
+          <div id="maskHint" class="hint-label" hidden>Drag the sides to stretch the mask, a corner to scale it and inside it to move it, hold Shift to keep its centre</div>
+          <div id="maskGradHint" class="hint-label" hidden>Right-click somewhere on the preview and drag any direction to apply a gradient</div>
+          <div id="maskZoomHint" class="hint-label" hidden>Scroll to zoom, drag empty space or with the middle button to pan, double-click empty space to fit the frame</div>
+          <div id="cropKeysHint" class="hint-label" hidden>Keyframes: click one to edit it, drag one to move it, press or drag the bar to move the playhead, double-click the bar to add one, right-click one to delete it</div>
+        </div>
+      </div>
       <!-- V2.1. Two rectangles, one popup: which part of the source to take,
            and where that result goes in the output frame. Both belong to the
            same layer and the same Accept, which is why they are tabs rather
@@ -504,10 +521,6 @@
         <div id="cropArrowDown" class="crop-arrow crop-arrow--down" data-live="false"><span class="crop-arrow__glyph"></span></div>
         <div id="cropArrowLeft" class="crop-arrow crop-arrow--left" data-live="false"><span class="crop-arrow__glyph"></span></div>
         <div id="cropArrowRight" class="crop-arrow crop-arrow--right" data-live="false"><span class="crop-arrow__glyph"></span></div>
-        <!-- Sits in the gutter the upper arrow occupies, level with it and
-             lined up with the left edge of the frame. Only worth saying while
-             there is an arrow to click, so it comes and goes with them. -->
-        <div id="cropPanHint" class="crop-pan-hint" hidden>Click or Hold arrows to pan precise</div>
       <div id="cropStage" class="crop-stage">
         <canvas id="cropCanvas" class="crop-canvas"></canvas>
         <div id="cropBox" class="crop-box">
@@ -563,6 +576,18 @@
              left column from the stage's left edge, the right one from its
              middle. -->
         <div id="maskGrid" class="gen-grid mask-grid">
+          <!-- V3.7.1. The user: "Layer masks have no color or gradient option
+               yet, add them". How much of the picture it shows: a colour's
+               brightness and alpha, white showing and black hiding, or a
+               gradient of them, Shape Settings' own pair. -->
+          <div class="gen-field">
+            <div id="maskFill" class="gen-choice shape-fill">
+              <button data-fill="color">Color</button>
+              <button data-fill="gradient">Gradient</button>
+            </div>
+            <button id="maskColorBtn" class="color-swatch"><span class="color-swatch__fill"></span></button>
+            <span id="maskFillHint" class="shape-fill-hint" hidden>Modify your gradient below</span>
+          </div>
           <div class="gen-field">
             <label class="gen-check gen-check--field"><input id="maskInvert" type="checkbox" /> Invert Mask</label>
           </div>
@@ -599,8 +624,31 @@
             <span class="gen-field__unit">px</span>
           </div>
         </div>
+        <!-- V3.7.1. The mask's gradient, Shape Settings' editor: the bar as
+             wide as the preview, then Start and End in the picture's pixels
+             from the mask's middle, and Rotation from the picture. -->
+        <div id="maskGradient" class="shape-gradient" hidden>
+          <div id="maskGradBar" class="gradient-bar">
+            <canvas id="maskGradCanvas" class="gradient-bar__canvas"></canvas>
+          </div>
+          <div class="shape-gradient__boxes">
+            <span class="gen-field__caption">Start:</span>
+            <input id="maskGradStart" class="gen-num gen-num--scrub" type="text" inputmode="numeric" maxlength="7" />
+            <span class="gen-field__unit">px</span>
+            <span class="gen-field__caption">End:</span>
+            <input id="maskGradEnd" class="gen-num gen-num--scrub" type="text" inputmode="numeric" maxlength="7" />
+            <span class="gen-field__unit">px</span>
+            <span class="gen-field__caption">Rotation:</span>
+            <input id="maskGradAngle" class="gen-num gen-num--scrub" type="text" inputmode="numeric" maxlength="4" />
+            <span class="gen-field__unit gen-field__unit--deg"></span>
+          </div>
+        </div>
         <div id="maskStage" class="gen-stage">
           <canvas id="maskCanvas" class="gen-canvas"></canvas>
+          <div id="maskGradLine" class="gradient-line" hidden>
+            <span class="gradient-line__end gradient-line__end--start"></span>
+            <span class="gradient-line__end gradient-line__end--end"></span>
+          </div>
           <div id="maskGuideX" class="text-guide text-guide--x" hidden></div>
           <div id="maskGuideY" class="text-guide text-guide--y" hidden></div>
           <div id="maskBoxEl" class="crop-box text-box">
@@ -625,13 +673,14 @@
         <div id="cropKeysReadout" class="crop-keys__readout"></div>
         <canvas id="cropKeysCanvas" class="crop-keys__canvas"></canvas>
       </div>
-      <div id="placeHint" class="hint-label crop-hint" hidden>Drag the picture to place it, and the scale to resize it</div>
-      <div id="placeZoomHint" class="hint-label crop-hint" hidden>Scroll to zoom, drag empty space or with the middle button to pan, double-click empty space to fit the frame</div>
-      <div id="maskHint" class="hint-label crop-hint" hidden>Drag the sides to stretch the mask, a corner to scale it and inside it to move it, hold Shift to keep its centre</div>
-      <div id="maskZoomHint" class="hint-label crop-hint" hidden>Scroll to zoom, drag empty space or with the middle button to pan, double-click empty space to fit the frame</div>
-      <div id="cropHint" class="hint-label crop-hint">Hold Shift to move bars mirrored, Ctrl on a corner to move it diagonally, both to keep the shape</div>
-      <div id="cropSize" class="crop-size"></div>
-      <div id="placeSize" class="crop-size" hidden></div>
+      <!-- V3.7.1. The readout, and beside it what a drag is doing while it
+           does something other than the plain move: mirrored, diagonal, or
+           held to a preset's shape. -->
+      <div class="crop-size-row">
+        <div id="cropSize" class="crop-size"></div>
+        <div id="placeSize" class="crop-size" hidden></div>
+        <div id="cropMode" class="crop-mode" hidden></div>
+      </div>
       <!-- The same row the crop zoom uses, so the two tabs put their one slider
            in the same place. 100% is centre and fit, which is what the layer
            gets with no position at all: below it the picture shrinks into the
@@ -656,10 +705,10 @@
       </div>
       <div class="crop-presets" id="cropPresets"></div>
       <div class="crop-actions">
-        <button id="cropAcceptBtn" class="crop-accept-btn">Accept</button>
         <!-- V3.6.2. Reset Crop, Reset Position or Remove Mask, by the view. -->
         <button id="cropRemoveBtn" class="crop-remove-btn">Reset Crop</button>
         <button id="cropCancelBtn">Cancel</button>
+        <button id="cropAcceptBtn" class="crop-accept-btn">Accept</button>
       </div>
     </div>
   </div>
@@ -684,6 +733,12 @@
     <div class="modal__panel modal__panel--crop" role="dialog" aria-modal="true"
       aria-labelledby="renderTitle">
       <div id="renderTitle" class="modal__title">Crop Render Frame</div>
+      <div class="info-tip">
+        <button class="info-tip__btn" type="button" tabindex="-1">Info</button>
+        <div class="info-tip__pop">
+          <div id="renderHint" class="hint-label">Hold Shift to move bars mirrored, Ctrl on a corner to move it diagonally, both to keep the shape</div>
+        </div>
+      </div>
       <div class="crop-frame crop-frame--render">
         <div id="renderStage" class="crop-stage">
           <canvas id="renderCanvas" class="crop-canvas"></canvas>
@@ -699,7 +754,9 @@
           </div>
         </div>
       </div>
-      <div id="renderHint" class="hint-label crop-hint">Hold Shift to move bars mirrored, Ctrl on a corner to move it diagonally, both to keep the shape</div>
+      <!-- V3.7.1. What a drag is doing, while it does more than the plain
+           move. Holds its line when empty, so nothing under it jumps. -->
+      <div id="renderMode" class="render-mode"></div>
       <div class="render-resolution__edit render-frame-res">
         <span>Render Resolution:</span>
         <input id="renderWidthBox" class="render-resolution__box" type="text"
@@ -714,8 +771,8 @@
       <div class="crop-presets" id="renderPresets"></div>
       <div class="crop-presets" id="renderResPresets"></div>
       <div class="crop-actions">
-        <button id="renderAcceptBtn" class="crop-accept-btn">Accept</button>
         <button id="renderCancelBtn">Cancel</button>
+        <button id="renderAcceptBtn" class="crop-accept-btn">Accept</button>
       </div>
     </div>
   </div>
@@ -727,6 +784,12 @@
     <div class="modal__panel modal__panel--crop" role="dialog" aria-modal="true"
       aria-labelledby="barTitle">
       <div id="barTitle" class="modal__title">Bar Settings</div>
+      <div class="info-tip">
+        <button class="info-tip__btn" type="button" tabindex="-1">Info</button>
+        <div class="info-tip__pop">
+          <div class="hint-label">Keyframes: click one to edit it, drag one to move it, press or drag the bar to move the playhead, double-click the bar to add one, right-click one to delete it</div>
+        </div>
+      </div>
       <div class="gen-grid">
         <div class="gen-field">
           <span class="gen-field__caption">Stick to:</span>
@@ -765,8 +828,8 @@
       </div>
       <label class="gen-check"><input id="barBackground" type="checkbox" /> Enable Background</label>
       <div class="crop-actions">
-        <button id="barAcceptBtn" class="crop-accept-btn">Accept</button>
         <button id="barCancelBtn">Cancel</button>
+        <button id="barAcceptBtn" class="crop-accept-btn">Accept</button>
       </div>
     </div>
   </div>
@@ -779,6 +842,15 @@
     <div class="modal__panel modal__panel--crop" role="dialog" aria-modal="true"
       aria-labelledby="shapeTitle">
       <div id="shapeTitle" class="modal__title">Shape Settings</div>
+      <div class="info-tip">
+        <button class="info-tip__btn" type="button" tabindex="-1">Info</button>
+        <div class="info-tip__pop">
+          <div id="shapeHint" class="hint-label">Drag the sides to stretch the shape, a corner to scale it, inside it to move it and the dot above it to turn it, hold Shift to keep its centre</div>
+          <div id="shapeGradHint" class="hint-label" hidden>Right-click somewhere on the preview and drag any direction to apply a gradient</div>
+          <div class="hint-label">Scroll to zoom, drag empty space or with the middle button to pan, double-click empty space to fit the frame</div>
+          <div class="hint-label">Keyframes: click one to edit it, drag one to move it, press or drag the bar to move the playhead, double-click the bar to add one, right-click one to delete it</div>
+        </div>
+      </div>
       <!-- V3.6.5. Which shape, for the whole clip and changeable at any time,
            the Layer Mask view's row of shapes. -->
       <div id="shapeKinds" class="gen-choice shape-kinds">
@@ -858,7 +930,6 @@
         <div id="shapeGradBar" class="gradient-bar">
           <canvas id="shapeGradCanvas" class="gradient-bar__canvas"></canvas>
         </div>
-        <div class="hint-label crop-hint shape-gradient__hint">Click somewhere on the preview and drag any direction to apply a gradient</div>
         <div class="shape-gradient__boxes">
           <span class="gen-field__caption">Start:</span>
           <input id="shapeGradStart" class="gen-num gen-num--scrub" type="text" inputmode="numeric" maxlength="7" />
@@ -903,12 +974,10 @@
         <div id="shapeKeysReadout" class="crop-keys__readout"></div>
         <canvas id="shapeKeysCanvas" class="crop-keys__canvas"></canvas>
       </div>
-      <div id="shapeHint" class="hint-label crop-hint">Drag the sides to stretch the shape, a corner to scale it, inside it to move it and the dot above it to turn it, hold Shift to keep its centre</div>
-      <div class="hint-label crop-hint">Scroll to zoom, drag empty space or with the middle button to pan, double-click empty space to fit the frame</div>
       <label class="gen-check"><input id="shapeBackground" type="checkbox" /> Enable Background</label>
       <div class="crop-actions">
-        <button id="shapeAcceptBtn" class="crop-accept-btn">Accept</button>
         <button id="shapeCancelBtn">Cancel</button>
+        <button id="shapeAcceptBtn" class="crop-accept-btn">Accept</button>
       </div>
     </div>
   </div>
@@ -922,6 +991,14 @@
     <div class="modal__panel modal__panel--crop" role="dialog" aria-modal="true"
       aria-labelledby="textTitle">
       <div id="textTitle" class="modal__title">Edit Text</div>
+      <div class="info-tip">
+        <button class="info-tip__btn" type="button" tabindex="-1">Info</button>
+        <div class="info-tip__pop">
+          <div id="textHint" class="hint-label" hidden>Drag the sides to size the text box and inside it to move it, hold Shift to move opposite sides together, drag a corner to turn it</div>
+          <div class="hint-label">Scroll to zoom, drag empty space or with the middle button to pan, double-click empty space to fit the frame</div>
+          <div class="hint-label">Keyframes: click one to edit it, drag one to move it, press or drag the bar to move the playhead, double-click the bar to add one, right-click one to delete it</div>
+        </div>
+      </div>
       <div class="text-toolbar">
         <div id="textFontCombo" class="combo combo--font">
           <input id="textFontBox" class="combo__box" type="text" spellcheck="false" autocomplete="off" />
@@ -992,12 +1069,10 @@
         <div id="textKeysReadout" class="crop-keys__readout"></div>
         <canvas id="textKeysCanvas" class="crop-keys__canvas"></canvas>
       </div>
-      <div id="textHint" class="hint-label crop-hint">Drag the sides to size the text box and inside it to move it, hold Shift to move opposite sides together, drag a corner to turn it</div>
-      <div class="hint-label crop-hint">Scroll to zoom, drag empty space or with the middle button to pan, double-click empty space to fit the frame</div>
       <label class="gen-check"><input id="textBackground" type="checkbox" /> Enable Background</label>
       <div class="crop-actions">
-        <button id="textAcceptBtn" class="crop-accept-btn">Accept</button>
         <button id="textCancelBtn">Cancel</button>
+        <button id="textAcceptBtn" class="crop-accept-btn">Accept</button>
       </div>
     </div>
   </div>
@@ -1026,9 +1101,9 @@
       </div>
       <label class="gen-check"><input id="outlineBackground" type="checkbox" /> Enable Background</label>
       <div class="crop-actions">
-        <button id="outlineApplyBtn" class="crop-accept-btn">Apply</button>
         <button id="outlineRemoveBtn" class="crop-remove-btn">Remove</button>
         <button id="outlineCancelBtn">Cancel</button>
+        <button id="outlineApplyBtn" class="crop-accept-btn">Apply</button>
       </div>
     </div>
   </div>
@@ -1076,9 +1151,9 @@
       </div>
       <label class="gen-check"><input id="shadowBackground" type="checkbox" /> Enable Background</label>
       <div class="crop-actions">
-        <button id="shadowApplyBtn" class="crop-accept-btn">Apply</button>
         <button id="shadowRemoveBtn" class="crop-remove-btn">Remove</button>
         <button id="shadowCancelBtn">Cancel</button>
+        <button id="shadowApplyBtn" class="crop-accept-btn">Apply</button>
       </div>
     </div>
   </div>
@@ -1118,8 +1193,8 @@
           <input id="colorABox" type="text" inputmode="numeric" maxlength="3" /></label>
       </div>
       <div class="crop-actions">
-        <button id="colorAcceptBtn" class="crop-accept-btn">Accept</button>
         <button id="colorCancelBtn">Cancel</button>
+        <button id="colorAcceptBtn" class="crop-accept-btn">Accept</button>
       </div>
     </div>
   </div>
@@ -1163,6 +1238,7 @@
   <script src="app/gen/kinds.js"></script>
   <script src="app/gen/colorPicker.js"></script>
   <script src="app/gen/preview.js"></script>
+  <script src="app/gen/gradient.js"></script>
   <script src="app/gen/bar.js"></script>
   <script src="app/gen/shape.js"></script>
   <script src="app/gen/text.js"></script>

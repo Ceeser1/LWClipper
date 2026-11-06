@@ -35,14 +35,15 @@ let pickState = null;    // { h, s, v, a } while the picker is open
 let pickOnInput = null;
 let pickSettle = null;   // the open promise's resolve
 
-function pickColor(color, onInput) {
+function pickColor(color, onInput, over) {
   // One at a time: a second request settles the first as cancelled.
   if (pickSettle) settlePick(false);
   pickState = colorModel.stateOf(color);
   pickOnInput = onInput || null;
   // V3.6.2. Over the media window when it is out, which is where it was
-  // asked for from.
-  carryOver(colorModal, genWindow && genWindow.modal);
+  // asked for from. V3.7.1: or over `over`, the Crop and Mask window for a
+  // mask's colour.
+  carryOver(colorModal, over || (genWindow && genWindow.modal));
   colorModal.hidden = false;
   drawPickWheel();
   showPick(null);

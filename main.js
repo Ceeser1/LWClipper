@@ -238,6 +238,11 @@ function createWindow() {
   });
   mainWindow.webContents.on('did-create-window', (child, { frameName }) => {
     child.setMenuBarVisibility(false);
+    // V3.7.1. By its name, for the page to fit its height to what it holds.
+    popoutWindows.set(frameName, child);
+    child.on('closed', () => {
+      if (popoutWindows.get(frameName) === child) popoutWindows.delete(frameName);
+    });
     // Where it was left, for next time, kept with the settings. Followed as it
     // moves and is resized and written once it has closed: a window the page
     // closes, which is Accept and Cancel, goes without a close event of its
@@ -265,6 +270,34 @@ function createWindow() {
 
 // V3.3. The names the page may open a popped out editor under.
 const POPOUT_NAME = /^lwc-pop-[a-z]+$/;
+
+// V3.7.1. The editor windows open now, by their names.
+const popoutWindows = new Map();
+
+// V3.7.1. The user: "Open each window as its required max height so that the
+// full 90% of the window default width gets used for the preview and all
+// elements fit in vertically without scrolling". The page says how tall its
+// content wants to be at the window's width; the window takes that, held to
+// the screen it is on and moved up if its bottom would run off it. Its width
+// and its place across are left as they were.
+ipcMain.handle('popout:fit', (_event, { name, height }) => {
+  const child = popoutWindows.get('lwc-pop-' + String(name || ''));
+  const want = Math.round(Number(height));
+  if (!child || child.isDestroyed() || !Number.isFinite(want) || want < 100) return false;
+  if (child.isMaximized() || child.isFullScreen() || child.isMinimized()) return false;
+  const outer = child.getBounds();
+  const inner = child.getContentBounds();
+  const frame = outer.height - inner.height;
+  const area = screen.getDisplayMatching(outer).workArea;
+  const tall = Math.min(want, area.height - frame);
+  // A pixel or two of rounding is not worth moving the window for, and acting
+  // on it is what would turn rounding into a loop.
+  if (Math.abs(tall - inner.height) < 2) return true;
+  const outerTall = tall + frame;
+  const y = Math.max(area.y, Math.min(outer.y, area.y + area.height - outerTall));
+  child.setBounds({ x: outer.x, y, width: outer.width, height: outerTall }, false);
+  return true;
+});
 
 /**
  * Where a popped out editor opens: where it was last closed, when that is

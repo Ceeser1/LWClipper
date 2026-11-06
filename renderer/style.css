@@ -731,6 +731,13 @@ body.advanced .preview-head .hint-label {
   display: none;
 }
 
+/* V3.7.1. The user: "Remove the 'Video' title of the main windows preview."
+   In advanced editing only, where the row is the resolution readout's alone.
+   Simple editing keeps it, since there it names the Enabled switch beside it. */
+body.advanced .preview-head .section-title {
+  display: none;
+}
+
 /* The boxes are ten pixels taller than the text this row was sized for, and the
    readout is out of the flow so the row does not grow for them by itself. It
    measured as five pixels of overhang into a six pixel margin, which fits and
@@ -2885,25 +2892,6 @@ body.lane-lifting * {
   height: 38px;
 }
 
-/* Its box is given the arrow's height and anchored to the same edge, so the two
-   line up by construction rather than by matching font metrics against a
-   triangle. Placed by the script, like the arrows, for the same reason. */
-.crop-pan-hint {
-  position: absolute;
-  display: flex;
-  align-items: center;
-  color: #777780;
-  font-size: 11px;
-  line-height: 1;
-  white-space: nowrap;
-  pointer-events: none;
-}
-
-/* An author display value outranks the UA rule behind the hidden attribute. */
-.crop-pan-hint[hidden] {
-  display: none;
-}
-
 /* Drawn rather than typed, so the shape is exactly two to one instead of
    whatever the font happens to make of a triangle. currentColor keeps it in
    step with the grey and green above. */
@@ -3024,15 +3012,116 @@ body.lane-lifting * {
 
 /* The shared hint style pushes itself right inside a flex row; here it is a
    block of its own under the frame, so that has to go. */
-.crop-hint {
-  margin: 8px 0 0;
-}
-
 .crop-size {
   margin-top: 4px;
   font-size: 15px;
   font-weight: bold;
   color: #ebebf0;
+}
+
+/* V3.7.1. The readout in the middle and what a drag is doing beside it, on
+   its right, so the readout stays centred whether the line is up or not. */
+.crop-size-row {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: baseline;
+  column-gap: 12px;
+}
+
+.crop-size-row > .crop-size {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.crop-size-row > .crop-size[hidden],
+.crop-mode[hidden] {
+  display: none;
+}
+
+/* V3.7.1. The Crop Render Frame's line for it, which has no readout to sit
+   beside, so it holds a line of its own, empty while the drag is plain. */
+.render-mode {
+  min-height: 1lh;
+  margin-top: 6px;
+  color: #b8b8c0;
+  font-size: 12px;
+}
+
+.crop-mode {
+  grid-column: 3;
+  grid-row: 1;
+  justify-self: start;
+  color: #b8b8c0;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* ---- V3.7.1. The Info button in each editor window ---- */
+
+/* The user: "on the top right show a hoverable 'Info' button which displays
+   its text below the button in a pop-up while hovered". In the title's row,
+   which keeps clear of it either side so a long title stays centred. */
+.modal__panel--crop {
+  position: relative;
+}
+
+.modal__panel--crop > .modal__title {
+  padding: 0 72px;
+}
+
+.info-tip {
+  position: absolute;
+  top: 14px;
+  right: 16px;
+  z-index: 40;
+}
+
+.info-tip__btn {
+  padding: 3px 12px;
+  font-size: 12px;
+}
+
+.info-tip__pop {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  flex-direction: column;
+  gap: 8px;
+  width: max-content;
+  max-width: 380px;
+  padding: 10px 12px;
+  background: #1e1e24;
+  border: 1px solid #55555e;
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  text-align: left;
+}
+
+/* Across the gap under the button, so moving down onto the pop-up does not
+   leave the hover on the way. */
+.info-tip__pop::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -8px;
+  height: 8px;
+}
+
+.info-tip:hover .info-tip__pop {
+  display: flex;
+}
+
+.info-tip__pop > .hint-label {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #c8c8d0;
+}
+
+.info-tip__pop > .hint-label[hidden] {
+  display: none;
 }
 
 .crop-zoom {
@@ -3130,11 +3219,35 @@ body.lane-lifting * {
   margin-top: 10px;
 }
 
+/* V3.7.1. The user: "Left-bottom: Remove-buttons (for Crop, render position,
+   mask), bottom center 'Cancel', boittom right 'Accept'", in every window.
+   Three fixed columns, so a row without a Remove, or with it hidden, still
+   has Cancel in the middle. The markup is in the same order, for Tab. */
 .crop-actions {
-  display: flex;
-  justify-content: center;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
   gap: 6px;
   margin-top: 12px;
+}
+
+.crop-actions > button {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.crop-actions > .crop-remove-btn {
+  grid-column: 1;
+  justify-self: start;
+}
+
+.crop-actions > .crop-accept-btn {
+  grid-column: 3;
+  justify-self: end;
+}
+
+.crop-actions > button[hidden] {
+  display: none;
 }
 
 /* Both the preset that set the current box and the Crop button itself, so a
@@ -3672,8 +3785,19 @@ button.color-swatch:hover:not(:disabled) {
   padding-right: 18px;
 }
 
+/* V3.7.1. The user: "the texts are not aligned floating left for the left
+   collumn and left-to-center for the right column. Some texts have space to
+   the imaginary line." Every caption from its column's line: the grid's own
+   captions are held to 72px and set right, which put a short one such as
+   "Points:" well in from it, and a checkbox has Chromium's 4px on its left. */
 .mask-grid .gen-field__caption {
+  min-width: 0;
+  text-align: left;
   white-space: nowrap;
+}
+
+.mask-grid .gen-check input[type="checkbox"] {
+  margin-left: 0;
 }
 
 /* A width rather than a basis: a range input's own width is what the grid's
@@ -3800,10 +3924,6 @@ button.color-swatch:hover:not(:disabled) {
 /* Dragged off the bar, it goes when let go. */
 .gradient-stop--off {
   opacity: 0.3;
-}
-
-.shape-gradient__hint {
-  margin-top: 6px;
 }
 
 .shape-gradient__boxes {

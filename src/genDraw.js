@@ -454,10 +454,56 @@ const genDraw = (() => {
   function drawMask(ctx, mask, width, height, image, surface) {
     ctx.clearRect(0, 0, width, height);
     // V3.6.4. The corners' radius in the picture's pixels, which tracePath takes.
-    const s = { ...mask, color: '#ffffffff', outline: false, image: image || null,
+    // V3.7.1. Drawn white and flat whatever its own colour or gradient says,
+    // which are how much of that shows, put in below.
+    const s = { ...mask, color: '#ffffffff', fill: 'color', outline: false, image: image || null,
       radius: Math.max(0, (mask.radius || 0) * height) };
-    paintShape(ctx, s, maskBox(mask, width, height), Math.max(0, (mask.soft || 0) * height), 0,
+    const b = maskBox(mask, width, height);
+    paintShape(ctx, s, b, Math.max(0, (mask.soft || 0) * height), 0,
       width, height, surface === undefined ? defaultShapeSurface : surface);
+    // V3.7.1. Then all of it taken down by its colour, or along its gradient:
+    // source-in keeps the mask's own alpha and multiplies it by the paint's.
+    const paint = maskStrengthPaint(ctx, mask, b, height);
+    if (paint === null) return;
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-in';
+    ctx.fillStyle = paint;
+    ctx.fillRect(0, 0, width, height);
+    ctx.restore();
+  }
+
+  /**
+   * V3.7.1. How much a colour lets a mask show, 0 to 1: its brightness by the
+   * rule a custom mask picture has (maskPixels' luma), times its alpha. The
+   * hue says nothing.
+   */
+  function maskStrength(color) {
+    const ch = (i) => parseInt(String(color).slice(1 + i * 2, 3 + i * 2), 16) / 255;
+    const a = String(color).length >= 9 ? ch(3) : 1;
+    const s = (0.2126 * ch(0) + 0.7152 * ch(1) + 0.0722 * ch(2)) * a;
+    return Number.isFinite(s) ? Math.min(1, Math.max(0, s)) : 1;
+  }
+
+  /**
+   * V3.7.1. What a mask is multiplied by: white at its colour's strength, or
+   * a gradient of such whites along its line, which runs as a shape's does
+   * from the middle of its box, Start and End in fractions of the picture's
+   * height. Null when it shows in full, which is nothing to do.
+   */
+  function maskStrengthPaint(ctx, mask, b, height) {
+    const white = (s) => 'rgba(255,255,255,' + s.toFixed(4) + ')';
+    if (mask.fill === 'gradient' && mask.gradient) {
+      if (typeof ctx.createLinearGradient !== 'function') return null;
+      const g = mask.gradient;
+      return shapePaint(ctx, {
+        fill: 'gradient',
+        rotation: 0,
+        color: '#ffffffff',
+        gradient: { ...g, stops: g.stops.map((stop) => ({ at: stop.at, color: white(maskStrength(stop.color)) })) },
+      }, b, height);
+    }
+    const s = maskStrength(mask.color || '#ffffffff');
+    return s >= 1 ? null : white(s);
   }
 
   /**
@@ -1014,6 +1060,9 @@ const genDraw = (() => {
     maskBox,
     maskStartBox,
     drawMask,
+    // V3.7.1.
+    maskStrength,
+    maskStrengthPaint,
     maskPixels,
     hasTransparency,
     drawGen,

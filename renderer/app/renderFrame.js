@@ -23,7 +23,7 @@ const renderModal = el('renderModal');
 const renderStage = el('renderStage');
 const renderCanvas = el('renderCanvas');
 const renderBox = el('renderBox');
-const renderHintEl = el('renderHint');
+const renderModeEl = el('renderMode');
 const renderWidthBox = el('renderWidthBox');
 const renderHeightBox = el('renderHeightBox');
 const renderPresetRow = el('renderPresets');
@@ -129,7 +129,7 @@ function sizeRenderStage() {
   let w = Math.round(panel.clientWidth * CROP_FRAME_SHARE);
   let h = Math.round(w * 9 / 16);
   // V3.3. In a window of its own, as tall as the rest of the panel leaves.
-  const maxH = popupStageRoom(panel, renderStage, CROP_HEIGHT_SHARE);
+  const maxH = popupStageRoom(panel, renderStage, CROP_HEIGHT_SHARE, h);
   if (h > maxH) {
     h = maxH;
     w = Math.round(h * 16 / 9);
@@ -208,18 +208,10 @@ function paintRenderFrame() {
   paintLayers(renderCanvas.getContext('2d'), renderCanvas, compositeAt);
 }
 
+// V3.7.1. The idle hint is a line in Info; what is left in the window is the
+// line saying what a drag does, empty while it does the plain move.
 function setRenderHint(mirrored, diagonal = false, locked = false) {
-  if (locked) {
-    renderHintEl.textContent = t('Locked: the frame keeps the shape selected below');
-  } else if (mirrored && diagonal) {
-    renderHintEl.textContent = t('Mirrored and diagonal: all four borders, 1 px each');
-  } else if (mirrored) {
-    renderHintEl.textContent = t('Mirrored: both bars moving together, 1 px each');
-  } else if (diagonal) {
-    renderHintEl.textContent = t('Diagonal: both borders of the corner, 2 px each');
-  } else {
-    renderHintEl.textContent = t(CROP_HINT_IDLE);
-  }
+  renderModeEl.textContent = cropModeText(mirrored, diagonal, locked);
 }
 
 /**

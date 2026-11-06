@@ -479,6 +479,29 @@ const timelineModel = (() => {
       src: kind === 'custom' ? src : null,
       by: oneOf(v.by, MASK_BY, 'alpha'),
       aspect: within(v.aspect, 0.01, 100, 1),
+      // V3.7.1. The user: "Layer masks have no color or gradient option yet,
+      // add them". How much of the picture the mask shows: by its colour, or
+      // along a gradient, the custom picture's rule, white showing, black
+      // hiding and grey showing in part, times the alpha. White is the mask
+      // every one was before, so a 3.7 project opens as it was. The whole
+      // clip's, not keyed, like a shape's.
+      fill: oneOf(v.fill, SHAPE_FILLS, 'color'),
+      color: colourOf(v.color, '#ffffffff'),
+      gradient: maskGradientOf(v.gradient),
+    };
+  }
+
+  /**
+   * V3.7.1. A mask's gradient: a shape's, with Start and End in fractions of
+   * the picture's height, as its soft edge is, so it scales with the picture.
+   * The angle is measured from the picture, which the mask turns with.
+   */
+  function maskGradientOf(v) {
+    const src = v && typeof v === 'object' ? v : {};
+    return {
+      ...gradientOf(src),
+      start: within(src.start, -100, 100, -0.5),
+      end: within(src.end, -100, 100, 0.5),
     };
   }
 
@@ -2088,6 +2111,7 @@ const timelineModel = (() => {
     SHAPE_KINDS,
     SHAPE_FILLS,
     GRADIENT_STOPS_MAX,
+    maskGradientOf,
     gradientOf,
     DEFAULT_FONT,
     colourOf,

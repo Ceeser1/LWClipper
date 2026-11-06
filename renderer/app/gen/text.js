@@ -652,6 +652,7 @@ function openTextSettings(layer, first) {
   recallStageView(textStage, textLayerId, genKeyframeOf(textLayerId));
   // V3.6.2. Out into the media window, before anything below measures it.
   popOutGenWindow(textModal, layer.id, {
+    title: t('Edit Text'),
     cancel: cancelTextSettings,
     relayout: () => {
       if (!textDraft) return;
@@ -740,9 +741,8 @@ function showTextDraft(except) {
   }
   textFrame.hidden = textMode !== 'edit';
   textBoxEl.hidden = textMode !== 'render';
-  // Kept in the layout in Edit too, only unseen, or the modal would grow by
-  // a line on the switch and, being centred, move the frame under the pointer.
-  textHint.style.visibility = textMode === 'render' ? 'visible' : 'hidden';
+  // V3.7.1. A line in Info now, about the box Render Preview shows.
+  textHint.hidden = textMode !== 'render';
   styleTextEdit();
   placeTextBox();
 }

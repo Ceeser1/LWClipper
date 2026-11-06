@@ -93,7 +93,9 @@ function popOut(modal, name, { title, cancel, relayout, preview }) {
   doc.body.appendChild(panel);
   modal.classList.add('modal--popped');
 
-  const state = { win, panel, gone: false, timer: 0, settle: [] };
+  // V3.7.1. `want` is the height its content last asked for, `fitted` the
+  // one the window was last given, see fitPopOut.
+  const state = { win, panel, name, gone: false, timer: 0, settle: [], want: 0, fitted: 0, fitUntil: 0 };
   popped.set(modal, state);
 
   // Escape in the window cancels that window, or V3.6.2 the dialog carried
@@ -104,12 +106,23 @@ function popOut(modal, name, { title, cancel, relayout, preview }) {
     if (over) over.cancel();
     else cancel();
   });
-  win.addEventListener('resize', () => relayout());
+  // V3.7.1. A resize by hand only lays it out again: the height is fitted as
+  // it opens and when what it holds changes, never against the user's own.
+  // The resize a fit itself makes is measured again and fitted once more,
+  // since what the content wants was measured with the window too short for
+  // it, and so with a scrollbar taking its width.
+  win.addEventListener('resize', () => {
+    relayout();
+    if (Date.now() < state.fitUntil) fitPopOut(modal);
+  });
   // The window does not know its size at once, so the fit is done again over
   // its first moments as well as now.
   relayout();
+  fitPopOut(modal);
   for (const wait of [0, 60, 200, 500]) state.settle.push(setTimeout(() => {
-    if (popped.get(modal) === state) relayout();
+    if (popped.get(modal) !== state) return;
+    relayout();
+    fitPopOut(modal);
   }, wait));
   // Its X. The panel comes home before the window's document goes, and then
   // the popup is cancelled the way its Cancel button would.
@@ -218,11 +231,41 @@ function confirmPopoutConflict(conflicts, run) {
  * The height a popup's stage may take. In the main window it is the share of
  * the window it always was. In a window of its own it is whatever the rest of
  * the panel leaves, the room round the stage included, so a taller window is
- * a taller stage.
+ * a taller stage. V3.7.1: `full` is the height the stage has at the window's
+ * width, which with the rest of the panel is what the window is fitted to.
  */
-function popupStageRoom(panel, stage, share) {
+function popupStageRoom(panel, stage, share, full) {
   if (panel.ownerDocument === document) return Math.round(window.innerHeight * share);
   const win = hostWindowOf(panel);
   const other = panel.scrollHeight - stage.offsetHeight;
+  if (full) notePopoutWant(panel, other + full);
   return Math.max(120, Math.round(win.innerHeight - other - 6));
+}
+
+// ---- V3.7.1. Each window as tall as what it holds ----
+//
+// The user: "Open each window as its required max height so that the full 90%
+// of the window default width gets used for the preview and all elements fit
+// in vertically without scrolling". The stages are 16:9 at 90% of the width
+// unless the height left cuts them down, so the window is given the height
+// at which nothing does: the rest of the panel plus the stage at its width.
+
+/** The height the panel's content wants, the stage at its width included. */
+function notePopoutWant(panel, height) {
+  for (const state of popped.values()) {
+    if (state.panel === panel) state.want = Math.round(height + 6);
+  }
+}
+
+/**
+ * A popped out window given the height its content last asked for, as it
+ * opens and when what it shows changes: a gradient's controls coming up,
+ * for one. The screen it is on holds it, which main.js sees to.
+ */
+function fitPopOut(modal) {
+  const state = popped.get(modal);
+  if (!state || state.gone || !state.want || state.want === state.fitted) return;
+  state.fitted = state.want;
+  state.fitUntil = Date.now() + 1000;
+  if (window.lwclipper && window.lwclipper.fitPopout) window.lwclipper.fitPopout(state.name, state.want);
 }

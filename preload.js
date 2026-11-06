@@ -80,6 +80,8 @@ contextBridge.exposeInMainWorld('lwclipper', {
   genImage: (key, png) => ipcRenderer.invoke('gen:image', { key, png }),
   genFrames: (key, step) => ipcRenderer.invoke('gen:frames', { key, ...step }),
   genFrame: (key, index, png) => ipcRenderer.invoke('gen:frame', { key, index, png }),
+  // V3.7.1. An editor window as tall as its content wants, by its name.
+  fitPopout: (name, height) => ipcRenderer.invoke('popout:fit', { name, height }),
   onProgress: (callback) => {
     ipcRenderer.removeAllListeners('job:progress');
     ipcRenderer.on('job:progress', (_event, payload) => callback(payload));

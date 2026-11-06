@@ -36,6 +36,8 @@ test('a mask keeps its settings, held to their ranges', () => {
   assert.deepEqual(m, {
     kind: 'star', invert: true, soft: 0.1, box: { x: -0.5, y: 0.1, w: 2, h: 0.5 }, ring: 0.4, points: 7, inner: 0.5,
     radius: 0, src: null, by: 'alpha', aspect: 1,
+    // V3.7.1. Shown in full, as every mask before it was.
+    fill: 'color', color: '#ffffffff', gradient: T.maskGradientOf(null),
   });
   const wild = T.maskOf({ kind: 'hexagon', soft: 9, box: { x: 0, y: 0, w: 0, h: 1 }, by: 'red' });
   assert.equal(wild.kind, 'circle');

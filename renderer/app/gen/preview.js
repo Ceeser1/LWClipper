@@ -22,7 +22,7 @@ function sizeGenStage(stage, canvas) {
   let h = Math.round(w * 9 / 16);
   // V3.6.2. Against whichever window the stage is in: out in its own, as
   // tall as the rest of the panel leaves.
-  const maxH = popupStageRoom(stage.closest('.modal__panel') || panel, stage, CROP_HEIGHT_SHARE);
+  const maxH = popupStageRoom(stage.closest('.modal__panel') || panel, stage, CROP_HEIGHT_SHARE, h);
   if (h > maxH) {
     h = maxH;
     w = Math.round(h * 16 / 9);
@@ -363,12 +363,15 @@ function editorWindowConflicts() {
  * keyframe, `strip` is the window's keyframe strip and `fold(layer, gen)`,
  * if given, what the fold does to the rest of the clip.
  */
-function popOutGenWindow(modal, layerId, { cancel, relayout, draftGen, changed, reload, strip, fold }) {
+function popOutGenWindow(modal, layerId, { title, cancel, relayout, draftGen, changed, reload, strip, fold }) {
   genWindow = { modal, layerId, cancel, draftGen, changed, reload, strip, fold };
   genPreviewKey = '';
   genPreviewLayers = null;
+  // V3.7.1. "Shape Settings - Editing Video 3", in the window and on it.
+  const heading = modal.querySelector('.modal__title');
+  if (title) heading.textContent = editorTitle(title, timelineModel.layerById(layers, layerId));
   popOut(modal, 'media', {
-    title: modal.querySelector('.modal__title').textContent,
+    title: heading.textContent,
     cancel,
     relayout,
     preview: previewGenDraft,

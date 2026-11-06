@@ -60,6 +60,7 @@ function openBarSettings(layer, first) {
   barModal.hidden = false;
   // V3.6.2. Out into the media window, before anything below measures it.
   popOutGenWindow(barModal, layer.id, {
+    title: t('Bar Settings'),
     cancel: cancelBarSettings,
     relayout: () => {
       if (!barDraft) return;

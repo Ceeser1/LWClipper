@@ -50,8 +50,6 @@ const CROP_PRESETS = [
   { label: '9:16', ratio: 9 / 16 },
 ];
 
-// Read from the markup for the same reason as HINT_IDLE and IDLE_STATUS.
-const CROP_HINT_IDLE = cropHint.textContent;
 
 // Step 11. Which layer the popup is pointed at, for as long as it is open.
 // Held rather than re-read from the selection on every call, so that a row
@@ -453,12 +451,6 @@ function sizeCropStage(size) {
   cropArrowRight.style.left = outX;
   cropArrowUp.style.bottom = outY;
   cropArrowDown.style.top = outY;
-  // Anchored to the same edge as the upper arrow and given its height, so the
-  // two sit level however tall the arrows are, and lined up with the frame's
-  // left edge rather than the popup's.
-  cropPanHint.style.bottom = outY;
-  cropPanHint.style.height = CROP_ARROW_SHORT + 'px';
-  cropPanHint.style.left = `calc(50% - ${w / 2}px)`;
   applyView(size);
 }
 
@@ -706,8 +698,8 @@ function updateCropArrows() {
     arrowOf().dataset.live = String(live);
     any = any || live;
   }
-  // Nothing to click, nothing to say about clicking it.
-  cropPanHint.hidden = !any;
+  // V3.7.1. The line about them is in Info now, up with Video Frame whether
+  // an arrow is lit or not, so it is there to read before one is.
 }
 
 // Moves the frame over the picture, keeping the box where it sits on the frame,

@@ -163,6 +163,10 @@ const cropArrowDown = el('cropArrowDown');
 const cropArrowLeft = el('cropArrowLeft');
 const cropArrowRight = el('cropArrowRight');
 const cropPanHint = el('cropPanHint');
+// V3.7.1. What a drag is doing, beside the size readout, and Info's line
+// about the keyframe strip.
+const cropMode = el('cropMode');
+const cropKeysHint = el('cropKeysHint');
 const cropTabs = el('cropTabs');
 // V3.6.2. The cycling menu's arrows; its three items are found under cropTabs.
 const cropCyclePrev = el('cropCyclePrev');

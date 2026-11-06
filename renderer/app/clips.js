@@ -54,6 +54,16 @@ function layerLabel(type, ordinal) {
 }
 
 /**
+ * V3.7.1. An editor window's title with the clip it edits, the user's "Crop
+ * and Mask - Editing Video [x]": `title` already translated, and the row the
+ * clip is on named as its row header names it. Just `title` with no layer.
+ */
+function editorTitle(title, layer) {
+  if (!layer) return title;
+  return t('{window} - Editing {name}', { window: title, name: layerLabel(layer.type, layerOrdinal(layer)) });
+}
+
+/**
  * Selection repaints rather than rebuilding, and that is load-bearing rather
  * than an optimisation. Selecting happens on pointerdown, so rebuilding the
  * rows here would destroy the very checkbox or button the press landed on
