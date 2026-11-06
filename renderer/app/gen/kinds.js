@@ -10,8 +10,7 @@
 // what its clip is called and how the clip is drawn. A new kind is an entry
 // here, plus its form in timeline.js's genOf, its drawing in genDraw.js and
 // its settings modal; nothing else in the window has to learn about it. Menu
-// order is the order written here. A kind with `variants` opens a submenu of
-// its own, and the variant picked is handed to its starter: the shapes.
+// order is the order written here.
 //
 // The functions are wrapped rather than named directly, so the table can sit
 // before the modals it opens.
@@ -35,11 +34,15 @@ const GEN_KINDS = {
     name: () => t('Bar'),
     drawClip: (...args) => drawClipBar(...args),
   },
+  // V3.6.5. The user: "A shape layer shouldnt have a predefined shape,
+  // instead the right click menu Add Media should have an Add Shape button
+  // instead of a dropdown ... Like this a shape can be changed on the go".
+  // One entry, a circle to start with, and the kind is picked in Shape
+  // Settings, which opens straight after.
   shape: {
-    label: () => t('Shapes'),
-    variants: () => timelineModel.SHAPE_KINDS.map((kind) => ({ id: kind, label: shapeName(kind) })),
+    label: () => t('Shape'),
     settingsTitle: () => t('Shape Settings'),
-    starter: (kind) => ({ form: 'shape', shape: { kind } }),
+    starter: () => ({ form: 'shape', shape: { kind: 'circle' } }),
     open: (layer, first) => openShapeSettings(layer, first),
     name: (gen) => shapeName(gen.shape.kind),
     drawClip: (...args) => drawClipShape(...args),
@@ -54,6 +57,10 @@ function shapeName(kind) {
     triangle: () => t('Triangle'),
     star: () => t('Star'),
     ring: () => t('Ring'),
+    // V3.6.5.
+    arrow: () => t('Arrow'),
+    heart: () => t('Heart'),
+    bubble: () => t('Speech Bubble'),
   };
   return (names[kind] || names.circle)();
 }

@@ -3722,6 +3722,19 @@ button.color-swatch:hover:not(:disabled) {
   min-width: 58px;
 }
 
+/* V3.6.5. Eight shapes and Custom: a window too narrow for them in one row
+   takes them in two rather than running off its side. */
+.mask-shapes,
+.shape-kinds {
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+/* V3.6.5. Shape Settings' shapes, over its settings. */
+.shape-kinds {
+  margin-bottom: 12px;
+}
+
 .gen-num {
   width: 52px;
   padding: 2px 4px;

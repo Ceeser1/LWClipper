@@ -339,19 +339,13 @@ let clipMenu = null;
 
 /**
  * V3. "Add Media" and the submenu it opens, the user's A1: "Only usable on a
- * video layer, greyed out on audio. Hovering it reveals the next menu". Shapes
- * open a second one of their own beside it, "another right arrow sub menu".
+ * video layer, greyed out on audio. Hovering it reveals the next menu".
+ * V3.6.5. Shape is one entry now, where it opened a submenu of its kinds.
  */
 function addMediaEntry(menu, enabled, at) {
   subMenuEntry(menu, t('Add Media'), enabled, (sub) => {
     for (const [form, kind] of Object.entries(GEN_KINDS)) {
-      if (kind.variants) {
-        subMenuEntry(sub, kind.label(), true, (inner) => {
-          for (const v of kind.variants()) menuItem(inner, v.label, () => addGenMedia(form, at, v.id));
-        });
-      } else {
-        menuItem(sub, kind.label(), () => addGenMedia(form, at));
-      }
+      menuItem(sub, kind.label(), () => addGenMedia(form, at));
     }
   });
 }

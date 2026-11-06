@@ -94,7 +94,34 @@ const genDraw = (() => {
   const SHAPE_POLYGONS = {
     square: [[0, 0], [1, 0], [1, 1], [0, 1]],
     triangle: [[0.5, 0], [1, 1], [0, 1]],
+    // V3.6.5. Pointing right, its shaft half the box's height and its head
+    // the last two fifths of its length. The turning dot points it any other
+    // way.
+    arrow: [[0, 0.25], [0.6, 0.25], [0.6, 0], [1, 0.5], [0.6, 1], [0.6, 0.75], [0, 0.75]],
   };
+
+  // V3.6.5. The heart as curves, fractions of the box, from its point at the
+  // bottom up the left side, over both lobes and down the right: each is
+  // [first control, second control, end], the start of the first being the
+  // point. Its widest and highest reach the box's edges, so the grips sit on
+  // its ink like every other shape's.
+  const HEART_CURVES = [
+    [0.4, 0.9, 0, 0.62, 0, 0.3],
+    [0, 0.1, 0.12, 0, 0.27, 0],
+    [0.39, 0, 0.47, 0.07, 0.5, 0.17],
+    [0.53, 0.07, 0.61, 0, 0.73, 0],
+    [0.88, 0, 1, 0.1, 1, 0.3],
+    [1, 0.62, 0.6, 0.9, 0.5, 1],
+  ];
+
+  // V3.6.5. The speech bubble: a body with rounded corners over the top of
+  // the box, BUBBLE_BODY of its height, and the tail under it at the bottom
+  // left, from between BUBBLE_TAIL's two shares of the width on the body's
+  // edge to its tip on the box's bottom edge. The corners are BUBBLE_ROUND of
+  // the body's shorter side, which keeps them short of the tail's base.
+  const BUBBLE_BODY = 0.78;
+  const BUBBLE_TAIL = { from: 0.2, to: 0.36, tip: 0.08 };
+  const BUBBLE_ROUND = 0.16;
 
   // Width over height of a shape's default box, so a new one is the regular
   // shape: an equilateral triangle, a star with its own proportions (the
@@ -105,6 +132,10 @@ const genDraw = (() => {
     ring: 1,
     triangle: 2 / Math.sqrt(3),
     star: Math.cos(Math.PI / 10) / (0.5 + 0.5 * Math.cos(Math.PI / 5)),
+    // V3.6.5.
+    arrow: 1.6,
+    heart: 1.1,
+    bubble: 4 / 3,
   };
 
   // The defaults a shape from before 3.5 is drawn with, the model's own.
@@ -167,6 +198,31 @@ const genDraw = (() => {
         ctx.moveTo(...at(cx + b.w / 2 * hole, cy));
         ctx.ellipse(cx, cy, b.w / 2 * hole, b.h / 2 * hole, a, 0, Math.PI * 2);
       }
+      return;
+    }
+    // V3.6.5. The heart and the bubble, each its own path.
+    if (kind === 'heart') {
+      const p = (x, y) => at(b.x + x * b.w, b.y + y * b.h);
+      ctx.moveTo(...p(0.5, 1));
+      for (const [ax, ay, bx, by, x, y] of HEART_CURVES) ctx.bezierCurveTo(...p(ax, ay), ...p(bx, by), ...p(x, y));
+      ctx.closePath();
+      return;
+    }
+    if (kind === 'bubble') {
+      const left = b.x;
+      const right = b.x + b.w;
+      const top = b.y;
+      const bottom = b.y + b.h * BUBBLE_BODY;
+      const round = Math.min(b.w, b.h * BUBBLE_BODY) * BUBBLE_ROUND;
+      ctx.moveTo(...at(cx, top));
+      ctx.arcTo(...at(right, top), ...at(right, bottom), round);
+      ctx.arcTo(...at(right, bottom), ...at(left, bottom), round);
+      ctx.lineTo(...at(left + b.w * BUBBLE_TAIL.to, bottom));
+      ctx.lineTo(...at(left + b.w * BUBBLE_TAIL.tip, b.y + b.h));
+      ctx.lineTo(...at(left + b.w * BUBBLE_TAIL.from, bottom));
+      ctx.arcTo(...at(left, bottom), ...at(left, top), round);
+      ctx.arcTo(...at(left, top), ...at(right, top), round);
+      ctx.closePath();
       return;
     }
     const r = kind === 'square' ? Math.min(Math.max(0, Number(shape.radius) || 0), b.w / 2, b.h / 2) : 0;

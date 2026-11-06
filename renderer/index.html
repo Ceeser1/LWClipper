@@ -552,6 +552,9 @@
             <button data-kind="triangle">Triangle</button>
             <button data-kind="star">Star</button>
             <button data-kind="ring">Ring</button>
+            <button data-kind="arrow">Arrow</button>
+            <button data-kind="heart">Heart</button>
+            <button data-kind="bubble">Speech Bubble</button>
             <button data-kind="custom">Custom...</button>
           </div>
           <span id="maskFileName" class="mask-file" data-no-translate hidden></span>
@@ -770,6 +773,18 @@
     <div class="modal__panel modal__panel--crop" role="dialog" aria-modal="true"
       aria-labelledby="shapeTitle">
       <div id="shapeTitle" class="modal__title">Shape Settings</div>
+      <!-- V3.6.5. Which shape, for the whole clip and changeable at any time,
+           the Layer Mask view's row of shapes. -->
+      <div id="shapeKinds" class="gen-choice shape-kinds">
+        <button data-kind="circle">Circle</button>
+        <button data-kind="square">Square</button>
+        <button data-kind="triangle">Triangle</button>
+        <button data-kind="star">Star</button>
+        <button data-kind="ring">Ring</button>
+        <button data-kind="arrow">Arrow</button>
+        <button data-kind="heart">Heart</button>
+        <button data-kind="bubble">Speech Bubble</button>
+      </div>
       <!-- V3.5. Two by two like the bar's, and a third row for what only a
            ring or a star has, shown for that kind alone. -->
       <div class="gen-grid">

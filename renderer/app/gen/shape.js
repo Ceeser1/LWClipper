@@ -42,6 +42,8 @@ const shapeAngle = el('shapeAngle');
 const shapeRadiusField = el('shapeRadiusField');
 const shapeRadiusSlider = el('shapeRadiusSlider');
 const shapeRadiusBox = el('shapeRadiusBox');
+// V3.6.5. Which shape it is.
+const shapeKinds = el('shapeKinds');
 
 let shapeLayerId = null;
 let shapeFirst = false;
@@ -50,6 +52,9 @@ let shapeFirst = false;
 // 3.6.2 rotation in whole degrees and radius in whole project pixels }
 let shapeDraft = null;
 let shapeOpened = null;   // the draft as it opened, as JSON
+// V3.6.5. The figure it opened as, the kind and a star's points and depth,
+// which Accept measures every keyframe's box against when it changed.
+let shapeOpenedFigure = null;
 
 function shapeGenOf(draft) {
   return {
@@ -99,6 +104,7 @@ function openShapeSettings(layer, first) {
     radius: Math.round(shape.radius * k),
   };
   shapeOpened = JSON.stringify(shapeDraft);
+  shapeOpenedFigure = { kind: shape.kind, points: shape.points, inner: shape.inner };
   shapeBackground.checked = genBackdropOn;
   shapeModal.hidden = false;
   recallStageView(shapeStage, shapeLayerId, genKeyframeOf(shapeLayerId));
@@ -121,6 +127,9 @@ function openShapeSettings(layer, first) {
 function showShapeDraft(except) {
   const d = shapeDraft;
   if (!d) return;
+  for (const b of shapeKinds.querySelectorAll('button')) {
+    b.classList.toggle('btn--active', b.dataset.kind === d.kind);
+  }
   paintSwatch(shapeColorBtn, d.color);
   shapeInvert.checked = d.invert;
   const show = (slider, box, value) => {
@@ -159,10 +168,39 @@ function changeShape(props, except, quick) {
 function restar(props) {
   const d = shapeDraft;
   if (!d.box) return props;
-  const was = genDraw.shapeAspect(d);
-  const now = genDraw.shapeAspect({ ...d, ...props });
-  const w = Math.max(1, Math.round(d.box.w * now / was));
-  return { ...props, box: { ...d.box, x: Math.round(d.box.x + (d.box.w - w) / 2), w } };
+  return { ...props, box: refitShapeBox(d.box, d, { ...d, ...props }, true) };
+}
+
+/**
+ * V3.6.5. A box given another figure's proportions about its middle: as much
+ * wider or narrower as the new figure's regular box is than the old one's, so
+ * a shape stretched by hand stays stretched by as much, and going to another
+ * kind and back lands where it started. `whole` rounds it to whole pixels, the
+ * draft's measure; a keyframe's box is kept as it comes.
+ */
+function refitShapeBox(box, from, to, whole) {
+  if (!box) return box;
+  const k = genDraw.shapeAspect(to) / genDraw.shapeAspect(from);
+  if (k === 1) return box;
+  const w = whole ? Math.max(1, Math.round(box.w * k)) : box.w * k;
+  const x = box.x + (box.w - w) / 2;
+  return { ...box, x: whole ? Math.round(x) : x, w };
+}
+
+/**
+ * V3.6.5. The kind is the whole clip's, so a clip with keyframes given another
+ * one, or a star given other points, has every keyframe's box and its own
+ * refitted the way the draft's was, before Accept writes the draft over the
+ * one it is on. Not committed here: Accept's own step takes it in.
+ */
+function refitShapeClip(id, from, to) {
+  const layer = timelineModel.layerById(layers, id);
+  const list = layer ? timelineModel.keyframesFor(layer) : [];
+  if (!list.length || genDraw.shapeAspect(from) === genDraw.shapeAspect(to)) return;
+  const fit = (box) => refitShapeBox(box, from, to, false);
+  const gen = { ...layer.gen, shape: { ...layer.gen.shape, box: fit(layer.gen.shape.box) } };
+  const keyframes = list.map((k) => (k.box ? { ...k, box: fit(k.box) } : k));
+  setLayers(timelineModel.setLayer(timelineModel.setGen(layers, id, gen), id, { keyframes }));
 }
 
 function closeShapeSettings() {
@@ -177,6 +215,7 @@ function closeShapeSettings() {
   shapeLayerId = null;
   shapeDraft = null;
   shapeOpened = null;
+  shapeOpenedFigure = null;
   shapeFirst = false;
 }
 
@@ -384,6 +423,15 @@ shapeBackground.addEventListener('change', () => {
 
 // ---- V3.5, the shapes version ----
 
+// V3.6.5. Another shape at any time, keeping the box's height and middle and
+// taking the new one's proportions across.
+for (const b of shapeKinds.querySelectorAll('button')) {
+  b.addEventListener('click', () => {
+    if (!shapeDraft || b.dataset.kind === shapeDraft.kind) return;
+    changeShape(restar({ kind: b.dataset.kind }), null);
+  });
+}
+
 shapeInvert.addEventListener('change', () => changeShape({ invert: shapeInvert.checked }, null));
 shapeOutline.addEventListener('change', () => changeShape({ outline: shapeOutline.checked }, null));
 
@@ -453,7 +501,9 @@ shapeAcceptBtn.addEventListener('click', () => {
   const changed = JSON.stringify(shapeDraft) !== shapeOpened;
   const first = shapeFirst;
   const gen = shapeGenOf(shapeDraft);
+  const from = shapeOpenedFigure;
   closeShapeSettings();
+  if (changed && from) refitShapeClip(id, from, gen.shape);
   acceptGenSettings(id, gen, changed, first);
 });
 

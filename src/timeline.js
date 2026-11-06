@@ -172,7 +172,9 @@ const timelineModel = (() => {
   const TEXT_H = ['left', 'center', 'right'];
   const TEXT_V = ['top', 'middle', 'bottom'];
   const BAR_SIDES = ['top', 'right', 'bottom', 'left'];
-  const SHAPE_KINDS = ['circle', 'square', 'triangle', 'star', 'ring'];
+  // V3.6.5. The arrow, the heart and the speech bubble after the first five,
+  // so a mask or a shape written before them reads as it was.
+  const SHAPE_KINDS = ['circle', 'square', 'triangle', 'star', 'ring', 'arrow', 'heart', 'bubble'];
 
   function bool(v) {
     return v === true;
