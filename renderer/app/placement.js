@@ -244,9 +244,9 @@ function measureCropStage() {
   let w = Math.min(Math.round(across * CROP_FRAME_SHARE), Math.round(content - 2 * spare));
   let h = Math.round(w * 9 / 16);
   let maxH;
-  if (panel.ownerDocument === document) {
+  if (!popupFree(panel)) {
     // Not popped out: the share of the window it always was, the same for
-    // every view.
+    // every view. V3.8: docked counts as out, the cell scrolling.
     maxH = Math.round(window.innerHeight * CROP_HEIGHT_SHARE);
   } else {
     // Out in its own window: the most crowded view's controls, popupStageRoom's

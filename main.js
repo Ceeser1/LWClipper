@@ -243,6 +243,33 @@ function createWindow() {
     child.on('closed', () => {
       if (popoutWindows.get(frameName) === child) popoutWindows.delete(frameName);
     });
+    // V3.8. The user: "Let any window snap into or on top of 'Start Frame' or
+    // 'End Frame'", with "While dragging a window ... highlight the Start/End
+    // Frames right away". Dragged by hand, the page is told where the pointer
+    // is over the main window on every step, and once more when it is let go,
+    // and takes it from there. 'will-move' comes only from a move by hand,
+    // never from setBounds, and 'moved' once at the end of one.
+    const short = frameName.slice('lwc-pop-'.length);
+    let dragFrom = null;
+    const pointer = () => {
+      const p = screen.getCursorScreenPoint();
+      const c = mainWindow.getContentBounds();
+      const z = mainWindow.webContents.getZoomFactor() || 1;
+      return { name: short, x: (p.x - c.x) / z, y: (p.y - c.y) / z };
+    };
+    child.on('will-move', () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      if (!dragFrom) dragFrom = child.getNormalBounds();
+      mainWindow.webContents.send('popout:drag', pointer());
+    });
+    child.on('moved', () => {
+      if (!dragFrom || !mainWindow || mainWindow.isDestroyed()) return;
+      // Where it was before this drag, kept should the drop dock it: popped
+      // out again it goes back there rather than over the frame it left.
+      preDrag.set(child, dragFrom);
+      dragFrom = null;
+      mainWindow.webContents.send('popout:drop', pointer());
+    });
     // Where it was left, for next time, kept with the settings. Followed as it
     // moves and is resized and written once it has closed: a window the page
     // closes, which is Accept and Cancel, goes without a close event of its
@@ -258,9 +285,13 @@ function createWindow() {
     child.on('move', follow);
     child.on('resize', follow);
     child.on('closed', () => {
-      if (!last) return;
+      // V3.8. Docked: where it was before it was dragged onto the frame.
+      const keep = (docking.has(child) && preDrag.get(child)) || last;
+      docking.delete(child);
+      preDrag.delete(child);
+      if (!keep) return;
       const spots = { ...(settings.get('popoutBounds') || {}) };
-      spots[frameName] = last;
+      spots[frameName] = keep;
       settings.set({ popoutBounds: spots });
     });
   });
@@ -273,6 +304,18 @@ const POPOUT_NAME = /^lwc-pop-[a-z]+$/;
 
 // V3.7.1. The editor windows open now, by their names.
 const popoutWindows = new Map();
+// V3.8. Where a window was before the drag that last moved it, and the ones
+// the page has docked, which close to be shown in the main window instead.
+const preDrag = new WeakMap();
+const docking = new WeakSet();
+
+// V3.8. The page is taking a window into Start Frame or End Frame: when it
+// closes, it is remembered where it was before it was dragged there.
+ipcMain.handle('popout:docked', (_event, { name }) => {
+  const child = popoutWindows.get('lwc-pop-' + String(name || ''));
+  if (child && !child.isDestroyed()) docking.add(child);
+  return true;
+});
 
 // V3.7.1. The user: "Open each window as its required max height so that the
 // full 90% of the window default width gets used for the preview and all

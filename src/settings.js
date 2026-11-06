@@ -28,6 +28,10 @@ const DEFAULTS = {
   // V3.3. Where each popped out editor window was last closed, by its name:
   // { x, y, width, height }. null until one has been.
   popoutBounds: null,
+  // V3.8. Which editor windows were last docked into the main window, by
+  // their short names ('crop', 'media', 'render'): 'start' for Start Frame,
+  // 'end' for End Frame. One not in it opens as a window. null until one is.
+  popoutDock: null,
 };
 
 function settingsFile() {

@@ -35,13 +35,17 @@ function hostWindowOf(node) {
   return (node && node.ownerDocument && node.ownerDocument.defaultView) || window;
 }
 
-/** Whether a modal's panel is out in a window of its own. */
+/** Whether a modal's panel is out in a window of its own, or V3.8 docked. */
 function isPoppedOut(modal) {
-  return popped.has(modal);
+  return popped.has(modal) || docked.has(modal);
 }
 
-/** Bring a popped out modal's window forward. False when it is not popped. */
+/**
+ * Bring a popped out modal's window forward. False when it is not popped.
+ * V3.8: a docked one is in the main window already, and is there to be seen.
+ */
 function focusPopOut(modal) {
+  if (docked.has(modal)) return true;
   const state = popped.get(modal);
   if (!state) return false;
   try {
@@ -60,14 +64,22 @@ function focusPopOut(modal) {
  * fits the panel to the window, run as it opens and whenever it is resized.
  * `preview()` runs POPOUT_FPS times a second while it is open, for the main
  * window to show what the popup is doing.
+ *
+ * V3.8. Docked in Start Frame or End Frame instead, when that is where this
+ * window was last, unless `asWindow`: the agreed "an editor opens where it was
+ * last, docked or as a window".
  */
-function popOut(modal, name, { title, cancel, relayout, preview }) {
+function popOut(modal, name, opts, asWindow = false) {
+  const { title, cancel, relayout, preview } = opts;
   if (popped.has(modal)) {
     focusPopOut(modal);
     return true;
   }
+  if (docked.has(modal)) return true;
   const panel = modal.querySelector('.modal__panel');
   if (!panel) return false;
+  const last = asWindow ? null : dockedLast(name);
+  if (last && dockInto(modal, name, opts, last, panel)) return true;
   let win = null;
   try {
     win = window.open('about:blank', 'lwc-pop-' + name);
@@ -95,7 +107,8 @@ function popOut(modal, name, { title, cancel, relayout, preview }) {
 
   // V3.7.1. `want` is the height its content last asked for, `fitted` the
   // one the window was last given, see fitPopOut.
-  const state = { win, panel, name, gone: false, timer: 0, settle: [], want: 0, fitted: 0, fitUntil: 0 };
+  // V3.8. `opts` too, for docking it and popping it out again.
+  const state = { win, panel, name, opts, gone: false, timer: 0, settle: [], want: 0, fitted: 0, fitUntil: 0 };
   popped.set(modal, state);
 
   // Escape in the window cancels that window, or V3.6.2 the dialog carried
@@ -136,27 +149,41 @@ function popOut(modal, name, { title, cancel, relayout, preview }) {
   return true;
 }
 
-/** Put a popped out modal's panel back and close its window. */
+/** Put a popped out modal's panel back and close its window. V3.8: or docked. */
 function popIn(modal) {
+  if (docked.has(modal)) {
+    undock(modal);
+    return;
+  }
   const state = popped.get(modal);
   if (!state) return;
+  leavePopWindow(modal, state);
+  if (state.panel.ownerDocument !== document) modal.appendChild(state.panel);
+  modal.classList.remove('modal--popped');
+  closePopWindow(state);
+}
+
+/**
+ * A popped out modal no longer its window's: its ticks stopped, and anything
+ * carried over it home first, V3.6.2, or it would go with the window's
+ * document. The panel is still in there for the caller to move.
+ */
+function leavePopWindow(modal, state) {
   popped.delete(modal);
   clearInterval(state.timer);
-  for (const t of state.settle) clearTimeout(t);
-  // V3.6.2. Anything carried over it comes home first, or it would go with
-  // the window's document.
+  for (const timer of state.settle) clearTimeout(timer);
   for (const sub of [...carried.keys()]) {
     if (sub.ownerDocument === state.win.document) carryBack(sub);
   }
-  if (state.panel.ownerDocument !== document) modal.appendChild(state.panel);
-  modal.classList.remove('modal--popped');
-  if (!state.gone) {
-    state.gone = true;
-    try {
-      state.win.close();
-    } catch {
-      // Already closed.
-    }
+}
+
+function closePopWindow(state) {
+  if (state.gone) return;
+  state.gone = true;
+  try {
+    state.win.close();
+  } catch {
+    // Already closed.
   }
 }
 
@@ -235,6 +262,19 @@ function poppedStateOf(panel) {
   return null;
 }
 
+/** V3.8. Where `panel` is docked, or null. */
+function dockedStateOf(panel) {
+  for (const state of docked.values()) {
+    if (state.panel === panel) return state;
+  }
+  return null;
+}
+
+/** V3.8. Whether `panel` is out of its modal: in a window, or docked. */
+function popupFree(panel) {
+  return !!poppedStateOf(panel) || !!dockedStateOf(panel);
+}
+
 /**
  * V3.7.2. The width a popup's stage is sized from: the panel's, or out in a
  * window of its own the window's, whether a scrollbar is up in it or not. A
@@ -243,7 +283,11 @@ function poppedStateOf(panel) {
  */
 function popupWidth(panel) {
   const state = poppedStateOf(panel);
-  return state ? state.win.innerWidth : panel.clientWidth;
+  if (state) return state.win.innerWidth;
+  // V3.8. Docked, the cell's: its scrollbar's room is always kept, so it is
+  // the same width whether one is up or not.
+  const dock = dockedStateOf(panel);
+  return dock ? dock.body.clientWidth : panel.clientWidth;
 }
 
 /**
@@ -257,6 +301,8 @@ function popupWidth(panel) {
  * still held to the window's height, being a pop-up of its own.
  */
 function popupStageRoom(panel, stage, share, full) {
+  // V3.8. Docked, as a window of its own: the cell scrolls.
+  if (dockedStateOf(panel)) return Infinity;
   if (panel.ownerDocument === document) return Math.round(window.innerHeight * share);
   const win = hostWindowOf(panel);
   const other = panel.scrollHeight - stage.offsetHeight;
@@ -293,4 +339,220 @@ function fitPopOut(modal) {
   state.fitted = state.want;
   state.fitUntil = Date.now() + 1000;
   if (window.lwclipper && window.lwclipper.fitPopout) window.lwclipper.fitPopout(state.name, state.want);
+}
+
+// ---- V3.8. An editor docked into Start Frame or End Frame ----
+//
+// The user: "Let any window snap into or on top of 'Start Frame' or 'End
+// Frame', hiding the frames and show the window instead with the title of the
+// window above instead of e.g. 'Start Frame', a 'pop-out' button (arrow
+// diagonal to the top right) which creates the window again a red 'X' button
+// to close the window and restore the start/end frame preview." And: "While
+// dragging a window and moving the cursor over the Start/End Frame preview let
+// it glow like layers when hovering a file over it", then "When dragging a
+// window, highlight the Start/End Frames right away, not only when hovering
+// it". Agreed with them as well: an editor opens where it was last, docked or
+// as a window.
+//
+// Docked, the panel is moved into the cell the way popOut moves it into a
+// window, so every listener and canvas it has goes on working. The cell's own
+// frame is only hidden under it, so nothing else in the main window moves.
+// The modal stays open and emptied, as it does for a window, which is what
+// keeps every "is the editor open" question answering yes.
+
+const docked = new Map();
+const DOCK_CELLS = ['start', 'end'];
+// A drag whose end never came is let go of after this long without a step.
+const DOCK_GLOW_HOLD = 2500;
+let dockGlowTimer = 0;
+
+/** The Start Frame or End Frame cell, or null while the preview shows none. */
+function dockCell(where) {
+  if (typeof previewGrid === 'undefined' || previewSection.dataset.audio === 'true') return null;
+  const cells = previewGrid.querySelectorAll(':scope > .preview-cell');
+  if (cells.length < 3) return null;
+  const cell = where === 'start' ? cells[0] : where === 'end' ? cells[cells.length - 1] : null;
+  if (!cell) return null;
+  const box = cell.getBoundingClientRect();
+  return box.width > 40 && box.height > 40 ? cell : null;
+}
+
+/** The cell a point in the main window's own pixels is over, or null. */
+function dockCellAt(x, y) {
+  for (const where of DOCK_CELLS) {
+    const cell = dockCell(where);
+    if (!cell || cell.classList.contains('preview-cell--docked')) continue;
+    const b = cell.getBoundingClientRect();
+    if (x >= b.left && x <= b.right && y >= b.top && y <= b.bottom) return where;
+  }
+  return null;
+}
+
+/** Where the window `name` was docked last, or null for a window. */
+function dockedLast(name) {
+  const all = (typeof appSettings === 'object' && appSettings && appSettings.popoutDock) || {};
+  return DOCK_CELLS.includes(all[name]) ? all[name] : null;
+}
+
+function rememberDock(name, where) {
+  if (typeof appSettings !== 'object' || !appSettings) return;
+  const next = { ...(appSettings.popoutDock || {}) };
+  if (where) next[name] = where;
+  else delete next[name];
+  if (JSON.stringify(next) === JSON.stringify(appSettings.popoutDock || {})) return;
+  appSettings.popoutDock = next;
+  if (window.lwclipper && window.lwclipper.setSettings) window.lwclipper.setSettings({ popoutDock: next });
+}
+
+const DOCK_OUT_ICON = '<svg viewBox="0 0 12 12"><path d="M3 9L9 3M4.5 3H9V7.5" /></svg>';
+const DOCK_CLOSE_ICON = '<svg viewBox="0 0 12 12"><path d="M3 3L9 9M9 3L3 9" /></svg>';
+
+/**
+ * `panel` into the cell `where`, out of its modal: its title over it in the
+ * cell's title's place with its Info, a pop-out button and a red X, which is
+ * the window's Cancel. False when the cell is not there to be had.
+ */
+function dockInto(modal, name, opts, where, panel) {
+  const cell = dockCell(where);
+  if (!cell) return false;
+  const host = document.createElement('div');
+  host.className = 'dock-host';
+  const head = document.createElement('div');
+  head.className = 'dock-head';
+  const title = document.createElement('div');
+  title.className = 'dock-head__title';
+  title.dataset.noTranslate = '';
+  title.textContent = opts.title || '';
+  const out = document.createElement('button');
+  out.className = 'dock-btn';
+  out.dataset.noTranslate = '';
+  out.innerHTML = DOCK_OUT_ICON;
+  out.title = t('Pop Out');
+  const shut = document.createElement('button');
+  shut.className = 'dock-btn dock-btn--close';
+  shut.dataset.noTranslate = '';
+  shut.innerHTML = DOCK_CLOSE_ICON;
+  shut.title = t('Close');
+  head.append(title, out, shut);
+  const body = document.createElement('div');
+  body.className = 'dock-body';
+  host.append(head, body);
+  cell.appendChild(host);
+  cell.classList.add('preview-cell--docked');
+  body.appendChild(panel);
+  modal.classList.add('modal--popped');
+  // The Info button into the title row, the panel's own title being the row.
+  const info = panel.querySelector(':scope > .info-tip');
+  if (info) head.insertBefore(info, out);
+  const state = { cell, host, body, panel, name, opts, where, info, timer: 0, settle: [], ro: null };
+  docked.set(modal, state);
+  out.addEventListener('click', () => popOutAgain(modal));
+  shut.addEventListener('click', () => opts.cancel());
+  // A key pressed in it stays in it, as it would in its window, where the
+  // main window's shortcuts never hear it: S would split, Delete delete and
+  // Ctrl+Z undo on the timeline. Escape cancels it, as in its window. The
+  // arrows, which the main window takes before anything else does, look
+  // for it themselves (editing.js).
+  host.addEventListener('keydown', (evt) => {
+    evt.stopPropagation();
+    if (evt.key !== 'Escape' || docked.get(modal) !== state) return;
+    opts.cancel();
+  });
+  state.ro = new ResizeObserver(() => {
+    if (docked.get(modal) === state) opts.relayout();
+  });
+  state.ro.observe(body);
+  opts.relayout();
+  for (const wait of [0, 60, 200]) state.settle.push(setTimeout(() => {
+    if (docked.get(modal) === state) opts.relayout();
+  }, wait));
+  if (opts.preview) state.timer = setInterval(opts.preview, Math.round(1000 / POPOUT_FPS));
+  rememberDock(name, where);
+  return true;
+}
+
+/** A docked panel back in its modal, and its cell's frame back. */
+function undock(modal) {
+  const state = docked.get(modal);
+  if (!state) return;
+  docked.delete(modal);
+  clearInterval(state.timer);
+  for (const timer of state.settle) clearTimeout(timer);
+  if (state.ro) state.ro.disconnect();
+  if (state.info) {
+    const heading = state.panel.querySelector(':scope > .modal__title');
+    state.panel.insertBefore(state.info, heading ? heading.nextSibling : state.panel.firstChild);
+  }
+  modal.appendChild(state.panel);
+  state.host.remove();
+  state.cell.classList.remove('preview-cell--docked');
+  modal.classList.remove('modal--popped');
+}
+
+/** The pop-out button: the window made again, where it was before it docked. */
+function popOutAgain(modal) {
+  const state = docked.get(modal);
+  if (!state) return;
+  undock(modal);
+  rememberDock(state.name, null);
+  // No window to be had leaves it the modal it has always fallen back to.
+  popOut(modal, state.name, state.opts, true);
+}
+
+/** A popped out window let go of over a cell: its panel into that cell. */
+function dockPopOut(modal, where) {
+  const state = popped.get(modal);
+  if (!state || state.gone || !dockCell(where)) return false;
+  leavePopWindow(modal, state);
+  if (!dockInto(modal, state.name, state.opts, where, state.panel)) {
+    modal.appendChild(state.panel);
+    modal.classList.remove('modal--popped');
+  }
+  // Told first, so the window is remembered where it was before the drag
+  // rather than over the frame it was dropped on.
+  const told = window.lwclipper && window.lwclipper.popoutDocked
+    ? Promise.resolve(window.lwclipper.popoutDocked(state.name)).catch(() => {})
+    : Promise.resolve();
+  told.then(() => closePopWindow(state));
+  return true;
+}
+
+/** The popped out modal whose window is `name`, or null. */
+function poppedNamed(name) {
+  for (const [modal, state] of popped) {
+    if (state.name === name && !state.gone) return modal;
+  }
+  return null;
+}
+
+/**
+ * Both cells lit while a window is dragged, the one under the pointer more,
+ * in the green a timeline row takes for a file held over it.
+ */
+function paintDockTargets(on, over) {
+  if (typeof previewGrid === 'undefined') return;
+  const cells = previewGrid.querySelectorAll(':scope > .preview-cell');
+  const ends = cells.length >= 3 ? [cells[0], cells[cells.length - 1]] : [];
+  ends.forEach((cell, i) => {
+    const where = DOCK_CELLS[i];
+    const can = on && !!dockCell(where) && !cell.classList.contains('preview-cell--docked');
+    cell.classList.toggle('preview-cell--dock-target', can);
+    cell.classList.toggle('preview-cell--dock-over', can && over === where);
+  });
+}
+
+if (window.lwclipper && window.lwclipper.onPopoutDrag) {
+  window.lwclipper.onPopoutDrag(({ name, x, y }) => {
+    if (!poppedNamed(name)) return;
+    paintDockTargets(true, dockCellAt(x, y));
+    clearTimeout(dockGlowTimer);
+    dockGlowTimer = setTimeout(() => paintDockTargets(false, null), DOCK_GLOW_HOLD);
+  });
+  window.lwclipper.onPopoutDrop(({ name, x, y }) => {
+    clearTimeout(dockGlowTimer);
+    paintDockTargets(false, null);
+    const modal = poppedNamed(name);
+    const where = modal ? dockCellAt(x, y) : null;
+    if (where) dockPopOut(modal, where);
+  });
 }

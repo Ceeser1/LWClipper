@@ -185,6 +185,9 @@ document.addEventListener('keydown', (evt) => {
   const focused = document.activeElement;
   if (focused && KEEPS_ARROWS.includes(focused.tagName)) return;
   if (focused && focused.isContentEditable) return;
+  // V3.8. Nor an editor docked into Start Frame or End Frame, whose keys are
+  // its own, as they are in its window.
+  if (evt.target && evt.target.closest && evt.target.closest('.dock-host')) return;
   if (!media && !timelineDriving()) return;
   evt.preventDefault();
   evt.stopPropagation();

@@ -82,6 +82,18 @@ contextBridge.exposeInMainWorld('lwclipper', {
   genFrame: (key, index, png) => ipcRenderer.invoke('gen:frame', { key, index, png }),
   // V3.7.1. An editor window as tall as its content wants, by its name.
   fitPopout: (name, height) => ipcRenderer.invoke('popout:fit', { name, height }),
+  // V3.8. An editor window dragged by hand: where the pointer is over the main
+  // window on every step, and when it is let go. And a window being docked,
+  // so it is remembered where it was before the drag.
+  onPopoutDrag: (callback) => {
+    ipcRenderer.removeAllListeners('popout:drag');
+    ipcRenderer.on('popout:drag', (_event, payload) => callback(payload));
+  },
+  onPopoutDrop: (callback) => {
+    ipcRenderer.removeAllListeners('popout:drop');
+    ipcRenderer.on('popout:drop', (_event, payload) => callback(payload));
+  },
+  popoutDocked: (name) => ipcRenderer.invoke('popout:docked', { name }),
   onProgress: (callback) => {
     ipcRenderer.removeAllListeners('job:progress');
     ipcRenderer.on('job:progress', (_event, payload) => callback(payload));

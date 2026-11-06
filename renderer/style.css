@@ -4403,3 +4403,194 @@ body.popout-body > .modal__panel {
   border-radius: 0;
   overflow: visible;
 }
+
+/* ---- V3.8. An editor docked into Start Frame or End Frame ---- */
+
+/* The user: "Let any window snap into or on top of 'Start Frame' or 'End
+   Frame', hiding the frames and show the window instead". The frame is only
+   hidden, not taken out, so the row keeps its height and nothing beside it
+   moves; the editor lies over the whole cell. */
+.preview-cell--docked > :not(.dock-host):not(.preview-splitter) {
+  visibility: hidden;
+}
+
+.dock-host {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: #2a2a30;
+  border: 1px solid #45454e;
+  border-radius: 6px;
+}
+
+/* "with the title of the window above instead of e.g. 'Start Frame', a
+   'pop-out' button (arrow diagonal to the top right) which creates the window
+   again a red 'X' button to close the window". */
+.dock-head {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border-bottom: 1px solid #45454e;
+  flex: none;
+}
+
+.dock-head__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+  font-weight: bold;
+  color: #ebebf0;
+}
+
+/* The panel's Info button, moved up into the row while it is docked. */
+.dock-head > .info-tip {
+  position: relative;
+  top: auto;
+  right: auto;
+  flex: none;
+}
+
+.dock-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 22px;
+  padding: 0;
+  flex: none;
+}
+
+.dock-btn svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.dock-btn--close {
+  background: #dc7878;
+  border-color: #e89090;
+  color: #210f0f;
+}
+
+button.dock-btn--close:hover:not(:disabled) {
+  background: #e58686;
+}
+
+/* What does not fit scrolls, V3.7.2's rule for the windows, with the room for
+   the scrollbar always kept, so the stage's width never depends on whether
+   one is up. */
+.dock-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.dock-body > .modal__panel {
+  width: auto;
+  max-width: none;
+  max-height: none;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 0;
+  overflow: visible;
+  background: transparent;
+}
+
+/* The title is the row above. */
+.dock-body > .modal__panel > .modal__title {
+  display: none;
+}
+
+.dock-body > .modal__panel > .crop-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+  margin: 12px -12px -10px;
+  padding: 8px 12px;
+  background: #2a2a30;
+}
+
+/* "While dragging a window ... let it glow like layers when hovering a file
+   over it", and "highlight the Start/End Frames right away, not only when
+   hovering it": both cells while a window is dragged at all, in the green a
+   track takes for a file held over it, and the one under the pointer more. */
+.preview-cell--dock-target::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  border: 2px dashed rgba(120, 200, 140, 0.65);
+  border-radius: 6px;
+  background: rgba(120, 200, 140, 0.06);
+  pointer-events: none;
+}
+
+.preview-cell--dock-over::after {
+  border-style: solid;
+  border-color: #78c88c;
+  background: rgba(120, 200, 140, 0.18);
+  box-shadow: 0 0 14px 3px rgba(120, 200, 140, 0.45);
+}
+
+/* The Crop and Mask menu in a cell narrower than its three names: the views
+   either side give up their width first, cut short, the open one last. */
+.dock-body .crop-cycle__item {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dock-body .crop-cycle__item--current {
+  flex: 1.6 1 0;
+}
+
+/* A cell is narrower than any window: the settings in one column, the
+   sliders taking what the row leaves, rows of boxes wrapping, and nothing
+   wider than the cell, so it scrolls only up and down. The mask grid's width
+   is set to the stage's by script, which this outranks. */
+.dock-body .gen-grid {
+  grid-template-columns: minmax(0, 1fr);
+  justify-content: stretch;
+  min-width: 0;
+}
+
+.dock-body .mask-grid {
+  width: auto !important;
+}
+
+.dock-body .gen-field {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.dock-body .gen-field__slider,
+.dock-body .gen-field__slider.gen-field__slider--short {
+  flex: 1 1 60px;
+  width: auto;
+  min-width: 60px;
+  max-width: 240px;
+}
+
+.dock-body .shape-gradient__boxes,
+.dock-body .crop-zoom {
+  flex-wrap: wrap;
+}
+
+.dock-body .crop-actions > button {
+  white-space: nowrap;
+}
