@@ -195,6 +195,9 @@ function showCropViewParts(tab) {
   placeScaleRow.hidden = !place;
   maskHint.hidden = !mask;
   maskZoomHint.hidden = !mask;
+  // V3.6.4. The keyframe strip is under whichever stage is up, and Video
+  // Frame's already has its lower arrow's room under it.
+  cropKeys.dataset.view = tab;
 }
 
 // V3.6.3. The one size every view's stage is, as measureCropStage last found
@@ -217,7 +220,7 @@ let cropStageWH = null;
 function measureCropStage() {
   const panel = cropStage.closest('.modal__panel');
   if (!panel) return cropStageWH || { w: 160, h: 90 };
-  // The keyframe strip is above every view, so it is in each measure.
+  // The keyframe strip is under every view's stage, so it is in each measure.
   cropKeys.hidden = !cropKeysLayer();
   const host = hostWindowOf(panel);
   const style = host.getComputedStyle(panel);
@@ -240,7 +243,8 @@ function measureCropStage() {
     // Out in its own window: as tall as the window leaves once the most
     // crowded view's controls are in, popupStageRoom's sum for each view.
     const views = timelineDriving() ? CROP_TABS : ['frame'];
-    const noSecondRow = maskRingField.hidden && maskPointsField.hidden && maskInnerField.hidden;
+    const noSecondRow = maskRingField.hidden && maskPointsField.hidden && maskInnerField.hidden
+      && maskRadiusField.hidden;
     let other = 0;
     for (const tab of views) {
       showCropViewParts(tab);
@@ -729,7 +733,8 @@ function drawPlaceStage() {
   paintLayers(ctx, virtual, compositeAt, null, target ? target.id : null);
   // V3.6.2. With the Layer Mask view's draft on it, which is the layer's own
   // mask here: the crop and the placement are handed in as drafts already.
-  const masked = maskDraft ? { mask: maskOfDraft(maskDraft), keyframes: [] } : {};
+  // V3.6.4. And none once Remove Mask has been pressed there.
+  const masked = maskDraft ? { mask: maskOfDraft(maskDraft), keyframes: [] } : maskCleared ? { mask: null } : {};
   if (target) drawLayerInto(ctx, virtual, { ...target, rotation: placeRotation, ...masked }, cropDraft, placeDraft);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   dimOutsideFrame(ctx, placeCanvas, placeStage);
@@ -1440,7 +1445,7 @@ function previewCropDraft() {
   if (cropModal.hidden || !cropDraft) return;
   const render = cropRenderDraft();
   // V3.6.2. The Layer Mask view's draft is part of what the preview shows.
-  const key = JSON.stringify([cropLayerId, cropDraft, render, placeAnchor, placeRotation, maskDraft]);
+  const key = JSON.stringify([cropLayerId, cropDraft, render, placeAnchor, placeRotation, maskDraft, maskCleared]);
   // V3.6.3. And the keyframe strip follows a keyframe moved, added or deleted
   // there, or the clip trimmed.
   if (layers !== cropPreviewLayers) drawCropKeys();
@@ -1477,7 +1482,9 @@ function cropDraftLayer(render, withMask = true) {
   const own = cropLayerId ? timelineModel.layerById(layers, cropLayerId) : null;
   if (!own) return null;
   const m = withMask ? maskDraftParts(own) : {};
-  const layer = m.layer ? { ...own, mask: m.layer } : own;
+  // V3.6.4. A mask Remove Mask has taken off goes from its keyframes too.
+  let layer = m.remove ? timelineModel.removeMask([own], own.id)[0] : own;
+  if (m.layer) layer = { ...layer, mask: m.layer };
   const size = sourceSize();
   const crop = (size && !isFullFrame(cropDraft, size)) ? { ...cropDraft } : null;
   if (!cropKeyframe) return { ...layer, crop, render, anchor: placeAnchor, rotation: placeRotation };
@@ -1492,7 +1499,7 @@ function cropDraftLayer(render, withMask = true) {
       render,
       anchor: placeAnchor,
       rotation: placeRotation,
-      ...(m.keyed ? { mask: m.keyed } : {}),
+      ...maskKeyFields(m),
       id: cropKeyframe.id || 'draft',
     });
   return next[0];
@@ -1568,56 +1575,60 @@ cropBtn.addEventListener('click', () => {
 });
 cropCancelBtn.addEventListener('click', closeCrop);
 
-// Takes the crop off outright, whatever is in the popup: the whole picture is
-// saved again and the boxes come off the three frames. The same thing Original
-// then Accept does, without having to know that is what Original means.
+/**
+ * V3.6.4. Reset Crop: the whole picture at 100%, the zoom and pan the window
+ * opens on with no crop to come back to. Only the draft, which Accept then
+ * saves as no crop at all and Cancel drops.
+ */
+function resetCropDraft() {
+  const size = sourceSize();
+  if (!size) return;
+  cropDraft = fullRect(size);
+  viewZoom = 1;
+  viewPanX = size.w / 2;
+  viewPanY = size.h / 2;
+  cropZoomSlider.value = '100';
+  cropZoomValue.textContent = '100%';
+  zoomWheelResidue = 0;
+  clearActivePreset();
+  sizeCropStage(size);
+  paintCropFrame();
+  placeCropDraft();
+  captureCropAnchor(size);
+  updateCropArrows();
+  setCropHint(false);
+}
+
+/**
+ * V3.6.4. Reset Position: centred and fitted, not turned and on no ring, so it
+ * follows the crop again, which is what a layer with no position does. Only
+ * the draft, as Reset Crop.
+ */
+function resetPlaceDraft() {
+  placeAnchor = null;
+  placeRotation = 0;
+  placeTouched = false;
+  placeDrag = null;
+  placeRingPress = null;
+  placeAngle.hidden = true;
+  rebuildPlaceDraft();
+  showPlaceScale();
+  drawPlaceStage();
+}
+
+// V2.1. Whichever view is up: Reset Crop takes the crop off, Reset Position
+// puts the layer back to centre and fit, and V3.6.2's Remove Mask takes the
+// mask off. One button rather than three, because the views are three sides
+// of one layer and the button means "take back what this view does".
+//
+// V3.6.4. The user: "Reset Crop/Mask/Position shouldnt close the window, it
+// should just reset it." Each resets its own view's draft and the window
+// stays open: Accept saves the reset with everything else, one step, and
+// Cancel leaves the layer as it was. Nothing to load, so nothing to wait for.
 cropRemoveBtn.addEventListener('click', () => {
-  // V2.1. Whichever tab is up. On the crop it takes the crop off; on the
-  // position it puts the layer back to centre and fit. One button rather than
-  // two, because the tabs are two views of one layer and Remove means "take
-  // back what this tab does".
-  // V3.6.2. Remove Mask takes the mask off outright, keyframes and all, the
-  // right click's Remove Mask. With none on the layer yet it drops the draft
-  // a shape button started, and the window stays.
-  if (cropTab === 'mask') {
-    const own = cropLayerId && timelineModel.layerById(layers, cropLayerId);
-    if (!own || !own.mask) {
-      dropMaskDraft();
-      return;
-    }
-    setLayers(timelineModel.removeMask(layers, cropLayerId));
-    commitHistory();
-    closeCrop();
-    updateCropOverlays();
-    updateCropBtn();
-    return;
-  }
-  // V3.3. On a keyframe it is that keyframe's crop or placement that goes,
-  // and a keyframe the popup was about to make is made without it.
-  if (cropKeyframe && cropLayerId) {
-    saveCropKeyframe(cropTab === 'place' ? { render: null, rotation: 0 } : { crop: null });
-    commitHistory();
-    closeCrop();
-    updateCropOverlays();
-    updateCropBtn();
-    return;
-  }
-  if (cropTab === 'place') {
-    if (cropLayerId) {
-      setLayers(timelineModel.setLayer(layers, cropLayerId, { render: null, rotation: 0 }));
-      commitHistory();
-    }
-    closeCrop();
-    updateCropOverlays();
-    updateCropBtn();
-    return;
-  }
-  // Nothing left to come back to, so the next opening starts over.
-  setCurrentCrop(null, null);
-  commitHistory();
-  closeCrop();
-  updateCropOverlays();
-  updateCropBtn();
+  if (cropTab === 'mask') dropMaskDraft();
+  else if (cropTab === 'place') resetPlaceDraft();
+  else resetCropDraft();
 });
 
 cropAcceptBtn.addEventListener('click', () => {
@@ -1653,10 +1664,10 @@ cropAcceptBtn.addEventListener('click', () => {
   if (cropKeyframe && cropLayerId) {
     rememberView('crop', cropLayerId, cropKeyframe,
       rect ? { zoom: viewZoom, panX: viewPanX, panY: viewPanY } : null);
-    if (maskPlan.layer) setLayers(timelineModel.setMask(layers, cropLayerId, maskPlan.layer));
+    applyMaskPlan(maskPlan);
     saveCropKeyframe({
       crop: rect, render, anchor: placeAnchor, rotation: placeRotation,
-      ...(maskPlan.keyed ? { mask: maskPlan.keyed } : {}),
+      ...maskKeyFields(maskPlan),
     });
     commitHistory();
     closeCrop();
@@ -1672,7 +1683,7 @@ cropAcceptBtn.addEventListener('click', () => {
     // finds the same one lit and scaling goes on sticking to it.
     setLayers(timelineModel.setLayer(layers, cropLayerId,
       { render, anchor: placeAnchor, rotation: placeRotation }));
-    if (maskPlan.layer) setLayers(timelineModel.setMask(layers, cropLayerId, maskPlan.layer));
+    applyMaskPlan(maskPlan);
   }
   commitHistory();
   closeCrop();

@@ -123,12 +123,13 @@ function keyframeSeed(layer, t) {
     if (k.t <= t) a = k;
     else if (!b) b = k;
   }
-  // V3.6. The mask's box and soft edge there too, when either side holds its
-  // own; a keyframe holding none goes on standing for the layer's.
+  // V3.6. The mask's box and soft edge there too, and since 3.6.4 its
+  // corners, when either side holds its own; a keyframe holding none goes on
+  // standing for the layer's.
   const maskThere = () => {
     if (!layer.mask || !((a && a.mask) || (b && b.mask))) return null;
     const m = timelineModel.maskAt(layer, t);
-    return { box: { ...m.box }, soft: m.soft };
+    return { box: { ...m.box }, soft: m.soft, radius: m.radius || 0 };
   };
   if (!a || !b) {
     const k = a || b;

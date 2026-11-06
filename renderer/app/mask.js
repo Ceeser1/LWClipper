@@ -39,6 +39,11 @@ const maskPointsBox = el('maskPointsBox');
 const maskInnerField = el('maskInnerField');
 const maskInnerSlider = el('maskInnerSlider');
 const maskInnerBox = el('maskInnerBox');
+// V3.6.4. A square's rounded corners, and the grid the fields are in.
+const maskRadiusField = el('maskRadiusField');
+const maskRadiusSlider = el('maskRadiusSlider');
+const maskRadiusBox = el('maskRadiusBox');
+const maskGrid = el('maskGrid');
 const maskStage = el('maskStage');
 const maskCanvas = el('maskCanvas');
 const maskBoxEl = el('maskBoxEl');
@@ -57,10 +62,15 @@ let maskFirst = false;
 // project pixels: { width, height }.
 let maskPic = null;
 // { kind, invert, soft and box in the picture's whole pixels, ring, points,
-// inner, src, by, aspect }, or null for no mask.
+// inner, src, by, aspect, and since 3.6.4 radius in the picture's whole
+// pixels }, or null for no mask.
 let maskDraft = null;
 // The mask as the window opened on it, in fractions, as JSON, or null.
 let maskOpened = null;
+// V3.6.4. Remove Mask was pressed: the window stays open and Accept takes the
+// layer's mask off, keyframes and all, the way Remove Mask always has. A
+// shape picked after it is a new mask, the whole of it the layer's.
+let maskCleared = false;
 
 /** The draft from a mask, in the picture's pixels. */
 function maskDraftOf(m) {
@@ -74,6 +84,7 @@ function maskDraftOf(m) {
     ring: m.ring,
     points: m.points,
     inner: m.inner,
+    radius: Math.round((m.radius || 0) * H),
     src: m.src,
     by: m.by,
     aspect: m.aspect,
@@ -87,8 +98,17 @@ function maskOfDraft(d) {
   return timelineModel.maskOf({
     ...d,
     soft: d.soft / H,
+    radius: (d.radius || 0) / H,
     box: { x: d.box.x / W, y: d.box.y / H, w: d.box.w / W, h: d.box.h / H },
   });
+}
+
+// V3.6.4. Rounded corners reach half the box's shorter side, where its ends
+// are round, as a Square shape's do. A box made smaller afterwards keeps the
+// number, and the drawing holds it to the half.
+function maskRadiusCeiling() {
+  const b = maskDraft ? maskDraft.box : null;
+  return Math.max(1, Math.round(b ? Math.min(b.w, b.h) / 2 : 1));
 }
 
 // The soft edge reaches half the picture's height, as a shape's reaches half
@@ -122,6 +142,7 @@ function maskStarting(kind, props = {}) {
  */
 function startMaskTab(layer, add) {
   maskFirst = !layer.mask;
+  maskCleared = false;
   maskPic = maskPictureSize();
   const t = cropKeyframe ? cropKeyframe.t : compositeAt - layer.start;
   let mask = layer.mask ? timelineModel.maskAt(layer, t) : null;
@@ -138,6 +159,7 @@ function stopMaskTab() {
   maskOpened = null;
   maskPic = null;
   maskFirst = false;
+  maskCleared = false;
   maskGuideX.hidden = true;
   maskGuideY.hidden = true;
 }
@@ -149,9 +171,14 @@ function startMaskDraft(kind) {
   if (cropTab === 'mask') showMaskTab();
 }
 
-/** Remove Mask with nothing on the layer yet: the started draft goes. */
+/**
+ * Remove Mask: the draft goes and the window stays. V3.6.4, the user: "Reset
+ * Crop/Mask/Position shouldnt close the window, it should just reset it."
+ * On a layer with a mask, Accept then takes it off; Cancel keeps it.
+ */
 function dropMaskDraft() {
   maskDraft = null;
+  maskCleared = true;
   showMaskTab();
 }
 
@@ -175,31 +202,49 @@ function showMaskTab() {
 
 /**
  * The mask as the drafts make it, for the layer `layer`: `layer` the mask the
- * layer has, and `keyed` the box and soft edge for the keyframe being edited,
- * when it has its mask already and the window is on a keyframe. Empty with no
- * draft.
+ * layer has, and `keyed` the box, soft edge and corners for the keyframe being
+ * edited, when it has its mask already and the window is on a keyframe. Empty
+ * with no draft. V3.6.4: `remove` when Remove Mask has been pressed on a layer
+ * with a mask, which goes first, keyframes and all, before any new one.
  */
 function maskDraftParts(layer) {
-  if (!maskDraft || !maskPic) return {};
+  const gone = maskCleared && !!layer.mask;
+  if (!maskDraft || !maskPic) return gone ? { remove: true } : {};
   const mask = maskOfDraft(maskDraft);
+  if (gone) return { remove: true, layer: mask };
   if (maskFirst || !layer.mask || !cropKeyframe) return { layer: mask };
   return {
-    layer: { ...mask, box: layer.mask.box, soft: layer.mask.soft },
-    keyed: { box: mask.box, soft: mask.soft },
+    layer: { ...mask, box: layer.mask.box, soft: layer.mask.soft, radius: layer.mask.radius },
+    keyed: { box: mask.box, soft: mask.soft, radius: mask.radius },
   };
+}
+
+/** V3.6.4. What a keyframe written with the drafts holds of the mask, as fields. */
+function maskKeyFields(parts) {
+  if (parts.keyed) return { mask: parts.keyed };
+  return parts.remove ? { mask: null } : {};
+}
+
+/** V3.6.4. The mask plan written onto the layer: taken off, then put on. */
+function applyMaskPlan(plan) {
+  if (!cropLayerId) return;
+  if (plan.remove) setLayers(timelineModel.removeMask(layers, cropLayerId));
+  if (plan.layer) setLayers(timelineModel.setMask(layers, cropLayerId, plan.layer));
 }
 
 /** What Accept writes, as maskDraftParts, less whatever did not change. */
 function maskAcceptPlan() {
   const layer = cropLayerId && timelineModel.layerById(layers, cropLayerId);
-  if (!layer || !maskDraft || !maskPic) return {};
+  if (!layer) return {};
   const parts = maskDraftParts(layer);
+  if (parts.remove || !maskDraft || !maskPic) return parts;
   const now = maskOfDraft(maskDraft);
   if (maskFirst || !layer.mask) return parts;
   if (JSON.stringify(now) === maskOpened) return {};
   if (!parts.keyed) return parts;
   const opened = JSON.parse(maskOpened);
-  const moved = JSON.stringify([now.box, now.soft]) !== JSON.stringify([opened.box, opened.soft]);
+  const moved = JSON.stringify([now.box, now.soft, now.radius])
+    !== JSON.stringify([opened.box, opened.soft, opened.radius]);
   return moved ? parts : { layer: parts.layer };
 }
 
@@ -211,6 +256,9 @@ function resizeMaskStage() {
   const { w, h } = cropStageWH || measureCropStage();
   maskStage.style.width = w + 'px';
   maskStage.style.height = h + 'px';
+  // V3.6.4. The settings over it as wide, so their columns start at its left
+  // edge and at its middle.
+  maskGrid.style.width = w + 'px';
   maskCanvas.style.left = '0px';
   maskCanvas.style.top = '0px';
   maskCanvas.style.width = w + 'px';
@@ -320,15 +368,18 @@ function showMaskDraft(except) {
   maskFileName.hidden = !name;
   // With no mask there is nothing for these to say, so they wait, greyed.
   for (const input of [maskInvert, maskSoftSlider, maskSoftBox, maskRingSlider, maskRingBox,
-    maskPointsSlider, maskPointsBox, maskInnerSlider, maskInnerBox]) input.disabled = !d;
-  // Remove Mask has something to take off once there is a mask or a draft.
+    maskPointsSlider, maskPointsBox, maskInnerSlider, maskInnerBox,
+    maskRadiusSlider, maskRadiusBox]) input.disabled = !d;
+  // Remove Mask has something to take off once there is a mask or a draft,
+  // and nothing once it has been pressed.
   const own = cropLayerId && timelineModel.layerById(layers, cropLayerId);
-  if (cropTab === 'mask') cropRemoveBtn.disabled = !d && !(own && own.mask);
+  if (cropTab === 'mask') cropRemoveBtn.disabled = !d && !(own && own.mask && !maskCleared);
   if (!d) {
     maskInvert.checked = false;
     maskRingField.hidden = true;
     maskPointsField.hidden = true;
     maskInnerField.hidden = true;
+    maskRadiusField.hidden = true;
     return;
   }
   maskInvert.checked = d.invert;
@@ -344,6 +395,9 @@ function showMaskDraft(except) {
   maskInnerField.hidden = d.kind !== 'star';
   show(maskPointsSlider, maskPointsBox, d.points);
   show(maskInnerSlider, maskInnerBox, Math.round(d.inner * 100));
+  maskRadiusField.hidden = d.kind !== 'square';
+  maskRadiusSlider.max = String(maskRadiusCeiling());
+  show(maskRadiusSlider, maskRadiusBox, d.radius || 0);
 }
 
 function changeMask(props, except) {
@@ -460,6 +514,14 @@ bindNumberField({
   box: maskInnerBox,
   range: () => [10, 90],
   set: (n, except) => changeMask(restarMask({ inner: n / 100 }), except),
+  show: () => showMaskDraft(null),
+});
+
+bindNumberField({
+  slider: maskRadiusSlider,
+  box: maskRadiusBox,
+  range: () => [0, maskRadiusCeiling()],
+  set: (n, except) => changeMask({ radius: n }, except),
   show: () => showMaskDraft(null),
 });
 

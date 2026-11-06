@@ -388,6 +388,11 @@ const timelineModel = (() => {
   // `mask: { box, soft }`; a keyframe holding none stands for the layer's.
   // Everything else, the kind, Invert, the ring's and star's figures and the
   // picture, is the layer's.
+  //
+  // V3.6.4. A square's rounded corners as well, `radius`, a fraction of the
+  // picture's height like the soft edge and keyed with it, so a mask can
+  // round off as a Square shape can. 0, the sharp corners every mask had
+  // before, wherever it is missing.
 
   const MASK_KINDS = [...SHAPE_KINDS, 'custom'];
   const MASK_BY = ['alpha', 'luma'];
@@ -405,6 +410,12 @@ const timelineModel = (() => {
   }
 
   function maskSoftOf(v) {
+    return within(v, 0, 1, 0);
+  }
+
+  // V3.6.4. The corners' radius, a fraction of the picture's height. The
+  // drawing holds it to half the box's shorter side, as a shape's.
+  function maskRadiusOf(v) {
     return within(v, 0, 1, 0);
   }
 
@@ -428,6 +439,7 @@ const timelineModel = (() => {
       ring: within(v.ring, 0.05, 0.95, 0.4),
       points: Math.round(within(v.points, 3, 12, 5)),
       inner: within(v.inner, 0.1, 0.9, 0.381966),
+      radius: maskRadiusOf(v.radius),
       src: kind === 'custom' ? src : null,
       by: oneOf(v.by, MASK_BY, 'alpha'),
       aspect: within(v.aspect, 0.01, 100, 1),
@@ -437,7 +449,7 @@ const timelineModel = (() => {
   /** What a keyframe holds of a mask, or null when it holds none. */
   function maskKeyOf(v) {
     if (!v || typeof v !== 'object') return null;
-    return { box: maskBoxOf(v.box), soft: maskSoftOf(v.soft) };
+    return { box: maskBoxOf(v.box), soft: maskSoftOf(v.soft), radius: maskRadiusOf(v.radius) };
   }
 
   /**
@@ -1576,9 +1588,9 @@ const timelineModel = (() => {
 
   // ---- V3.6. A mask between keyframes ----
 
-  /** The box and soft edge a keyframe stands for: its own, or the layer's. */
+  /** The box, soft edge and corners a keyframe stands for: its own, or the layer's. */
   function maskKeyAt(layer, k) {
-    return (k && k.mask) || { box: layer.mask.box, soft: layer.mask.soft };
+    return (k && k.mask) || { box: layer.mask.box, soft: layer.mask.soft, radius: layer.mask.radius || 0 };
   }
 
   /**
@@ -1593,7 +1605,7 @@ const timelineModel = (() => {
     const list = keyframesFor(layer);
     if (!list.some((k) => k.mask)) return layer.mask;
     const at = Number.isFinite(Number(t)) ? Number(t) : 0;
-    const put = (key) => ({ ...layer.mask, box: { ...key.box }, soft: key.soft });
+    const put = (key) => ({ ...layer.mask, box: { ...key.box }, soft: key.soft, radius: key.radius || 0 });
     if (at <= list[0].t) return put(maskKeyAt(layer, list[0]));
     const last = list[list.length - 1];
     if (at >= last.t) return put(maskKeyAt(layer, last));
@@ -1606,6 +1618,7 @@ const timelineModel = (() => {
     return put({
       box: { x: lerp(a.box.x, b.box.x), y: lerp(a.box.y, b.box.y), w: lerp(a.box.w, b.box.w), h: lerp(a.box.h, b.box.h) },
       soft: lerp(a.soft, b.soft),
+      radius: lerp(a.radius || 0, b.radius || 0),
     });
   }
 

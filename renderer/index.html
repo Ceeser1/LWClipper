@@ -494,14 +494,6 @@
         <button class="crop-cycle__item" data-tab="place">Render Position</button>
         <button id="cropCycleNext" class="crop-cycle__arrow" data-no-translate>&gt;</button>
       </div>
-      <!-- V3.6.3. Under the menu, in every view: which of the clip's keyframes
-           this window edits, then the clip's keyframes on a black bar as wide
-           as the stage, with the clip's own time on a ruler above it and the
-           source's time below it. Drawn by drawCropKeys. -->
-      <div id="cropKeys" class="crop-keys" hidden>
-        <div id="cropKeysReadout" class="crop-keys__readout"></div>
-        <canvas id="cropKeysCanvas" class="crop-keys__canvas"></canvas>
-      </div>
       <!-- The frame is a snapshot of whatever the preview is showing, painted
            into a canvas rather than a second <video>: it holds no file open and
            cannot drift off the position the preview is parked at. -->
@@ -564,7 +556,10 @@
           </div>
           <span id="maskFileName" class="mask-file" data-no-translate hidden></span>
         </div>
-        <div class="gen-grid">
+        <!-- V3.6.4. As wide as the stage under it, set by resizeMaskStage: the
+             left column from the stage's left edge, the right one from its
+             middle. -->
+        <div id="maskGrid" class="gen-grid mask-grid">
           <div class="gen-field">
             <label class="gen-check gen-check--field"><input id="maskInvert" type="checkbox" /> Invert Mask</label>
           </div>
@@ -592,6 +587,14 @@
             <input id="maskInnerBox" class="gen-num" type="text" inputmode="numeric" maxlength="2" />
             <span class="gen-field__unit">%</span>
           </div>
+          <!-- V3.6.4. A square's rounded corners, in the picture's pixels, up
+               to half the box's shorter side, as Shape Settings has them. -->
+          <div id="maskRadiusField" class="gen-field" hidden>
+            <span class="gen-field__caption">Rounded Corners:</span>
+            <input id="maskRadiusSlider" class="gen-field__slider" type="range" min="0" max="180" step="1" value="0" />
+            <input id="maskRadiusBox" class="gen-num" type="text" inputmode="numeric" maxlength="4" />
+            <span class="gen-field__unit">px</span>
+          </div>
         </div>
         <div id="maskStage" class="gen-stage">
           <canvas id="maskCanvas" class="gen-canvas"></canvas>
@@ -608,6 +611,16 @@
             <div class="crop-corner crop-corner--br" data-corner="br"></div>
           </div>
         </div>
+      </div>
+      <!-- V3.6.3. In every view: which of the clip's keyframes this window
+           edits, then the clip's keyframes on a black bar as wide as the
+           stage, with the clip's own time on a ruler above it and the source's
+           time below it. Drawn by drawCropKeys. V3.6.4 moved it from under the
+           menu to right under the stage, which is the last thing in each of
+           the three panels above. -->
+      <div id="cropKeys" class="crop-keys" hidden>
+        <div id="cropKeysReadout" class="crop-keys__readout"></div>
+        <canvas id="cropKeysCanvas" class="crop-keys__canvas"></canvas>
       </div>
       <div id="placeHint" class="hint-label crop-hint" hidden>Drag the picture to place it, and the scale to resize it</div>
       <div id="placeZoomHint" class="hint-label crop-hint" hidden>Scroll to zoom, drag empty space or with the middle button to pan, double-click empty space to fit the frame</div>

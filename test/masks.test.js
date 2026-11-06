@@ -35,7 +35,7 @@ test('a mask keeps its settings, held to their ranges', () => {
   const m = vid({ mask: { kind: 'star', invert: true, soft: 0.1, box: { x: -0.5, y: 0.1, w: 2, h: 0.5 }, points: 7, inner: 0.5 } }).mask;
   assert.deepEqual(m, {
     kind: 'star', invert: true, soft: 0.1, box: { x: -0.5, y: 0.1, w: 2, h: 0.5 }, ring: 0.4, points: 7, inner: 0.5,
-    src: null, by: 'alpha', aspect: 1,
+    radius: 0, src: null, by: 'alpha', aspect: 1,
   });
   const wild = T.maskOf({ kind: 'hexagon', soft: 9, box: { x: 0, y: 0, w: 0, h: 1 }, by: 'red' });
   assert.equal(wild.kind, 'circle');
@@ -69,7 +69,7 @@ test('setMask puts one on a picture and nothing else; removeMask takes it off ev
 
 test('a video keyframe holds a mask box and soft edge of its own, or none', () => {
   const l = vid({ mask: CIRCLE, keyframes: [{ t: 0, mask: { box: { x: 0, y: 0, w: 0.5, h: 0.5 }, soft: 0.2, kind: 'star' } }, { t: 1 }] });
-  assert.deepEqual(l.keyframes[0].mask, { box: { x: 0, y: 0, w: 0.5, h: 0.5 }, soft: 0.2 });
+  assert.deepEqual(l.keyframes[0].mask, { box: { x: 0, y: 0, w: 0.5, h: 0.5 }, soft: 0.2, radius: 0 });
   assert.equal(l.keyframes[1].mask, null);
 });
 
@@ -216,5 +216,64 @@ test('a mask and its keyframes survive a project saved and opened again', () => 
   assert.equal(parsed.ok, true);
   const back = T.createLayer(parsed.doc.layers[0]);
   assert.deepEqual(back.mask, l.mask);
-  assert.deepEqual(back.keyframes.map((k) => k.mask), [null, { box: { x: 0.1, y: 0.1, w: 0.5, h: 0.5 }, soft: 0 }]);
+  assert.deepEqual(back.keyframes.map((k) => k.mask), [null, { box: { x: 0.1, y: 0.1, w: 0.5, h: 0.5 }, soft: 0, radius: 0 }]);
+});
+
+// ---- V3.6.4. A square mask's rounded corners ----
+
+test('a mask has no rounded corners unless given them, held to its picture\'s height', () => {
+  assert.equal(T.maskOf(CIRCLE).radius, 0, 'a mask written before 3.6.4 is sharp');
+  assert.equal(T.maskOf({ kind: 'square', radius: 0.1 }).radius, 0.1);
+  assert.equal(T.maskOf({ kind: 'square', radius: 5 }).radius, 1);
+  assert.equal(T.maskOf({ kind: 'square', radius: -1 }).radius, 0);
+  assert.equal(T.maskOf({ kind: 'square', radius: 'x' }).radius, 0);
+});
+
+test('the corners are keyed with the box and the soft edge, blended between keyframes', () => {
+  const SQ = { kind: 'square', box: { x: 0, y: 0, w: 1, h: 1 }, radius: 0.1 };
+  const l = vid({
+    mask: SQ,
+    keyframes: [{ id: 'a', t: 0 }, { id: 'b', t: 2, mask: { box: SQ.box, soft: 0, radius: 0.3 } }],
+  });
+  assert.equal(l.keyframes[1].mask.radius, 0.3);
+  assert.ok(near(T.maskAt(l, 1).radius, 0.2), 'halfway from the layer\'s 0.1 to the keyframe\'s 0.3');
+  assert.ok(near(T.maskAt(l, 5).radius, 0.3));
+  assert.deepEqual(T.maskMotion(l), { from: 0, to: 2 }, 'corners rounding off is a mask that changes');
+  const still = vid({ mask: SQ, keyframes: [{ id: 'a', t: 0 }, { id: 'b', t: 2, mask: { box: SQ.box, soft: 0, radius: 0.1 } }] });
+  assert.equal(T.maskMotion(still), null);
+});
+
+test('the last keyframe deleted leaves the first one\'s corners on the layer', () => {
+  const l = vid({
+    mask: { kind: 'square', radius: 0 },
+    keyframes: [{ id: 'a', t: 0, mask: { box: { x: 0, y: 0, w: 1, h: 1 }, soft: 0, radius: 0.25 } }, { id: 'b', t: 2 }],
+  });
+  const [after] = T.removeKeyframe([l], 'v', 'b');
+  assert.equal(after.mask.radius, 0.25);
+});
+
+test('a square mask is drawn with its corners rounded, in the picture\'s pixels and no more than half its side', () => {
+  const calls = [];
+  const ctx = {
+    clearRect() {},
+    beginPath() {},
+    moveTo: (...a) => calls.push(['moveTo', ...a]),
+    lineTo: (...a) => calls.push(['lineTo', ...a]),
+    arcTo: (...a) => calls.push(['arcTo', ...a]),
+    ellipse() {},
+    closePath() {},
+    fill() {},
+    fillStyle: '',
+  };
+  const box = { x: 0.25, y: 0.25, w: 0.5, h: 0.5 };
+  D.drawMask(ctx, T.maskOf({ kind: 'square', box, radius: 0.05 }), 640, 360, null, null);
+  const arcs = calls.filter((c) => c[0] === 'arcTo');
+  assert.equal(arcs.length, 4);
+  assert.ok(arcs.every((c) => near(c[5], 18)), 'a twentieth of 360 pixels');
+  calls.length = 0;
+  D.drawMask(ctx, T.maskOf({ kind: 'square', box, radius: 1 }), 640, 360, null, null);
+  assert.ok(calls.filter((c) => c[0] === 'arcTo').every((c) => near(c[5], 90)), 'half the 180 pixel side');
+  calls.length = 0;
+  D.drawMask(ctx, T.maskOf({ kind: 'circle', box, radius: 0.05 }), 640, 360, null, null);
+  assert.equal(calls.filter((c) => c[0] === 'arcTo').length, 0, 'only a square has corners to round');
 });

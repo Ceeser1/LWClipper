@@ -355,7 +355,9 @@ const genDraw = (() => {
    */
   function drawMask(ctx, mask, width, height, image, surface) {
     ctx.clearRect(0, 0, width, height);
-    const s = { ...mask, color: '#ffffffff', outline: false, image: image || null };
+    // V3.6.4. The corners' radius in the picture's pixels, which tracePath takes.
+    const s = { ...mask, color: '#ffffffff', outline: false, image: image || null,
+      radius: Math.max(0, (mask.radius || 0) * height) };
     paintShape(ctx, s, maskBox(mask, width, height), Math.max(0, (mask.soft || 0) * height), 0,
       width, height, surface === undefined ? defaultShapeSurface : surface);
   }

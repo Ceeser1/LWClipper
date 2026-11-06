@@ -2695,12 +2695,18 @@ body.lane-lifting * {
   border-color: #6a6a78;
 }
 
-/* V3.6.3. Under the menu in every view: "Selected Keyframe: X / Y", then
-   the clip's keyframes on a black bar between two small rulers, as wide as
-   the stages. The canvas's height is drawCropKeys' two rulers and its bar,
-   set here as well so the window can be measured before the first draw. */
+/* V3.6.3. In every view: "Selected Keyframe: X / Y", then the clip's
+   keyframes on a black bar between two small rulers, as wide as the stages.
+   The canvas's height is drawCropKeys' two rulers and its bar, set here as
+   well so the window can be measured before the first draw.
+   V3.6.4. Right under the stage. Video Frame's has the room for its lower
+   arrow under it already, so the strip adds no gap of its own there. */
 .crop-keys {
-  margin: 0 auto 10px;
+  margin: 8px auto 0;
+}
+
+.crop-keys[data-view="frame"] {
+  margin-top: 0;
 }
 
 .crop-keys[hidden] {
@@ -3632,6 +3638,41 @@ button.color-swatch:hover:not(:disabled) {
 
 .gen-field__slider.gen-field__slider--short {
   width: 120px;
+}
+
+/* V3.6.4. The Layer Mask view's settings, two equal columns as wide as the
+   stage under them, which resizeMaskStage sets: the left column starts at
+   the stage's left edge and the right one at its middle, every field from
+   the left of its column. The sliders give up what the columns lack. A
+   window so small that the fields cannot fit lets the grid grow past the
+   stage, both ways, so its middle stays the stage's middle. */
+.mask-grid {
+  grid-template-columns: 1fr 1fr;
+  justify-content: stretch;
+  justify-items: start;
+  column-gap: 0;
+  min-width: max-content;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.mask-grid .gen-field {
+  box-sizing: border-box;
+  width: 100%;
+  padding-right: 18px;
+}
+
+.mask-grid .gen-field__caption {
+  white-space: nowrap;
+}
+
+/* A width rather than a basis: a range input's own width is what the grid's
+   max-content reads, and that is wider than half the stage. */
+.mask-grid .gen-field__slider {
+  flex: 1 1 auto;
+  width: 60px;
+  min-width: 60px;
+  max-width: 240px;
 }
 
 /* V3.6. Edit Mask's shapes, over everything else in it, and the name of a
