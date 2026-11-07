@@ -284,3 +284,21 @@ test('zooming in with no track past the right edge closes in from the left, not 
   assert.ok(tl.includes('const tracksBeyond = timelineModel.totalDuration(layers) > right + 1e-6;'));
   assert.ok(tl.includes('notches > 0 && layers.length && !tracksBeyond ? 0 : evt.clientX - rect.left'));
 });
+
+test('clicking the selected mask shape again takes it off but keeps its settings until Remove Mask or Accept', () => {
+  const mask = read('renderer', 'app', 'mask.js');
+  // The same shape clicked again is let go of; custom answers before that.
+  assert.ok(mask.includes('if (maskDraft.kind === b.dataset.kind) {'));
+  assert.ok(mask.indexOf("b.dataset.kind === 'custom'") < mask.indexOf('if (maskDraft.kind === b.dataset.kind) {'));
+  // Letting go stores the settings and saves the removal at once.
+  assert.ok(/function deselectMaskShape\(\) \{\s*dropMaskDraft\(true\);\s*saveCropReset\('mask'\);/.test(mask));
+  assert.ok(mask.includes('maskStash = keep && maskDraft && maskPic ? maskOfDraft(maskDraft) : null;'));
+  // A shape clicked with settings waiting gets them back; another shape gets them refitted.
+  assert.ok(mask.includes('if (maskStash) restoreMaskShape(b.dataset.kind);'));
+  assert.ok(mask.includes('if (maskDraft.kind !== kind) maskDraft = { ...maskDraft, ...refitMask({ kind }) };'));
+  // Remove Mask (no argument) and the window closing and opening drop them.
+  assert.ok(/function dropMaskDraft\(keep = false\)/.test(mask));
+  assert.equal((mask.match(/maskStash = null;/g) || []).length, 2); // the let and the close
+  assert.ok(mask.includes('!d && !maskStash && !(own && own.mask && !maskCleared)'));
+  assert.ok(read('renderer', 'app', 'placement.js').includes("if (tab === 'mask') dropMaskDraft();"));
+});

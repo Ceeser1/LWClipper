@@ -85,6 +85,9 @@ let maskOpened = null;
 // layer's mask off, keyframes and all, the way Remove Mask always has. A
 // shape picked after it is a new mask, the whole of it the layer's.
 let maskCleared = false;
+// V3.8.2. The mask of a shape that was clicked off, in fractions of the
+// picture, or null. See deselectMaskShape.
+let maskStash = null;
 
 /** The draft from a mask, in the picture's pixels. */
 function maskDraftOf(m) {
@@ -174,6 +177,8 @@ function maskStarting(kind, props = {}) {
 function startMaskTab(layer, add) {
   maskFirst = !layer.mask;
   maskCleared = false;
+  // V3.8.2. maskStash is not cleared here: the reseed after a reset opens the
+  // tab again, and that is when the settings of a shape clicked off are kept.
   maskPic = maskPictureSize();
   const t = cropKeyframe ? cropKeyframe.t : compositeAt - layer.start;
   let mask = layer.mask ? timelineModel.maskAt(layer, t) : null;
@@ -191,6 +196,7 @@ function stopMaskTab() {
   maskPic = null;
   maskFirst = false;
   maskCleared = false;
+  maskStash = null;
   maskGuideX.hidden = true;
   maskGuideY.hidden = true;
 }
@@ -207,10 +213,39 @@ function startMaskDraft(kind) {
  * Crop/Mask/Position shouldnt close the window, it should just reset it."
  * The draft's side of it; V3.7.1's saveCropReset takes it off the clip.
  */
-function dropMaskDraft() {
+function dropMaskDraft(keep = false) {
+  // V3.8.2. Remove Mask and Accept let the stored settings go with the draft;
+  // only a shape clicked off keeps them.
+  maskStash = keep && maskDraft && maskPic ? maskOfDraft(maskDraft) : null;
   maskDraft = null;
   maskCleared = true;
   showMaskTab();
+}
+
+/**
+ * V3.8.2. The user: clicking the selected shape again takes the mask off like
+ * Remove Mask, "but keeps the applied settings temporarily so they can be
+ * restored if the same shape gets clicked again or a part of the settings can
+ * be applied to another shape". Not for Custom, which is a picture to pick.
+ */
+function deselectMaskShape() {
+  dropMaskDraft(true);
+  saveCropReset('mask');
+}
+
+/**
+ * V3.8.2. A shape clicked with the stored settings waiting: the same shape
+ * gets all of them back, another gets them as a shape switched to would, its
+ * own proportions on the box's height and middle. The stash is kept until
+ * Remove Mask or Accept, so it can be tried on one shape after another.
+ */
+function restoreMaskShape(kind) {
+  maskDraft = maskDraftOf(maskStash);
+  if (maskDraft.kind !== kind) maskDraft = { ...maskDraft, ...refitMask({ kind }) };
+  maskCleared = true;
+  showMaskTab();
+  placeMaskBox();
+  paintMaskStage();
 }
 
 /**
@@ -415,7 +450,8 @@ function showMaskDraft(except) {
   // Remove Mask has something to take off once there is a mask or a draft,
   // and nothing once it has been pressed.
   const own = cropLayerNow();
-  if (cropTab === 'mask') cropRemoveBtn.disabled = !d && !(own && own.mask && !maskCleared);
+  // V3.8.2. Or stored settings to let go of.
+  if (cropTab === 'mask') cropRemoveBtn.disabled = !d && !maskStash && !(own && own.mask && !maskCleared);
   if (!d) {
     maskInvert.checked = false;
     maskRingField.hidden = true;
@@ -494,6 +530,10 @@ async function pickMaskImage() {
   if (cropLayerId !== id || cropModal.hidden || !maskPic) return;
   const props = { kind: 'custom', src: picked.path, by: file.transparent ? 'alpha' : 'luma', aspect: file.aspect };
   maskFailed.delete(props.src + '|' + props.by);
+  if (!maskDraft && maskStash) {
+    // V3.8.2. Settings waiting from a shape clicked off go onto the picture.
+    maskDraft = maskDraftOf(maskStash);
+  }
   if (maskDraft) {
     changeMask(refitMask(props));
   } else {
@@ -518,7 +558,13 @@ for (const b of maskShapes.querySelectorAll('button')) {
       return;
     }
     if (!maskDraft) {
-      startMaskDraft(b.dataset.kind);
+      if (maskStash) restoreMaskShape(b.dataset.kind);
+      else startMaskDraft(b.dataset.kind);
+      return;
+    }
+    // V3.8.2. The selected shape clicked again is let go of.
+    if (maskDraft.kind === b.dataset.kind) {
+      deselectMaskShape();
       return;
     }
     changeMask(refitMask({ kind: b.dataset.kind }));
