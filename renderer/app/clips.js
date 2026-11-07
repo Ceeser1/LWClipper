@@ -154,6 +154,8 @@ function setLayers(next, restoring) {
   // worked out again.
   layers = restoring ? arranged : timelineModel.crossfade(settledLayers, arranged);
   settledLayers = layers;
+  // V4.5. A file new to the timeline joins Project Media.
+  if (typeof noteProjectMediaLayers === 'function') noteProjectMediaLayers();
   if (selectedLayerId && !timelineModel.layerById(layers, selectedLayerId)) {
     selectedLayerId = null;
   }
@@ -210,7 +212,9 @@ function setLayers(next, restoring) {
  * "take the sound and leave the picture", and answering it with a picture as
  * well would be ignoring what was asked.
  */
-function addLayerFromMedia(type, data, lane) {
+// V4.5. `start` is where it goes on the timeline: a tile dragged down from
+// Project Media lands at the time it was let go at. 0 for everything else.
+function addLayerFromMedia(type, data, lane, start = 0) {
   const duration = Math.max(0, data.duration || 0);
   if (!duration) return;
   // V2.3. A still goes in as a video layer with kind 'image' beside its type,
@@ -225,7 +229,7 @@ function addLayerFromMedia(type, data, lane) {
     kind: image ? 'image' : 'media',
     name: data.title || String(data.path).split(/[\\/]/).pop(),
     src: data.path,
-    start: 0,
+    start: Math.max(0, Number(start) || 0),
     sourceDuration: duration,
     // Carried from the probe at the moment the layer is made, because a crop
     // set later has to be measured against the same numbers the encoder will

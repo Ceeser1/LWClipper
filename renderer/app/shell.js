@@ -340,6 +340,12 @@ function applySettingsPayload(payload) {
   if (typeof translatePopped === 'function') translatePopped(wasShowing);
   // V4.2. The keys bound in Key Binds.
   if (typeof applyKeyBinds === 'function') applyKeyBinds(appSettings.keyBinds);
+  // V4.5. Project Media folded or open as it was left, and its tiles redrawn
+  // for the language (Add Media, Missing).
+  if (typeof applyMediaCollapsedSetting === 'function') {
+    applyMediaCollapsedSetting();
+    drawProjectMedia();
+  }
   // The buttons this one is measured against have just been relabelled.
   sizeSettingsBtn();
   updateRenderResolution();

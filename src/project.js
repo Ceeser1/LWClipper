@@ -61,6 +61,34 @@ const projectFile = (() => {
    * than the undo snapshot matters: undo deliberately ignores the Enabled tick
    * and the volume, and both of those do go in the file.
    */
+  /**
+   * V4.5. Project Media, the frame of every source the project has: the
+   * files on the timeline and the ones added to the frame and not used yet.
+   * One entry a file, in the order they came in. The probe facts a tile and a
+   * drag need come from describeMedia when it is dragged; what is kept is
+   * only what draws the tile: the path, the name it shows, which of the three
+   * kinds it is and how long it runs.
+   *
+   * Part of the document, so adding a file to the frame is unsaved work like
+   * adding a track. A file written before V4.5 has no list and reads as an
+   * empty one; the window fills it from the layers as they open.
+   */
+  const MEDIA_TYPES = ['video', 'audio', 'image'];
+
+  function mediaRaw(source) {
+    if (!Array.isArray(source)) return [];
+    return source.filter((m) => m && typeof m === 'object' && typeof m.src === 'string' && m.src);
+  }
+
+  function mediaOf(source) {
+    return mediaRaw(source).map((m) => ({
+      src: m.src,
+      name: typeof m.name === 'string' ? m.name : '',
+      type: MEDIA_TYPES.includes(m.type) ? m.type : 'video',
+      duration: round(Math.max(0, num(m.duration))),
+    }));
+  }
+
   function documentOf(state) {
     return {
       project: {
@@ -76,6 +104,7 @@ const projectFile = (() => {
         end: round(Math.max(0, num(state.trim && state.trim.end))),
       },
       layers: (state.layers || []).map((l) => ({ ...l })),
+      media: mediaOf(state.media),
     };
   }
 
@@ -222,6 +251,12 @@ const projectFile = (() => {
         // one.
         ref: l.src ? refFor(l, stats[l.src], relatives[l.src]) : null,
       })),
+      // V4.5. Each with a reference of its own, so a file in the frame and
+      // not on the timeline is found again the way a track's file is.
+      media: doc.media.map((m) => ({
+        ...m,
+        ref: refFor({ src: m.src, sourceDuration: m.duration }, stats[m.src], relatives[m.src]),
+      })),
       // V3.3. Beside the document rather than in it, see viewsOf.
       views: viewsOf(state.views),
       // V3.3. The undo stack, see historyOf. Last, since it is the bulk.
@@ -264,6 +299,10 @@ const projectFile = (() => {
       ok: true,
       version,
       doc: documentOf(doc),
+      // V4.5. The references of doc.media, one an entry in the same order,
+      // beside the document rather than in it, so comparing the document with
+      // what the window holds is not thrown by them.
+      mediaRefs: mediaRaw(doc.media).map((m) => (m.ref && typeof m.ref === 'object' ? m.ref : { path: m.src })),
       meta: metaOf(doc),
       views: viewsOf(doc.views),
       history: historyOf(doc.history),
@@ -391,6 +430,7 @@ const projectFile = (() => {
     EXT,
     VERSION,
     documentOf,
+    mediaOf,
     metaOf,
     viewsOf,
     historyOf,

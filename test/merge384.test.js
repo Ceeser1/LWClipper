@@ -90,7 +90,8 @@ test('a project handed over while one is open asks Different LWC Project, with t
   assert.ok(/\.choice-buttons\.choice-buttons--stacked\s*\{[^}]*display:\s*grid;[^}]*justify-content:\s*center/.test(CSS));
   // Nothing open is not a question.
   assert.ok(ask.includes("if (!projectIsOpen()) return 'open';"));
-  assert.ok(EDITING.includes('return timelineDriving() && (!!projectPath || layers.length > 0);'));
+  // V4.5. Files waiting in Project Media count as a project in work too.
+  assert.ok(EDITING.includes('return timelineDriving() && (!!projectPath || layers.length > 0 || projectMedia.length > 0);'));
 });
 
 test('save saves first and reads the other file after; merge merges; discard opens unasked; cancel leaves everything', () => {

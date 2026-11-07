@@ -382,5 +382,18 @@
   "WebM is always rendered on the CPU.": "WebM wird immer auf der CPU gerendert.",
   "No GPU encoder was found, so the CPU renders.": "Kein GPU-Encoder gefunden, daher rendert die CPU.",
   "The GPU could not render this, rendering on the CPU...": "Die GPU konnte das nicht rendern, es wird auf der CPU gerendert...",
-  "The GPU could not render this, so the CPU did.": "Die GPU konnte das nicht rendern, daher hat es die CPU gemacht."
+  "The GPU could not render this, so the CPU did.": "Die GPU konnte das nicht rendern, daher hat es die CPU gemacht.",
+  "Project Media": "Projektmedien",
+  "Drop to add to Project Media": "Ablegen, um es den Projektmedien hinzuzufügen",
+  "Added {n} file(s) to Project Media.": "{n} Datei(en) zu den Projektmedien hinzugefügt.",
+  "{n} file(s) could not be added to Project Media.": "{n} Datei(en) konnten den Projektmedien nicht hinzugefügt werden.",
+  "Already in Project Media.": "Schon in den Projektmedien.",
+  "Audio, video and images": "Audio, Video und Bilder",
+  "All files": "Alle Dateien",
+  "Remove media from project": "Medium aus dem Projekt entfernen",
+  "Used in the timeline": "Wird in der Zeitleiste verwendet",
+  "This media is in use, do you really want to delete it? Every occurrence of it in the timeline will be deleted.": "Dieses Medium wird verwendet. Soll es wirklich gelöscht werden? Jedes Vorkommen in der Zeitleiste wird gelöscht.",
+  "Only one project can be opened at a time; {n} more were left out.": "Es kann nur ein Projekt auf einmal geöffnet werden; {n} weitere wurden ausgelassen.",
+  "Paste a Video/Audio URL": "Video-/Audio-URL einfügen",
+  "Toggle Fullscreen": "Vollbild umschalten"
 }

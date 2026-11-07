@@ -541,6 +541,25 @@ function splitEqualStack() {
   return found;
 }
 
+/**
+ * V4.5. Move the split by what Project Media gave up or took when it was
+ * collapsed or opened, so the timeline takes that height and the previews
+ * keep theirs. `stack` is the stack as it was before the change.
+ */
+function shiftSplitBy(stack, delta) {
+  if (!delta) return;
+  const wish = Math.max(0, stack + delta);
+  if (windowMaxed) {
+    const room = splitRoom();
+    if (room > 0) splitMaxShare = wish / room;
+  } else {
+    splitWish = wish;
+  }
+  applySplit();
+  drawTimeline();
+  updatePlayhead();
+}
+
 editSplitter.addEventListener('pointerdown', (evt) => {
   if (evt.button !== 0) return;
   splitFrom = {

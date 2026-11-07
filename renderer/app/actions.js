@@ -54,12 +54,15 @@ const ACTIONS = [
   {
     // Not held back by a running job: saving writes three kilobytes that touch
     // nothing a render is using (see saveProject).
+    // V4.5. Greyed while there is no project at all: no file, no track and
+    // nothing in Project Media (projectIsOpen). Ctrl+S is still taken then,
+    // so the browser's own Save Page does not answer it.
     id: 'file.save', menu: 'file', label: () => t('Save project'), keys: ['Ctrl+S'], take: true,
-    enabled: () => true, run: () => saveProject(false),
+    enabled: () => projectIsOpen(), run: () => saveProject(false),
   },
   {
     id: 'file.saveAs', menu: 'file', label: () => t('Save project as...'), keys: ['Ctrl+Shift+S'], take: true,
-    enabled: () => true, run: () => saveProject(true),
+    enabled: () => projectIsOpen(), run: () => saveProject(true),
   },
   {
     // V4.1. The menu bar's Export button, which is not in a dropdown.
@@ -184,6 +187,13 @@ const ACTIONS = [
   {
     id: 'view.end', menu: 'view', label: () => t('Timeline end'), keys: ['End'], guard: 'arrows',
     enabled: () => layers.length > 0, run: () => goTimelineEdge(true),
+  },
+  { divider: 'view' },
+  {
+    // V4.5. The main window in and out of fullscreen. The split is already
+    // kept as the maximized one there (window:state reports both).
+    id: 'view.fullscreen', menu: 'view', label: () => t('Toggle Fullscreen'), keys: ['F11'], take: true,
+    enabled: () => true, run: () => window.lwclipper.toggleFullscreen(),
   },
 
   // ---- Settings ----
@@ -453,20 +463,25 @@ function openMenu(head) {
     item.className = 'clip-menu__item menu-drop__item';
     item.setAttribute('role', action.checked ? 'menuitemcheckbox' : 'menuitem');
     item.dataset.action = action.id;
-    const tick = document.createElement('span');
-    tick.className = 'menu-drop__tick';
-    if (action.checked) {
-      const on = !!action.checked();
-      tick.textContent = on ? '✓' : '';
-      item.setAttribute('aria-checked', String(on));
-    }
     const label = document.createElement('span');
     label.className = 'menu-drop__label';
     label.textContent = action.label();
+    // V4.5. The user: no column kept for it, "The checkmark should be
+    // displayed right after its menu entry, not before."
+    if (action.checked) {
+      const on = !!action.checked();
+      item.setAttribute('aria-checked', String(on));
+      if (on) {
+        const tick = document.createElement('span');
+        tick.className = 'menu-drop__tick';
+        tick.textContent = '✓';
+        label.appendChild(tick);
+      }
+    }
     const key = document.createElement('span');
     key.className = 'menu-drop__key';
     key.textContent = action.flyout ? '›' : actionKeyText(action);
-    item.append(tick, label, key);
+    item.append(label, key);
     // V4.1. Hovering an entry shows its flyout, or puts away another's.
     item.addEventListener('pointerenter', () => {
       if (action.flyout) openFlyout(item, action.flyout);

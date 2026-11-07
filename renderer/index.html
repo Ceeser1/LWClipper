@@ -219,6 +219,22 @@
        handle: its Trim frame is three fixed rows with nothing to trade. -->
   <div id="editSplitter" class="splitter" role="separator" aria-orientation="horizontal"></div>
 
+  <!-- V4.5. Project Media: every source the project has, the timeline's and
+       the ones added here and not used yet, as a row of tiles that scrolls
+       sideways. Advanced editing only. Collapsing it gives its height to the
+       timeline, not to the previews (projectMedia.js). -->
+  <section class="section media-section" id="projectMedia">
+    <div class="row media-head">
+      <button id="projectMediaToggle" class="media-head__toggle" type="button" aria-expanded="true" aria-controls="projectMediaList">
+        <span class="media-head__chevron" aria-hidden="true"></span>
+        <span class="section-title">Project Media</span>
+      </button>
+      <span id="projectMediaCount" class="media-head__count" data-no-translate></span>
+    </div>
+    <div id="projectMediaList" class="media-list"></div>
+    <div id="projectMediaDropHint" class="drop-hint drop-hint--media" hidden>Drop to add to Project Media</div>
+  </section>
+
   <!-- The two editing frames and the one overlay they share. Simple editing
        shows Trim, advanced editing shows the timeline, and the save
        confirmation covers whichever of them is up, which is why it sits out
@@ -566,7 +582,7 @@
     </div>
   </div>
 
- Both existing modals open and
+  <!-- Step 13. The one modal that answers back. Both existing modals open and
        close through listeners and neither returns a decision; this one blocks
        whatever asked until a button is pressed. Its title, message, list and
        buttons are all written by showChoice, so the markup is only the shape. -->
@@ -1366,6 +1382,7 @@
   <script src="app/autosave.js"></script>
   <script src="app/outside.js"></script>
   <script src="app/download.js"></script>
+  <script src="app/projectMedia.js"></script>
   <script src="app/actions.js"></script>
   <script src="app/keybinds.js"></script>
   <script src="app/startup.js"></script>

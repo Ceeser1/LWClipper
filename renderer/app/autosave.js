@@ -22,7 +22,7 @@ let autosaveFailed = false;
 
 /** Write an auto-save when there is a project and it changed. True if written. */
 async function autosaveNow() {
-  if (autosaving || !timelineDriving() || !layers.length) return false;
+  if (autosaving || !timelineDriving() || (!layers.length && !projectMedia.length)) return false;
   const doc = projectDocument();
   if (autosavedDoc && autosavedFrom === projectPath
     && projectFile.sameDocument(doc, autosavedDoc)) return false;

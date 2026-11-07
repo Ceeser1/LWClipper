@@ -4769,14 +4769,16 @@ body.advanced .top-section {
 
 .menu-drop__item {
   display: grid;
-  grid-template-columns: 14px 1fr auto;
+  grid-template-columns: 1fr auto;
   align-items: center;
   gap: 8px;
 }
 
+
+/* Right after the entry's name. */
 .menu-drop__tick {
   color: #8fe0a4;
-  text-align: center;
+  margin-left: 8px;
 }
 
 .menu-drop__key {
@@ -4979,6 +4981,13 @@ body.advanced .save-section {
 
 .settings-panel--prefs .settings-title--prefs {
   display: inline;
+}
+
+/* V4.5. In the full panel the info under the settings is what parts Close
+   from the App files buttons; Preferences hides it, which left Close flush
+   against them. The same room as the panel keeps under it. */
+.settings-panel--prefs .modal__close {
+  margin-top: 16px;
 }
 
 /* The size of the boxes in the panel, wherever the panel is. */
@@ -5184,4 +5193,314 @@ body.advanced .menu-bar {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* ---- V4.5. Project Media ---- */
+
+.media-section {
+  display: none;
+  position: relative;
+  padding: 6px 10px 8px;
+}
+
+body.advanced .media-section {
+  display: block;
+}
+
+.media-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+/* The whole title is the switch, with a chevron that turns. */
+.media-head__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px 2px 2px;
+  background: transparent;
+  border-color: transparent;
+}
+
+.media-head__toggle:hover:not(:disabled) {
+  background: #34343c;
+  border-color: #45454e;
+}
+
+.media-head__toggle .section-title {
+  margin-bottom: 0;
+}
+
+.media-head__chevron::before {
+  content: '';
+  display: block;
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid #b8b8c0;
+  transition: transform 0.12s;
+}
+
+.media-section--collapsed .media-head__chevron::before {
+  transform: rotate(-90deg);
+}
+
+.media-head__count {
+  color: #8a8a94;
+  font-size: 12px;
+}
+
+.media-list {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 6px 2px 4px;
+  margin-top: 4px;
+}
+
+.media-section--collapsed .media-list {
+  display: none;
+}
+
+/* A tile: its name over a 16:9 frame. */
+.media-tile {
+  flex: none;
+  /* The 144 of the frame, with the padding and border around it. */
+  width: 152px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  cursor: grab;
+  user-select: none;
+}
+
+.media-tile:hover {
+  background: #34343c;
+  border-color: #4a4a54;
+}
+
+.media-tile__name {
+  height: 16px;
+  line-height: 16px;
+  font-size: 12px;
+  color: #d5d5dc;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.media-tile__frame {
+  position: relative;
+  width: 144px;
+  height: 81px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #121216;
+}
+
+.media-tile__frame > img,
+.media-tile__frame > canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.media-tile__time {
+  position: absolute;
+  right: 4px;
+  bottom: 3px;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 11px;
+  color: #ebebf0;
+  background: rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+
+.media-tile__missing {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #e08f8f;
+  font-size: 12px;
+  font-weight: bold;
+  background: rgba(20, 20, 24, 0.7);
+}
+
+.media-tile--missing {
+  cursor: default;
+}
+
+/* The first entry: Add Media, square, see-through until hovered. */
+.media-add {
+  flex: none;
+  width: 108px;
+  height: 108px;
+  margin: 0 2px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(235, 235, 240, 0.6);
+  opacity: 0.75;
+  padding: 0;
+}
+
+.media-add:hover:not(:disabled) {
+  opacity: 1;
+  background: rgba(120, 200, 140, 0.16);
+  border-color: #8fd9a1;
+  color: #ebebf0;
+}
+
+.media-add__plus {
+  font-size: 46px;
+  line-height: 46px;
+  font-weight: 300;
+}
+
+.media-add__label {
+  font-size: 12px;
+}
+
+/* A file dragged over the frame from outside. */
+.drop-hint--media {
+  border-color: #78c88c;
+  color: #8fd9a1;
+  font-size: 15px;
+  background-image: linear-gradient(rgba(120, 200, 140, 0.07), rgba(120, 200, 140, 0.07));
+}
+
+.media-section[data-drop-hover="true"] .drop-hint--media {
+  background-image: linear-gradient(rgba(120, 200, 140, 0.26), rgba(120, 200, 140, 0.26));
+  border-color: #9fe0b2;
+}
+
+/* A tile being dragged to the timeline: the picture under the pointer and a
+   line where it would start. */
+.media-ghost {
+  position: fixed;
+  z-index: 70;
+  width: 96px;
+  height: 54px;
+  border-radius: 4px;
+  overflow: hidden;
+  opacity: 0.85;
+  pointer-events: none;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+  background: #121216;
+}
+
+.media-ghost > img,
+.media-ghost > canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+body.media-dragging,
+body.media-dragging * {
+  cursor: copy !important;
+}
+
+body.media-dragging.media-dragging--nowhere,
+body.media-dragging.media-dragging--nowhere * {
+  cursor: no-drop !important;
+}
+
+.media-drop-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: #8fd9a1;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.media-drop-line[hidden] {
+  display: none;
+}
+
+/* While files are offered, the frame's own content hides under the hint, as
+   the audio frame's does. */
+.media-section[data-drop="true"] > :not(.drop-hint) {
+  visibility: hidden;
+}
+
+.media-section[data-drop="true"] {
+  min-height: 44px;
+}
+
+/* V4.5. The tick of a file on the timeline, top left, and the red X that
+   removes it from the project, top right. */
+.media-tile__used {
+  display: none;
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #3f9a5a;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+  z-index: 1;
+}
+
+.media-tile__used::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  top: 3px;
+  width: 4px;
+  height: 8px;
+  border: solid #ffffff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.media-tile--used .media-tile__used {
+  display: block;
+}
+
+.media-tile__remove {
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  border: 1px solid #8a3a3a;
+  background: rgba(150, 40, 40, 0.85);
+  color: #ffffff;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 1;
+}
+
+.media-tile__remove:hover:not(:disabled) {
+  background: #d04040;
+  border-color: #f08080;
+  color: #ffffff;
 }

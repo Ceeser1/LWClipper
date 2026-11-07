@@ -382,5 +382,18 @@
   "WebM is always rendered on the CPU.": "WebM is always rendered on the CPU.",
   "No GPU encoder was found, so the CPU renders.": "No GPU encoder was found, so the CPU renders.",
   "The GPU could not render this, rendering on the CPU...": "The GPU could not render this, rendering on the CPU...",
-  "The GPU could not render this, so the CPU did.": "The GPU could not render this, so the CPU did."
+  "The GPU could not render this, so the CPU did.": "The GPU could not render this, so the CPU did.",
+  "Project Media": "Project Media",
+  "Drop to add to Project Media": "Drop to add to Project Media",
+  "Added {n} file(s) to Project Media.": "Added {n} file(s) to Project Media.",
+  "{n} file(s) could not be added to Project Media.": "{n} file(s) could not be added to Project Media.",
+  "Already in Project Media.": "Already in Project Media.",
+  "Audio, video and images": "Audio, video and images",
+  "All files": "All files",
+  "Remove media from project": "Remove media from project",
+  "Used in the timeline": "Used in the timeline",
+  "This media is in use, do you really want to delete it? Every occurrence of it in the timeline will be deleted.": "This media is in use, do you really want to delete it? Every occurrence of it in the timeline will be deleted.",
+  "Only one project can be opened at a time; {n} more were left out.": "Only one project can be opened at a time; {n} more were left out.",
+  "Paste a Video/Audio URL": "Paste a Video/Audio URL",
+  "Toggle Fullscreen": "Toggle Fullscreen"
 }

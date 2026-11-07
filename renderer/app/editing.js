@@ -778,12 +778,15 @@ function projectDocument() {
     // one it never had.
     project: compositeFrame || { width: 0, height: 0, fps: 0 },
     trim: { start: slider.start, end: slider.end },
+    // V4.5. Project Media, so a file added there is unsaved work too.
+    media: projectMediaForFile(),
   };
 }
 
 function projectDirty() {
   if (!timelineDriving()) return false;
-  if (!projectSaved) return layers.length > 0;
+  // V4.5. Files waiting in Project Media are work too.
+  if (!projectSaved) return layers.length > 0 || projectMedia.length > 0;
   return !projectFile.sameDocument(projectDocument(), projectSaved);
 }
 
@@ -904,7 +907,8 @@ async function openProjectFile() {
  * saved is not one, and a project simply opens into it as it always has.
  */
 function projectIsOpen() {
-  return timelineDriving() && (!!projectPath || layers.length > 0);
+  // V4.5. Files waiting in Project Media make it a project in work as well.
+  return timelineDriving() && (!!projectPath || layers.length > 0 || projectMedia.length > 0);
 }
 
 /**
@@ -1019,6 +1023,8 @@ async function mergeProject(result) {
   }
   const merged = timelineModel.mergeLayers(layers, incoming, rows);
   mergeViews(result.views, merged.ids);
+  // V4.5. Its Project Media joins this one's.
+  mergeProjectMedia(result);
   // As restoring, so the fades are put down exactly as saved rather than
   // worked out again for the overlaps the merged tracks bring along.
   setLayers(merged.layers, true);
@@ -1151,6 +1157,9 @@ async function adoptProject(result) {
   closeGenWindow();
   // V3.3. Before anything opens an editor on the new layers.
   adoptViews(result.views);
+  // V4.5. Its Project Media, before the layers, which add whatever of theirs
+  // the list does not have (a project from before V4.5 has no list at all).
+  adoptProjectMedia(result);
   setLayers(keep, true);
   // After setLayers, the same ordering applyHistory needs: syncProjectTrim in
   // there follows the project's new length and would move the very markers
@@ -1214,6 +1223,10 @@ async function adoptProject(result) {
       project: own.width > 1 && own.height > 1
         ? { width: own.width, height: own.height, fps: own.fps > 0 ? own.fps : COMPOSITE_FALLBACK.fps }
         : (compositeFrame || { width: 0, height: 0, fps: 0 }),
+      // V4.5. A project saved before Project Media has none in its file, and
+      // the list it would open with is the one its layers make.
+      media: result.savedDoc.media && result.savedDoc.media.length
+        ? result.savedDoc.media : projectMediaForFile(),
     });
   } else if (result.restored) {
     projectSaved = null;
@@ -1223,6 +1236,9 @@ async function adoptProject(result) {
       layers: built,
       project: compositeFrame || { width: 0, height: 0, fps: 0 },
       trim: result.doc.trim,
+      // V4.5. The list as it opened: the file's, and for a file from before
+      // Project Media, the one its layers make, so opening it is not a change.
+      media: projectMediaForFile(),
     });
   }
   // Two calls rather than one with a ternary in it, for the reason spelled out
@@ -1282,6 +1298,8 @@ async function newEmptyProject() {
   sizeCompositeCanvas();
   resetLaneRows();
   setLayerSelection([], null);
+  // V4.5. A new project starts with nothing in Project Media.
+  clearProjectMedia();
   setLayers([], true);
   trimSpan = 0;
   slider.reset();

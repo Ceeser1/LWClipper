@@ -359,7 +359,54 @@ async function stripFor(filePath, duration, want = 0, at = 0) {
   return { ...info, file: sheet, cached: false };
 }
 
+// ---- V4.5. Project Media's posters ----
+//
+// One frame of a video, for its tile: from a tenth of the way in, which is
+// past the black a clip so often opens on, but never later than five seconds.
+// 320 wide, for a tile of 144 on a screen that may be scaled. In the same
+// folder as the sheets and under the same key rule, so it goes when they do.
+const POSTER_WIDTH = 320;
+
+function posterAt(duration) {
+  const d = Number(duration) || 0;
+  return d > 0 ? Math.min(5, d * 0.1) : 0;
+}
+
+async function posterFor(filePath, duration) {
+  const st = fs.statSync(filePath);
+  const at = posterAt(duration);
+  const key = crypto.createHash('sha1')
+    .update(['poster', filePath.toLowerCase(), st.size, Math.round(st.mtimeMs), at, POSTER_WIDTH].join('|'))
+    .digest('hex');
+  const dest = path.join(stripDir(), key + '.jpg');
+  if (fs.existsSync(dest)) return dest;
+  await enqueue(() => new Promise((resolve, reject) => {
+    const ffmpeg = toolPaths.findFfmpeg();
+    if (!ffmpeg) {
+      reject(new Error('ffmpeg.exe was not found alongside the app.'));
+      return;
+    }
+    const args = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y',
+      '-ss', at.toFixed(3), '-i', filePath, '-an', '-frames:v', '1',
+      '-vf', 'scale=' + POSTER_WIDTH + ':-2', '-qscale:v', '4', dest];
+    const child = spawn(ffmpeg, args, { windowsHide: true });
+    const stderr = [];
+    child.stderr.on('data', (d) => stderr.push(String(d)));
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code !== 0 || !fs.existsSync(dest)) {
+        reject(new Error(stderr.join('').trim() || 'ffmpeg produced no poster.'));
+        return;
+      }
+      resolve();
+    });
+  }));
+  return dest;
+}
+
 module.exports = {
+  posterFor,
+  posterAt,
   stripFor,
   abort,
   enqueue,

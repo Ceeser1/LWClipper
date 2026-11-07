@@ -30,11 +30,29 @@ function downloadWindowOpen() {
   return !downloadModal.hidden;
 }
 
+/**
+ * V4.5. The address box's hint for where it stands. Beside Open File at the
+ * top of simple editing it is the second way in ("or paste a Video link
+ * here..."); alone in Download File it is the only one, so the user's "Paste a
+ * Video/Audio URL". Kept as English in englishPlaceholder too, which is what a
+ * language switch translates from, or the switch would put the other one back.
+ */
+function setUrlPlaceholder(inWindow) {
+  if (inWindow) {
+    englishPlaceholder.set(urlField, 'Paste a Video/Audio URL');
+    urlField.setAttribute('placeholder', t('Paste a Video/Audio URL'));
+  } else {
+    englishPlaceholder.set(urlField, 'or paste a Video link here...');
+    urlField.setAttribute('placeholder', t('or paste a Video link here...'));
+  }
+}
+
 function openDownloadWindow() {
   if (!timelineDriving() || (busy && !downloadJob)) return;
   if (downloadWindowOpen()) return;
   // The three in the order they stand in at the top of the window.
   downloadRow.append(urlField, pasteBtn, loadBtn);
+  setUrlPlaceholder(true);
   downloadBody.appendChild(mainDrop);
   downloadModal.hidden = false;
   updateMainFrame();
@@ -48,6 +66,7 @@ function closeDownloadWindow() {
   downloadModal.hidden = true;
   // Back before the settings button, which is where they stood.
   settingsBtn.before(urlField, pasteBtn, loadBtn);
+  setUrlPlaceholder(false);
   topSection.after(mainDrop);
   updateMainFrame();
   fitWindow();

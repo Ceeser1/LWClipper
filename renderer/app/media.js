@@ -39,6 +39,12 @@ function mainDropTakesFiles() {
 
 function setDropActive(on) {
   const active = on && !busy;
+  // V4.5. Project Media takes files in advanced editing, any number of them.
+  if (typeof projectMediaSection !== 'undefined') {
+    const mediaOn = active && timelineDriving();
+    projectMediaSection.dataset.drop = String(mediaOn);
+    projectMediaDropHint.hidden = !mediaOn;
+  }
   const mainOn = active && mainDropTakesFiles();
   mainDrop.dataset.drop = String(mainOn);
   mainDropHint.hidden = !mainOn;
@@ -53,6 +59,9 @@ function setDropActive(on) {
 function setDropHover(zone) {
   mainDrop.dataset.dropHover = String(zone === mainDrop && mainDropTakesFiles());
   audioSection.dataset.dropHover = String(zone === audioSection && audioDropAllowed());
+  if (typeof projectMediaSection !== 'undefined') {
+    projectMediaSection.dataset.dropHover = String(zone === projectMediaSection);
+  }
   // Every zone that carries the attribute, which since V2.8 is the empty rows
   // and the Add a new Layer block. The class is the empty row's name for it and
   // the block borrows it rather than having a second one that means the same.
@@ -70,7 +79,8 @@ function dropZoneUnder(evt) {
   // #audioSection stays named here and goes inert on its own in advanced mode:
   // Step 10c hides it, and a display:none element is never an event target, so
   // closest() cannot reach it. The empty Audio row is the drop zone there.
-  const zone = node.closest('[data-empty-type], #mainDrop, #audioSection');
+  const zone = node.closest('[data-empty-type], #mainDrop, #audioSection, #projectMedia');
+  if (zone && zone.id === 'projectMedia' && !timelineDriving()) return null;
   // The frame at the top takes nothing in advanced editing, so a drag over it
   // lands nowhere rather than there. See mainDropTakesFiles.
   if (zone === mainDrop && !mainDropTakesFiles()) return null;
@@ -110,6 +120,12 @@ document.addEventListener('drop', (evt) => {
   dragDepth = 0;
   const zone = dropZoneUnder(evt);
   setDropActive(false);
+  // V4.5. Every file dropped on Project Media joins it.
+  if (zone && zone.id === 'projectMedia' && !busy) {
+    const files = evt.dataTransfer ? Array.from(evt.dataTransfer.files) : [];
+    addMediaFiles(files.map((f) => window.lwclipper.pathForFile(f)).filter(Boolean));
+    return;
+  }
   if (!zone || !zone.dataset.emptyType || busy) return;
   const filePath = droppedPath(evt);
   if (filePath) openIntoLayer(zone.dataset.emptyType, filePath, zone.dataset.lane);

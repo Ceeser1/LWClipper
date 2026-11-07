@@ -38,6 +38,8 @@ const DEFAULTS = {
   // V4.4. What renders an export's picture: 'auto' (the GPU when it can),
   // 'gpu' or 'cpu'. See src/renderDevice.js.
   renderDevice: 'auto',
+  // V4.5. Whether the Project Media frame is folded down to its title.
+  projectMediaCollapsed: false,
 };
 
 function settingsFile() {

@@ -25,6 +25,9 @@ contextBridge.exposeInMainWorld('lwclipper', {
     ipcRenderer.invoke('video:compose',
       { layers, project, trim, destination, compression, device }),
   gpuInfo: () => ipcRenderer.invoke('render:gpu'),
+  pickMedia: () => ipcRenderer.invoke('dialog:pickMedia'),
+  toggleFullscreen: () => ipcRenderer.invoke('window:toggleFullscreen'),
+  mediaPoster: (filePath, duration) => ipcRenderer.invoke('media:poster', { filePath, duration }),
   audioPeaks: (filePath, duration, buckets) =>
     ipcRenderer.invoke('audio:peaks', { filePath, duration, buckets }),
   abortAudioPeaks: () => ipcRenderer.invoke('audio:abortPeaks'),

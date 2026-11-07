@@ -1101,13 +1101,20 @@ function writeClaim(filePath, name, sources, previous) {
 function sourceFacts(state, dir) {
   const stats = {};
   const relatives = {};
-  for (const layer of state.layers || []) {
-    if (!layer.src || stats[layer.src] !== undefined) continue;
-    stats[layer.src] = statOrNull(layer.src);
-    const rel = dir ? projectFile.relativePath(dir, layer.src, path) : null;
-    if (rel) relatives[layer.src] = rel;
+  // V4.5. The Project Media files as well, which need a reference of their
+  // own when they are not on the timeline.
+  for (const src of sourcesOf(state)) {
+    if (!src || stats[src] !== undefined) continue;
+    stats[src] = statOrNull(src);
+    const rel = dir ? projectFile.relativePath(dir, src, path) : null;
+    if (rel) relatives[src] = rel;
   }
   return { stats, relatives };
+}
+
+/** V4.5. Every file a project holds, the timeline's and Project Media's. */
+function sourcesOf(state) {
+  return [...(state.layers || []).map((l) => l.src), ...(state.media || []).map((m) => m && m.src)];
 }
 
 /**
@@ -1130,7 +1137,9 @@ ipcMain.handle('project:save', (_event, { filePath, state, previous }) => {
     const name = path.basename(filePath, '.' + PROJECT_EXT);
     // After the write, not before: a claim for a project that failed to save is
     // a claim for a file that does not exist.
-    writeClaim(filePath, name, (state.layers || []).map((l) => l.src), previous);
+    // V4.5. A download in Project Media and not on the timeline is wanted
+    // just as much, so Clear cache has to ask about it too.
+    writeClaim(filePath, name, sourcesOf(state), previous);
     return { ok: true, path: filePath, name };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
@@ -1165,7 +1174,11 @@ function resolveSources(parsed, dir) {
   const masksMissing = parsed.doc.layers
     .filter((l) => l.mask && typeof l.mask === 'object' && l.mask.src && !statOrNull(l.mask.src))
     .map((l) => l.id);
-  return { statuses, masksMissing };
+  // V4.5. Project Media's files, found the way a track's are, one verdict an
+  // entry in the list's order.
+  const mediaStatuses = (parsed.mediaRefs || []).map((ref) => projectFile.statusFor(ref,
+    projectFile.candidatesFor(ref, dir, path.join).map((p) => ({ path: p, stat: statOrNull(p) }))));
+  return { statuses, masksMissing, mediaStatuses };
 }
 
 /**
@@ -1189,14 +1202,15 @@ function openProject(filePath) {
   // as the project it is a copy of.
   if (parsed.autosave) return openAutosave(filePath, parsed);
 
-  const { statuses, masksMissing } = resolveSources(parsed, path.dirname(filePath));
+  const { statuses, masksMissing, mediaStatuses } = resolveSources(parsed, path.dirname(filePath));
   const name = path.basename(filePath, '.' + PROJECT_EXT);
   // Opening is when the app learns this project exists, so it claims here too.
   // The identity to match on is what the file says it was last called, which is
   // what catches a .lwc renamed from outside the app: the claim still carries
   // that name and the two agree without ever having met.
   writeClaim(filePath, name,
-    parsed.doc.layers.map((l) => (statuses[l.id] && statuses[l.id].path) || l.src),
+    [...parsed.doc.layers.map((l) => (statuses[l.id] && statuses[l.id].path) || l.src),
+      ...parsed.doc.media.map((m, i) => (mediaStatuses[i] && mediaStatuses[i].path) || m.src)],
     { path: filePath, name: parsed.meta.name });
   return {
     ok: true,
@@ -1210,6 +1224,7 @@ function openProject(filePath) {
     history: parsed.history,
     statuses,
     masksMissing,
+    mediaStatuses,
   };
 }
 
@@ -1416,7 +1431,7 @@ ipcMain.handle('autosave:forget', () => {
  * own; the file it came from has its own claim from when it was saved.
  */
 function openAutosave(filePath, parsed) {
-  const { statuses, masksMissing } = resolveSources(parsed, null);
+  const { statuses, masksMissing, mediaStatuses } = resolveSources(parsed, null);
   const origin = parsed.autosave.origin;
   let home = null;
   let savedDoc = null;
@@ -1426,8 +1441,17 @@ function openAutosave(filePath, parsed) {
       const own = projectFile.parse(fs.readFileSync(home, 'utf8'));
       // Its layers pointed where opening it would point them.
       if (own.ok && !own.autosave) {
-        const found = resolveSources(own, path.dirname(home)).statuses;
-        savedDoc = { ...own.doc, layers: projectFile.applyStatuses(own.doc, found).layers };
+        const resolved = resolveSources(own, path.dirname(home));
+        const found = resolved.statuses;
+        savedDoc = {
+          ...own.doc,
+          layers: projectFile.applyStatuses(own.doc, found).layers,
+          // V4.5. Its media where opening it would find them.
+          media: own.doc.media.map((m, i) => {
+            const st = resolved.mediaStatuses[i];
+            return st && st.state === 'ok' ? { ...m, src: st.path } : m;
+          }),
+        };
       }
     } catch {
       // Unreadable now. Everything restored counts as unsaved, which it may be.
@@ -1456,6 +1480,7 @@ function openAutosave(filePath, parsed) {
     history: parsed.history,
     statuses,
     masksMissing,
+    mediaStatuses,
     restored: { from: filePath, savedAt: parsed.meta.savedAt },
     savedDoc,
   };
@@ -1505,6 +1530,41 @@ ipcMain.handle('dialog:openMedia', async () => {
   });
   if (result.canceled || !result.filePaths.length) return { ok: false, cancelled: true };
   return describeMedia(result.filePaths[0]);
+});
+
+// V4.5. Project Media's Add Media: any number of files, media only, since a
+// project is opened rather than added.
+ipcMain.handle('dialog:pickMedia', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: t('Add Media'),
+    defaultPath: toolPaths.cacheDir(),
+    properties: ['openFile', 'multiSelections'],
+    filters: [
+      {
+        name: t('Audio, video and images'),
+        extensions: [...VIDEO_EXTS, ...AUDIO_EXTS, ...IMAGE_EXTS].map((e) => e.slice(1)),
+      },
+      { name: t('All files'), extensions: ['*'] },
+    ],
+  });
+  return result.canceled ? [] : result.filePaths;
+});
+
+// V4.5. A Project Media tile's picture: one frame of a video, cached like the
+// filmstrips.
+ipcMain.handle('media:poster', async (_event, { filePath, duration }) => {
+  try {
+    return { ok: true, file: await filmstrip.posterFor(filePath, duration) };
+  } catch (e) {
+    return { ok: false, error: String(e.message || e) };
+  }
+});
+
+// V4.5. View > Toggle Fullscreen (F11), for the main window.
+ipcMain.handle('window:toggleFullscreen', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  mainWindow.setFullScreen(!mainWindow.isFullScreen());
+  return mainWindow.isFullScreen();
 });
 
 ipcMain.handle('window:isMaximized', () =>
