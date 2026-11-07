@@ -583,13 +583,25 @@ function maskPicture(mask) {
   return null;
 }
 
-// V3.3. What a popped out crop window is doing, for the main window's preview
-// to show: { layerId, layerNow } draws that layer as the crop window's Accept
-// would leave it, at whatever moment the playhead is on, and { frame } is a
-// Render Frame draft, drawn as an outline with everything outside it dimmed.
-// Null when no crop window is open. Only drawComposite reads it, so the crop
-// windows' own stages and the trim frames are drawn as they always were.
-let popoutPreview = null;
+// V3.3. What a popped out editor window is doing, for the main window's
+// preview to show: { layerId, layerNow } draws that layer as the window's
+// Accept would leave it, at whatever moment the playhead is on, and { frame }
+// is a Render Frame draft, drawn as an outline with everything outside it
+// dimmed. V3.8.2: one per window, by the window's own key, since several can
+// be open at once; empty when none is. Only drawComposite reads them, so the
+// editors' own stages and the trim frames are drawn as they always were.
+const popoutPreviews = new Map();
+
+/** A window's draft for the preview, replacing its last. */
+function setPopoutPreview(owner, entry) {
+  popoutPreviews.set(owner, entry);
+}
+
+/** A window's draft taken off the preview, which is drawn again if it had one. */
+function clearPopoutPreview(owner) {
+  if (!popoutPreviews.delete(owner)) return;
+  drawComposite();
+}
 
 function paintLayers(ctx, canvas, at, only, skip, drafts = null) {
   ctx.fillStyle = '#000';
@@ -625,7 +637,8 @@ function paintLayers(ctx, canvas, at, only, skip, drafts = null) {
     if (alpha <= 0) continue;
     ctx.globalAlpha = alpha;
     // V3.3. The layer a crop window is editing, as its Accept would leave it.
-    const shown = (drafts && l.id === drafts.layerId && drafts.layerNow()) || l;
+    const draft = drafts && drafts.get(l.id);
+    const shown = (draft && draft()) || l;
     drawLayerInto(ctx, canvas, shown, undefined, undefined, at);
     ctx.globalAlpha = 1;
   }
@@ -658,9 +671,15 @@ function drawComposite() {
   // canvas keeps the last full composite. Clearing it to black instead would be
   // less use than the stale picture, not more.
   if (compositeScrub && !only) return;
-  const p = popoutPreview;
-  paintLayers(compositeCtx, compositeCanvas, compositeAt, only, null, p && p.layerId ? p : null);
-  if (p && p.frame) drawFrameDraft(compositeCtx, compositeCanvas, p.frame);
+  // Each window's layer as its Accept would leave it, by the layer's id.
+  const drafts = new Map();
+  let frame = null;
+  for (const p of popoutPreviews.values()) {
+    if (p.layerId) drafts.set(p.layerId, p.layerNow);
+    if (p.frame) frame = p.frame;
+  }
+  paintLayers(compositeCtx, compositeCanvas, compositeAt, only, null, drafts.size ? drafts : null);
+  if (frame) drawFrameDraft(compositeCtx, compositeCanvas, frame);
 }
 
 // Standing still: every covering layer on its exact frame, everything else

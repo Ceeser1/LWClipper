@@ -207,7 +207,7 @@ function splitSelected(at) {
   // V3.3. The track a crop window is open on asks first.
   const id = selectedLayerId;
   // V3.6.2. And so does the track a media window is open on.
-  return confirmPopoutConflict([cropWindowOn(id) && cropWindowConflict(), genWindowOn(id) && genWindowConflict()], () => {
+  return confirmPopoutConflict([cropWindowOn(id) && cropWindowConflict(), genWindowConflict(id)], () => {
     const now = timelineModel.splitLayer(layers, id, at);
     if (now === layers) return false;
     setLayers(now);
@@ -298,12 +298,53 @@ function deleteSelected() {
   if (selectedKeyframe) return deleteSelectedKeyframe();
   const next = timelineModel.removeLayer(layers, selectedLayerId);
   if (next.length === layers.length) return false;
-  // V3.3. The user: "if you are trying to delete a track while a
-  // crop/keyframe window is open it must show a warning modal".
-  const id = selectedLayerId;
-  // V3.6.2. And so does the track a media window is open on.
-  return confirmPopoutConflict([cropWindowOn(id) && cropWindowConflict(), genWindowOn(id) && genWindowConflict()], () => {
-    const now = timelineModel.removeLayer(layers, id);
+  // V3.8.2. A grouped track asks first: its partner goes with it or is left.
+  const group = timelineModel.groupOf(layers, selectedLayerId);
+  if (group.length > 1) {
+    const id = selectedLayerId;
+    return confirmGroupedDelete(t('This track is grouped.'),
+      () => deleteTracks([id], group[0].groupId),
+      () => deleteTracks(group.map((l) => l.id), null));
+  }
+  return deleteTracks([selectedLayerId], null);
+}
+
+/**
+ * V3.8.2. The question before a delete would take a track out of its group, or
+ * a row holding grouped tracks. One line of text; Cancel on the left in the
+ * ordinary button colour, and on the right Delete Group, which takes the
+ * connected tracks too, and Delete Single, which takes only what was pointed
+ * at and disbands the group. A click outside answers Cancel, which showChoice's
+ * backdrop already does. Answers true at once, as a delete that is on its way.
+ */
+function confirmGroupedDelete(warning, onSingle, onGroup) {
+  showChoice({
+    title: t('Warning'),
+    message: warning + ' ' + t('Are you sure you want to delete it?'),
+    buttons: [
+      { id: 'cancel', label: t('Cancel'), left: true },
+      { id: 'group', label: t('Delete Group'), tone: 'danger' },
+      { id: 'single', label: t('Delete Single'), tone: 'danger' },
+    ],
+    cancel: 'cancel',
+  }).then((choice) => {
+    if (choice === 'single') onSingle();
+    else if (choice === 'group') onGroup();
+  });
+  return true;
+}
+
+/**
+ * V3.8.2. These tracks out of the document, one undo step. `disband` is a
+ * group id to dissolve in what is left, for a track deleted on its own out of
+ * a group; the windows open on any of them are asked about first.
+ */
+function deleteTracks(ids, disband) {
+  const conflicts = ids.flatMap((id) => [cropWindowOn(id) && cropWindowConflict(), genWindowConflict(id)]);
+  return confirmPopoutConflict(conflicts, () => {
+    let now = layers;
+    for (const id of ids) now = timelineModel.removeLayer(now, id);
+    if (disband) now = timelineModel.ungroup(now, disband);
     if (now.length === layers.length) return false;
     setLayers(now);
     commitHistory();
@@ -317,9 +358,18 @@ function deleteSelected() {
 // it, so the browser's own answer is not swallowed for nothing.
 document.addEventListener('keydown', (evt) => {
   if (modalOpen() || typingInto(document.activeElement)) return;
-  if (!timelineDriving()) return;
   const key = String(evt.key).toLowerCase();
   const ctrl = evt.ctrlKey || evt.metaKey;
+  // V3.8.2. Ctrl+A with the timeline clicked chooses every clip and nothing of
+  // the page round it: the browser's select-all is always taken here, even
+  // when there are no clips to choose.
+  if (ctrl && !evt.altKey && !evt.shiftKey && key === 'a' && timelineClicked) {
+    evt.preventDefault();
+    window.getSelection().removeAllRanges();
+    if (timelineDriving() && layers.length) setLayerSelection(layers.map((l) => l.id), selectedLayerId);
+    return;
+  }
+  if (!timelineDriving()) return;
   let done = false;
   if (ctrl && !evt.altKey && !evt.shiftKey && key === 'c') {
     done = copySelected();
@@ -430,23 +480,26 @@ function subMenuEntry(menu, label, enabled, fill) {
  */
 function addGenMedia(form, at, variant) {
   if (!timelineDriving() || busy) return;
-  // V3.6.2. Its settings open in a window, and only one editor window at a
-  // time: asked before anything is added, so Abort adds nothing.
-  if (!cropModal.hidden || !renderModal.hidden || genWindowOpen()) {
-    confirmPopoutConflict(editorWindowConflicts(), () => addGenMedia(form, at, variant));
+  // V3.6.2. Its settings open in a window, asked about before anything is
+  // added, so Abort adds nothing. V3.8.2: only the same kind of window being
+  // open, or Crop Render Frame, is in the way.
+  const conflicts = genOpenConflicts(GEN_KINDS[form].modal());
+  if (conflicts.some(Boolean)) {
+    confirmPopoutConflict(conflicts, () => addGenMedia(form, at, variant));
     return;
   }
   const gen = GEN_KINDS[form].starter(variant);
   const rows = rowsOf('video');
-  genAddBefore = { layers, rows: laneRows.video, selected: selectedLayerId };
+  const before = { layers, rows: laneRows.video, selected: selectedLayerId };
   const added = timelineModel.addGen(layers, gen, at, rows);
   if (added.inserted) laneRows.video = rows + 1;
   selectedLayerId = added.layer.id;
   setLayers(added.layers);
   // V3.6.2. What the add made, so its Cancel can tell whether anything has
   // happened since, see cancelGenAdd.
-  genAddBefore.after = layers;
-  genAddBefore.id = added.layer.id;
+  before.after = layers;
+  before.id = added.layer.id;
+  genAddBefore.set(added.layer.id, before);
   openGenSettings(added.layer.id, true);
 }
 
@@ -584,6 +637,8 @@ function showChoice({ title, message, footer, entries, checks, single, onCheck, 
     // out of it. The app has not had a coloured answer until now, because every
     // other question in here is answered by buttons that are all reversible.
     if (button.tone) node.dataset.tone = button.tone;
+    // V3.8.2. A button kept to the left, the rest staying on the right.
+    if (button.left) node.classList.add('choice-buttons__left');
     node.addEventListener('click', () => settleChoice(button.id));
     choiceButtons.appendChild(node);
   }
@@ -1103,12 +1158,10 @@ document.addEventListener('keydown', (evt) => {
       || (target.height && target.height !== compositeFrame.height));
   // V3.6.2. And so does one that would change the track a media window is
   // open on. (The mask is the crop window's since 3.6.2, so cropHit has it.)
-  const genId = genWindowLayerId();
-  const genHit = !!genId
-    && JSON.stringify(timelineModel.layerById(layers, genId) || null)
-      !== JSON.stringify(target.layers.find((l) => l.id === genId) || null);
+  const genHits = genWindowLayerIds().filter((genId) => JSON.stringify(timelineModel.layerById(layers, genId) || null)
+    !== JSON.stringify(target.layers.find((l) => l.id === genId) || null));
   confirmPopoutConflict([cropHit && cropWindowConflict(), frameHit && renderWindowConflict(),
-    genHit && genWindowConflict()], () => {
+    ...genHits.map(genWindowConflict)], () => {
     // Asked about one step; if anything moved the stack meanwhile, nothing.
     if ((redoing ? projectHistory.redo(undoStack) : projectHistory.undo(undoStack)).present !== target) return;
     applyHistory(redoing ? projectHistory.redo(undoStack) : projectHistory.undo(undoStack));

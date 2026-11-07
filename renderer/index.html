@@ -290,6 +290,12 @@
              After the lane in the markup, so it is above it for a press. -->
         <div id="layersSplitter" class="layers-splitter" role="separator"
              aria-orientation="vertical"></div>
+        <!-- V3.8.2. Sideways scroll, shown while a track lies out of the view to
+             the left or the right: the browser's own scroll bar, so it matches
+             the stack's vertical one. Under the lane, as wide as it is. -->
+        <div id="timelineHBar" class="timeline-hbar" hidden>
+          <div id="timelineHSpan" class="timeline-hbar__span"></div>
+        </div>
       </div>
     </section>
 
@@ -490,7 +496,6 @@
           <div id="placeHint" class="hint-label" hidden>Drag the picture to place it, and the scale to resize it</div>
           <div id="placeZoomHint" class="hint-label" hidden>Scroll to zoom, drag empty space or with the middle button to pan, double-click empty space to fit the frame</div>
           <div id="maskHint" class="hint-label" hidden>Drag the sides to stretch the mask, a corner to scale it and inside it to move it, hold Shift to keep its centre</div>
-          <div id="maskGradHint" class="hint-label" hidden>Right-click somewhere on the preview and drag any direction to apply a gradient</div>
           <div id="maskZoomHint" class="hint-label" hidden>Scroll to zoom, drag empty space or with the middle button to pan, double-click empty space to fit the frame</div>
           <div id="cropKeysHint" class="hint-label" hidden>Keyframes: click one to edit it, drag one to move it, press or drag the bar to move the playhead, double-click the bar to add one, right-click one to delete it</div>
         </div>
@@ -576,18 +581,6 @@
              left column from the stage's left edge, the right one from its
              middle. -->
         <div id="maskGrid" class="gen-grid mask-grid">
-          <!-- V3.7.1. The user: "Layer masks have no color or gradient option
-               yet, add them". How much of the picture it shows: a colour's
-               brightness and alpha, white showing and black hiding, or a
-               gradient of them, Shape Settings' own pair. -->
-          <div class="gen-field">
-            <div id="maskFill" class="gen-choice shape-fill">
-              <button data-fill="color">Color</button>
-              <button data-fill="gradient">Gradient</button>
-            </div>
-            <button id="maskColorBtn" class="color-swatch"><span class="color-swatch__fill"></span></button>
-            <span id="maskFillHint" class="shape-fill-hint" hidden>Modify your gradient below</span>
-          </div>
           <div class="gen-field">
             <label class="gen-check gen-check--field"><input id="maskInvert" type="checkbox" /> Invert Mask</label>
           </div>
@@ -623,6 +616,18 @@
             <input id="maskRadiusBox" class="gen-num" type="text" inputmode="numeric" maxlength="4" />
             <span class="gen-field__unit">px</span>
           </div>
+          <!-- V3.7.1. The user: "Layer masks have no color or gradient option
+               yet, add them". How much of the picture it shows: a colour's
+               brightness and alpha, white showing and black hiding, or a
+               gradient of them, Shape Settings' own pair. -->
+          <div class="gen-field gen-field--fill">
+            <div id="maskFill" class="gen-choice shape-fill">
+              <button data-fill="color">Color</button>
+              <button data-fill="gradient">Gradient</button>
+            </div>
+            <button id="maskColorBtn" class="color-swatch"><span class="color-swatch__fill"></span></button>
+            <span id="maskFillHint" class="shape-fill-hint" hidden>Modify your gradient below</span>
+          </div>
         </div>
         <!-- V3.7.1. The mask's gradient, Shape Settings' editor: the bar as
              wide as the preview, then Start and End in the picture's pixels
@@ -642,6 +647,7 @@
             <input id="maskGradAngle" class="gen-num gen-num--scrub" type="text" inputmode="numeric" maxlength="4" />
             <span class="gen-field__unit gen-field__unit--deg"></span>
           </div>
+          <div id="maskGradHelp" class="gradient-help hint-label">Gradient: Double click the gradient bar to add a color point, right click one to remove. To apply a gradient: Right-click somewhere on the preview and drag any direction.</div>
         </div>
         <div id="maskStage" class="gen-stage">
           <canvas id="maskCanvas" class="gen-canvas"></canvas>
@@ -846,7 +852,6 @@
         <button class="info-tip__btn" type="button" tabindex="-1">Info</button>
         <div class="info-tip__pop">
           <div id="shapeHint" class="hint-label">Drag the sides to stretch the shape, a corner to scale it, inside it to move it and the dot above it to turn it, hold Shift to keep its centre</div>
-          <div id="shapeGradHint" class="hint-label" hidden>Right-click somewhere on the preview and drag any direction to apply a gradient</div>
           <div class="hint-label">Scroll to zoom, drag empty space or with the middle button to pan, double-click empty space to fit the frame</div>
           <div class="hint-label">Keyframes: click one to edit it, drag one to move it, press or drag the bar to move the playhead, double-click the bar to add one, right-click one to delete it</div>
         </div>
@@ -866,17 +871,6 @@
       <!-- V3.5. Two by two like the bar's, and a third row for what only a
            ring or a star has, shown for that kind alone. -->
       <div class="gen-grid">
-        <!-- V3.7. The user: "Make shapes Color a 2-way button selector Color |
-             Gradient. Color only shows the clickable color display/selector
-             button, gradient adds hint Modify your gradient below instead". -->
-        <div class="gen-field">
-          <div id="shapeFill" class="gen-choice shape-fill">
-            <button data-fill="color">Color</button>
-            <button data-fill="gradient">Gradient</button>
-          </div>
-          <button id="shapeColorBtn" class="color-swatch"><span class="color-swatch__fill"></span></button>
-          <span id="shapeFillHint" class="shape-fill-hint" hidden>Modify your gradient below</span>
-        </div>
         <div class="gen-field">
           <label class="gen-check gen-check--field"><input id="shapeInvert" type="checkbox" /> Invert Shape</label>
         </div>
@@ -918,6 +912,17 @@
           <input id="shapeRadiusBox" class="gen-num" type="text" inputmode="numeric" maxlength="4" />
           <span class="gen-field__unit">px</span>
         </div>
+        <!-- V3.7. The user: "Make shapes Color a 2-way button selector Color |
+             Gradient. Color only shows the clickable color display/selector
+             button, gradient adds hint Modify your gradient below instead". -->
+        <div class="gen-field gen-field--fill">
+          <div id="shapeFill" class="gen-choice shape-fill">
+            <button data-fill="color">Color</button>
+            <button data-fill="gradient">Gradient</button>
+          </div>
+          <button id="shapeColorBtn" class="color-swatch"><span class="color-swatch__fill"></span></button>
+          <span id="shapeFillHint" class="shape-fill-hint" hidden>Modify your gradient below</span>
+        </div>
       </div>
       <!-- V3.7. The gradient, in Gradient only: its colours on a bar as wide
            as the preview, white into black to start with, a dot at each stop
@@ -941,6 +946,7 @@
           <input id="shapeGradAngle" class="gen-num gen-num--scrub" type="text" inputmode="numeric" maxlength="4" />
           <span class="gen-field__unit gen-field__unit--deg"></span>
         </div>
+        <div id="shapeGradHelp" class="gradient-help hint-label">Gradient: Double click the gradient bar to add a color point, right click one to remove. To apply a gradient: Right-click somewhere on the preview and drag any direction.</div>
       </div>
       <div id="shapeStage" class="gen-stage">
         <canvas id="shapeCanvas" class="gen-canvas"></canvas>
@@ -994,7 +1000,7 @@
       <div class="info-tip">
         <button class="info-tip__btn" type="button" tabindex="-1">Info</button>
         <div class="info-tip__pop">
-          <div id="textHint" class="hint-label" hidden>Drag the sides to size the text box and inside it to move it, hold Shift to move opposite sides together, drag a corner to turn it</div>
+          <div id="textHint" class="hint-label" hidden>Drag the sides to size the text box, inside it to move it, a corner to size two sides together and the dot above it to turn it, hold Shift to move opposite sides together</div>
           <div class="hint-label">Scroll to zoom, drag empty space or with the middle button to pan, double-click empty space to fit the frame</div>
           <div class="hint-label">Keyframes: click one to edit it, drag one to move it, press or drag the bar to move the playhead, double-click the bar to add one, right-click one to delete it</div>
         </div>
@@ -1036,7 +1042,7 @@
         </div>
       </div>
       <div id="textModes" class="gen-choice text-modes">
-        <button data-mode="edit">Edit</button>
+        <button data-mode="edit">Edit Text</button>
         <button data-mode="render">Render Preview</button>
       </div>
       <div id="textStage" class="gen-stage">
@@ -1056,10 +1062,16 @@
           <div class="crop-grip crop-grip--right" data-edge="right"></div>
           <div class="crop-grip crop-grip--top" data-edge="top"></div>
           <div class="crop-grip crop-grip--bottom" data-edge="bottom"></div>
-          <div class="crop-corner crop-corner--tl text-rotor" data-corner="tl"></div>
-          <div class="crop-corner crop-corner--tr text-rotor" data-corner="tr"></div>
-          <div class="crop-corner crop-corner--bl text-rotor" data-corner="bl"></div>
-          <div class="crop-corner crop-corner--br text-rotor" data-corner="br"></div>
+          <div class="crop-corner crop-corner--tl" data-corner="tl"></div>
+          <div class="crop-corner crop-corner--tr" data-corner="tr"></div>
+          <div class="crop-corner crop-corner--bl" data-corner="bl"></div>
+          <div class="crop-corner crop-corner--br" data-corner="br"></div>
+          <!-- V3.8.2. The user: "Add the same rotate-knob to the texts render
+               preview as for crop and mask and the corners scale 2 sides
+               together again". Shape Settings' dot, above the middle of the
+               top side and inside the box, so it turns with it. -->
+          <div class="shape-rotor-line"></div>
+          <div id="textRotor" class="shape-rotor text-rotor"></div>
         </div>
         <div id="textAngle" class="text-angle" data-no-translate hidden></div>
       </div>

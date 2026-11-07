@@ -576,9 +576,10 @@ function styleTextEdit() {
   textFrame.style.top = (r.top + (box ? box.y * k : 0)) + 'px';
   textFrame.style.width = (box ? box.w * k : r.width) + 'px';
   textFrame.style.height = (box ? box.h * k : r.height) + 'px';
-  // 31b. Turned with the text, about the same centre, so the words are typed
-  // where the render puts them.
-  textFrame.style.transform = d.text.rotation ? 'rotate(' + d.text.rotation + 'deg)' : '';
+  // V3.8.2. The user: "In Edit Text window while on Edit show the text
+  // not-rotated". Typed upright, whatever turn the text has; Render Preview
+  // shows it turned, as the export will.
+  textFrame.style.transform = '';
   textFrame.dataset.v = d.text.align.v;
   // 31a. A box of its own is outlined, so the width the lines wrap at shows
   // while typing too.
@@ -882,6 +883,44 @@ for (const grip of textBoxEl.querySelectorAll('.crop-grip')) {
   });
 }
 
+// V3.8.2. A corner sizes the two sides it joins together, as it did before
+// the corners turned the text (31b); the dot above the box turns it now.
+// Shift moves the opposite sides along as well, so the box grows about its
+// centre. A turned box's sides move along its own axes.
+for (const corner of textBoxEl.querySelectorAll('.crop-corner')) {
+  const name = corner.dataset.corner;
+  const sideH = name.includes('l') ? 'left' : 'right';
+  const sideV = name.includes('t') ? 'top' : 'bottom';
+  corner.addEventListener('pointerdown', (evt) => {
+    if (evt.button !== 0 || !textDraft) return;
+    // Or the box underneath would take it as a move as well.
+    evt.stopPropagation();
+    const start = textBoxNow();
+    const frame = projectFrame();
+    const s = textStageScale();
+    const turn = textDraft.text.rotation;
+    const a = turn * Math.PI / 180;
+    const x0 = evt.clientX;
+    const y0 = evt.clientY;
+    beginDrag(corner, evt, (ev) => {
+      const dx = (ev.clientX - x0) / s;
+      const dy = (ev.clientY - y0) / s;
+      if (turn) {
+        const h = layerGeometry.textBoxEdgeTurned(start, sideH, dx * Math.cos(a) + dy * Math.sin(a),
+          ev.shiftKey, turn, frame).box;
+        setTextBox(layerGeometry.textBoxEdgeTurned(h, sideV, -dx * Math.sin(a) + dy * Math.cos(a),
+          ev.shiftKey, turn, frame).box);
+        return;
+      }
+      const reach = TEXT_BOX_SNAP / s;
+      const h = layerGeometry.textBoxEdge(start, sideH, dx, ev.shiftKey, frame, reach);
+      const v = layerGeometry.textBoxEdge(h.box, sideV, dy, ev.shiftKey, frame, reach);
+      showTextGuides(h.snap, v.snap);
+      setTextBox(v.box);
+    }, () => showTextGuides(null, null));
+  });
+}
+
 textBoxEl.addEventListener('pointerdown', (evt) => {
   if (evt.button !== 0 || !textDraft || evt.target !== textBoxEl) return;
   const start = textBoxNow();
@@ -901,7 +940,7 @@ textBoxEl.addEventListener('pointerdown', (evt) => {
 
 // ---- 31b. Rotation ----
 //
-// Any corner circle turns the text about the box's centre, by as far as the
+// V3.8.2: the dot above the box, no longer a corner circle, turns the text about the box's centre, by as far as the
 // pointer goes round that centre, in whole degrees, landing on a quarter turn
 // within two of one. The angle shows by the centre while it is dragged.
 
@@ -1184,15 +1223,24 @@ textColorBtn.addEventListener('click', async () => {
   const start = textFull;
   const pending = textPending;
   const pendingAt = textPendingAt;
+  // V3.8.2. The user: "Applying a color to any text doesnt work anymore". Each
+  // colour the picker shows lays itself over the runs and draws the box again,
+  // which puts the caret at the start, and the selection followed it there: by
+  // Accept the target was a bare caret, which only sets the style for letters
+  // typed next. The selection the picker was opened on is the target for all
+  // of it.
+  const sel = { ...textSel };
   const put = (color) => {
+    textSel = { ...sel };
     textPending = pending;
     textPendingAt = pendingAt;
     formatText({ color }, null, start);
   };
   const picked = await pickColor(textShown().style.color, (color) => {
     if (textLayerId === id) put(color);
-  });
+  }, textModal);
   if (textLayerId !== id) return;
+  textSel = { ...sel };
   textPending = pending;
   textPendingAt = pendingAt;
   setTextRuns(start);
@@ -1225,8 +1273,9 @@ textAcceptBtn.addEventListener('click', () => {
 
 function cancelTextSettings() {
   const first = textFirst;
+  const id = textLayerId;
   closeTextSettings();
-  if (first) cancelGenAdd();
+  if (first) cancelGenAdd(id);
 }
 
 textCancelBtn.addEventListener('click', cancelTextSettings);

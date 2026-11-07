@@ -146,6 +146,7 @@ function makeGradientEditor(o) {
       dot.title = t('Color');
       o.bar.appendChild(dot);
       bindStop(dot, i);
+      bindStopRemove(dot, i);
     });
   }
 
@@ -180,6 +181,19 @@ function makeGradientEditor(o) {
         }
         o.set({ stops: stopsNow().sort((p, q) => p.at - q.at) }, false);
       });
+    });
+  }
+
+  // V3.8.2. The user: "Right-clicking a dot on the gradient bar should remove
+  // it (first left and last right must always stay)". The two ends of the bar
+  // keep their dots, so there are never fewer than two.
+  function bindStopRemove(dot, index) {
+    dot.addEventListener('contextmenu', (evt) => {
+      evt.preventDefault();
+      evt.stopPropagation();
+      const g = o.get();
+      if (!g || index <= 0 || index >= g.stops.length - 1) return;
+      o.set({ stops: g.stops.filter((_, i) => i !== index) }, false);
     });
   }
 

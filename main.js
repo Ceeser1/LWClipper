@@ -347,7 +347,10 @@ ipcMain.handle('popout:fit', (_event, { name, height }) => {
  * still on a screen, or else a size that suits a crop, over the main window.
  */
 function popoutBounds(name) {
-  const saved = (settings.get('popoutBounds') || {})[name];
+  const spots = settings.get('popoutBounds') || {};
+  // V3.8.2. Bar Settings, Shape Settings and Edit Text were one window, named
+  // media, until they could be open together; each starts where it was left.
+  const saved = spots[name] || (/^lwc-pop-(bar|shape|text)$/.test(name) ? spots['lwc-pop-media'] : null);
   if (saved && [saved.x, saved.y, saved.width, saved.height].every(Number.isFinite)) {
     const onScreen = screen.getAllDisplays().some((d) => {
       const a = d.workArea;

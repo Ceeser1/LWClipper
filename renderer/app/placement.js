@@ -199,7 +199,6 @@ function showCropViewParts(tab) {
   placeScaleRow.hidden = !place;
   maskHint.hidden = !mask;
   maskZoomHint.hidden = !mask;
-  maskGradHint.hidden = !mask || !maskGradientOn();
   // V3.6.4. The keyframe strip is under whichever stage is up, and Video
   // Frame's already has its lower arrow's room under it.
   cropKeys.dataset.view = tab;
@@ -1340,14 +1339,14 @@ function openCrop(layerId, tab = 'frame', addMask = false) {
   // be asked for with one already open. On the same layer and keyframe it is
   // brought forward; anything else asks before the open one is thrown away,
   // and so does Crop Render Frame, whose Accept would move the frame under it.
-  // V3.6.2. And so does an open media window, which shows its draft in the
-  // same preview.
-  if (!cropModal.hidden || !renderModal.hidden || genWindowOpen()) {
+  // V3.8.2. A media window open beside it is no longer in the way: they are
+  // other tracks' windows, and each shows its own draft in the preview.
+  if (!cropModal.hidden || !renderModal.hidden) {
     const want = timelineDriving()
       ? ((layerId && timelineModel.layerById(layers, layerId)) || cropTargetLayer())
       : null;
     const same = !cropModal.hidden && (!timelineDriving() || sameCropTarget(want));
-    if (same && renderModal.hidden && !genWindowOpen()) {
+    if (same && renderModal.hidden) {
       focusPopOut(cropModal);
       // Brought forward on the view asked for.
       if (tab !== cropTab) showCropTab(tab);
@@ -1360,7 +1359,6 @@ function openCrop(layerId, tab = 'frame', addMask = false) {
         close: closeCrop,
       },
       renderWindowConflict(),
-      genWindowConflict(),
     ], () => openCrop(layerId, tab, addMask));
     return;
   }
@@ -1518,7 +1516,7 @@ function previewCropDraft() {
   if (!cropLayerId || !timelineModel.layerById(layers, cropLayerId)) return;
   // Built at every draw rather than held, so a clip moved or trimmed in the
   // main window is drawn where it now is, not where the last tick left it.
-  popoutPreview = { layerId: cropLayerId, layerNow: () => cropDraftLayer(render) };
+  setPopoutPreview('crop', { layerId: cropLayerId, layerNow: () => cropDraftLayer(render) });
   // Playing, the compositor's own tick draws it at its rate.
   if (!compositePlaying) drawComposite();
 }
@@ -1575,10 +1573,7 @@ function closeCrop() {
   placeAngle.hidden = true;
   const wasPopped = isPoppedOut(cropModal);
   popIn(cropModal);
-  if (popoutPreview) {
-    popoutPreview = null;
-    drawComposite();
-  }
+  clearPopoutPreview('crop');
   if (wasPopped && !timelineDriving()) updateCropOverlays();
   cropModal.hidden = true;
   // V3.7. The clip's draft goes with the window, Accept having written it.

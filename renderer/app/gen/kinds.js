@@ -19,6 +19,7 @@ const GEN_KINDS = {
     label: () => t('Text'),
     settingsTitle: () => t('Edit Text'),
     starter: () => ({ form: 'text', text: { runs: [{ text: t('Text'), style: {} }] } }),
+    modal: () => textModal,
     open: (layer, first) => openTextSettings(layer, first),
     name: (gen) => {
       const text = genWords(gen);
@@ -30,6 +31,7 @@ const GEN_KINDS = {
     label: () => t('Bar'),
     settingsTitle: () => t('Bar Settings'),
     starter: () => ({ form: 'bar' }),
+    modal: () => barModal,
     open: (layer, first) => openBarSettings(layer, first),
     name: () => t('Bar'),
     drawClip: (...args) => drawClipBar(...args),
@@ -43,6 +45,7 @@ const GEN_KINDS = {
     label: () => t('Shape'),
     settingsTitle: () => t('Shape Settings'),
     starter: () => ({ form: 'shape', shape: { kind: 'circle' } }),
+    modal: () => shapeModal,
     open: (layer, first) => openShapeSettings(layer, first),
     name: (gen) => shapeName(gen.shape.kind),
     drawClip: (...args) => drawClipShape(...args),
@@ -87,29 +90,31 @@ function openGenSettings(id, first) {
   const layer = timelineModel.layerById(layers, id);
   if (!layer || layer.kind !== 'gen') return;
   // V3.6.2. Its window open on this layer and on the same keyframe is brought
-  // forward; any other editor window open asks first, as the crop windows do.
-  if (!first && (genWindowOpen() || !cropModal.hidden || !renderModal.hidden)) {
-    if (genWindowOn(id) && cropModal.hidden && renderModal.hidden && sameGenTarget(layer)) {
-      focusPopOut(genWindow.modal);
+  // forward. V3.8.2: the same kind of window open on another layer asks
+  // first, as the crop windows do, and so does Crop Render Frame; the other
+  // editor windows are left alone.
+  if (!first) {
+    const own = genCtxOf(id);
+    if (own && own.modal && sameGenTarget(layer)) {
+      focusPopOut(own.modal);
       return;
     }
-    confirmPopoutConflict(editorWindowConflicts(), () => openGenSettings(id, false));
-    return;
+    const conflicts = genOpenConflicts(genKind(layer.gen).modal());
+    if (conflicts.some(Boolean)) {
+      confirmPopoutConflict(conflicts, () => openGenSettings(id, false));
+      return;
+    }
   }
   // V3.3. On a layer with keyframes the modal edits the one at the playhead,
   // or a new one there, the same rule as the crop popup. It is handed the
   // layer as that keyframe has it, so no modal has to know about keyframes;
   // acceptGenSettings sorts what comes back.
-  genKeyframe = first ? null : genKeyframeToEdit(layer);
   // V3.7. The window's draft of the whole clip, its keyframes and all.
-  startGenWork(layer);
-  const shown = genKeyframe ? { ...layer, gen: timelineModel.withKeyed(layer.gen, genKeyframe) } : layer;
+  const ctx = startGenWork(layer);
+  ctx.keyframe = first ? null : genKeyframeToEdit(layer);
+  const shown = ctx.keyframe ? { ...layer, gen: timelineModel.withKeyed(layer.gen, ctx.keyframe) } : layer;
   genKind(layer.gen).open(shown, first);
 }
-
-// V3.3. The keyframe the open settings modal is editing, as a draft with the
-// layer's id, or null when the layer has none.
-let genKeyframe = null;
 
 /**
  * V3.6.2. Whether opening the media window on `layer` now would open what it
@@ -125,7 +130,8 @@ function sameGenTarget(layer) {
 // V3.3. The keyframe the open modal is on, when it is this layer's: what its
 // remembered zoom and pan are kept under.
 function genKeyframeOf(layerId) {
-  return genKeyframe && genKeyframe.layerId === layerId ? genKeyframe : null;
+  const ctx = genCtxOf(layerId);
+  return ctx && ctx.keyframe && ctx.keyframe.layerId === layerId ? ctx.keyframe : null;
 }
 
 /** What a generated layer is called where it has to be named. */

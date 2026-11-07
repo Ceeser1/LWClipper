@@ -120,7 +120,7 @@ function openFx(kind) {
   fontCombo.close();
   sizeCombo.close();
   // V3.6.2. Over the media window when it is out.
-  carryOver(fx.modal, genWindow && genWindow.modal);
+  carryOver(fx.modal, textModal);
   fx.modal.hidden = false;
   showFx(null);
   sizeGenStage(fx.stage, fx.canvas);
@@ -209,7 +209,7 @@ for (const [kind, fx] of Object.entries(FX)) {
     const was = fxDraft.color;
     const picked = await pickColor(was, (color) => {
       if (fxKind === kind) changeFx({ color }, null, true);
-    });
+    }, textModal);
     // The modal may have been closed under the picker, by Escape for one.
     if (fxKind !== kind) return;
     changeFx({ color: picked || was }, null, false);

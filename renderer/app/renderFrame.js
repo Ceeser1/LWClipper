@@ -557,7 +557,7 @@ function openRenderCrop() {
     confirmPopoutConflict([!cropModal.hidden && {
       message: t('Another crop window is open. Going on closes it and discards what it has not accepted.'),
       close: closeCrop,
-    }, genWindowConflict()], openRenderCrop);
+    }, ...genWindowConflicts()], openRenderCrop);
     return;
   }
   renderFromFrame = { ...compositeFrame };
@@ -624,7 +624,7 @@ function previewRenderDraft() {
   const key = JSON.stringify(renderDraft);
   if (key === renderPreviewKey) return;
   renderPreviewKey = key;
-  popoutPreview = { frame: { ...renderDraft } };
+  setPopoutPreview('render', { frame: { ...renderDraft } });
   drawComposite();
 }
 
@@ -634,10 +634,7 @@ function closeRenderCrop() {
   document.removeEventListener('pointermove', renderWatchPointer, true);
   // V3.3. Back from its own window, and the preview back to the frame as it is.
   popIn(renderModal);
-  if (popoutPreview) {
-    popoutPreview = null;
-    drawComposite();
-  }
+  clearPopoutPreview('render');
   renderModal.hidden = true;
   renderDraft = null;
   renderBase = null;

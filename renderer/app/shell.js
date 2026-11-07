@@ -390,6 +390,8 @@ const trimSliderEl = el('trimSlider');
 const editSplitter = el('editSplitter');
 const layersSplitter = el('layersSplitter');
 const timelineStage = el('timelineStage');
+const timelineHBar = el('timelineHBar');
+const timelineHSpan = el('timelineHSpan');
 const timelineRuler = el('timelineRuler');
 // Where time is measured from. The lane starts after the layer headers, so x
 // inside it is the same x the ruler is drawn against and the view arithmetic
@@ -417,7 +419,32 @@ const IDLE_STATUS = statusLabel.textContent;
 // here, or the switch would restore a line that has since been replaced.
 let lastStatus = null;
 
+// V3.8.2. Lines that are news rather than a state: shown for a few seconds,
+// then the line that was there before comes back. They also take the Clear
+// button out of the frame while they show, which would otherwise push them off
+// centre.
+const TRANSIENT_STATUS = { 'Project saved.': 4000 };
+let transientTimer = null;
+let transientBefore = null;
+
+function transientStatusShown() {
+  return !!lastStatus && Object.prototype.hasOwnProperty.call(TRANSIENT_STATUS, lastStatus.key);
+}
+
 function setStatus(key, vars) {
+  clearTimeout(transientTimer);
+  if (key && Object.prototype.hasOwnProperty.call(TRANSIENT_STATUS, key)) {
+    // What to put back: the line before, unless that was one of these as well.
+    if (!transientStatusShown()) transientBefore = lastStatus;
+    transientTimer = setTimeout(() => {
+      if (!transientStatusShown() || lastStatus.key !== key) return;
+      const before = transientBefore;
+      transientBefore = null;
+      setStatus(before ? before.key : IDLE_STATUS, before ? before.vars : undefined);
+    }, TRANSIENT_STATUS[key]);
+  } else {
+    transientBefore = null;
+  }
   lastStatus = key ? { key, vars } : null;
   statusLabel.textContent = key ? t(key, vars) : '';
   // V2.6. In advanced editing the frame this line lives in is only up while it
@@ -606,6 +633,9 @@ function updateMainFrame() {
   }
 
   titleSection.hidden = advanced;
+  // V3.8.2. No Clear button beside a line that only reports (Project saved.),
+  // so the line is centred in the frame, not by the button's width off it.
+  mainActions.hidden = transientStatusShown() && !busy;
   // V2.6. The merged frame is up when it has something to say and gone when it
   // has not. The drop zone around it goes with it, gap and margin and all: it
   // is the "(drag and drop zone)" of the request, and an empty layer row is the

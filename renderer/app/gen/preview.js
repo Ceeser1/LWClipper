@@ -149,18 +149,19 @@ function paintGenPreview(stage, canvas, id, gen, quick) {
 }
 
 // What addGenMedia had before it added, so Cancel on the first opening can put
-// it back: the list, the row count and the selection. Null once the add is
-// settled either way.
-let genAddBefore = null;
+// it back: the list, the row count and the selection. By the added layer's id,
+// V3.8.2, since two adds can be waiting on their first Accept together. Gone
+// once the add is settled either way.
+const genAddBefore = new Map();
 
 // The first opening's Cancel: the add taken off again, with no step of its own
 // ever having been written, so there is nothing for undo to find either.
 // V3.6.2. The main window stays usable while the media window is out, so the
 // project may have moved on since the add. Then only the added layer goes,
 // as a step of its own, and everything done meanwhile stays.
-function cancelGenAdd() {
-  const before = genAddBefore;
-  genAddBefore = null;
+function cancelGenAdd(id) {
+  const before = genAddBefore.get(id);
+  genAddBefore.delete(id);
   if (!before) return;
   if (!before.after || layers === before.after) {
     laneRows.video = before.rows;
@@ -179,16 +180,36 @@ function cancelGenAdd() {
 // The user: "Media edit should be a seperate window like crop, not a pop-up
 // modal." Bar Settings, Shape Settings and Edit Text open in a window of their
 // own, remembered where it was left, with the main window usable beside them
-// and its preview showing the draft as their Accept would leave it. One at a
-// time, and not beside the crop window or Crop Render Frame, since only one
-// window's draft can be in the main preview: opening any of them with
-// another open asks first, as the crop windows do among themselves.
+// and its preview showing the draft as their Accept would leave it.
+//
+// V3.8.2. The user: "Allow multiple windows at the same time, but not the same
+// twice. Different tracks settings or crop and mask windows dont interfere."
+// Each media window has its own state now, kept here per window in a context,
+// found by the layer it is open on or by its modal, so Bar Settings on one
+// track, Shape Settings on another, Edit Text on a third and Crop and Mask on
+// a fourth can all be open together. The same one twice is what still asks
+// first, as the crop windows do among themselves, and so does Crop Render
+// Frame, whose Accept moves the frame under all of them.
 
-// { modal, layerId, cancel, draftGen } while one is open.
-// V3.7. And changed, reload, strip and fold, see popOutGenWindow.
-let genWindow = null;
-let genPreviewKey = '';
-let genPreviewLayers = null;
+// One context per media window, by the layer it edits, from the moment its
+// draft is started. `modal` is set while the window is out, with the rest of
+// what popOutGenWindow was given: cancel, draftGen, changed, reload, strip and
+// fold. `work` is the draft of the whole clip (V3.7), `keyframe` the keyframe
+// being edited, and `session` the keyframe strip's.
+const genWindows = new Map();
+
+/** The context of the window open on this layer, or null. */
+function genCtxOf(layerId) {
+  return genWindows.get(layerId) || null;
+}
+
+/** The context of the window `modal` is out in, or null. */
+function genCtxOfModal(modal) {
+  for (const ctx of genWindows.values()) {
+    if (ctx.modal === modal) return ctx;
+  }
+  return null;
+}
 
 // ---- V3.7. The media window's draft of the whole clip ----
 //
@@ -198,42 +219,56 @@ let genPreviewLayers = null;
 // step and Cancel drops. The modal's own draft goes on being the settings at
 // the keyframe being edited; folding writes it into the clip's draft there,
 // and only when it changed since it was last read out, so a window opened and
-// stepped along its strip leaves nothing behind.
-let genWork = null;
-// The live clip's keyframes the draft's were last measured against.
-let genWorkBase = null;
-// Whether the strip or a fold has changed the clip's draft at all.
-let genWorkDirty = false;
+// stepped along its strip leaves nothing behind. `workBase` is the live
+// clip's keyframes the draft's were last measured against and `workDirty`
+// whether the strip or a fold has changed the clip's draft at all.
 
 /** The clip as the media window's draft has it, or as it is without one. */
-function genLayerNow(id = genWork && genWork.id) {
+function genLayerNow(id) {
   const live = id ? timelineModel.layerById(layers, id) : null;
-  if (!live || !genWork || genWork.id !== id) return live;
-  return { ...live, gen: genWork.gen, keyframes: genWork.keyframes };
+  const ctx = genCtxOf(id);
+  if (!live || !ctx || !ctx.work) return live;
+  return { ...live, gen: ctx.work.gen, keyframes: ctx.work.keyframes };
 }
 
+/** The draft of `layer`'s clip started, as a new context. */
 function startGenWork(layer) {
-  genWork = { id: layer.id, gen: layer.gen, keyframes: layer.keyframes };
-  genWorkBase = layer.keyframes;
-  genWorkDirty = false;
-  genSession.reset();
+  // A window closed by Cancel leaves its context behind for nothing to read.
+  for (const [id, old] of genWindows) {
+    if (!old.modal) genWindows.delete(id);
+  }
+  const ctx = {
+    layerId: layer.id,
+    modal: null,
+    work: { id: layer.id, gen: layer.gen, keyframes: layer.keyframes },
+    workBase: layer.keyframes,
+    workDirty: false,
+    keyframe: null,
+    previewKey: '',
+    previewLayers: null,
+    session: null,
+  };
+  ctx.session = makeGenSession(ctx);
+  genWindows.set(layer.id, ctx);
+  ctx.session.reset();
+  return ctx;
 }
 
-function storeGenWork(layer) {
-  genWork = { id: layer.id, gen: layer.gen, keyframes: layer.keyframes };
-  genWorkDirty = true;
+function storeGenWork(ctx, layer) {
+  ctx.work = { id: layer.id, gen: layer.gen, keyframes: layer.keyframes };
+  ctx.workDirty = true;
 }
 
 /** A trim of the clip's start in the main window, carried into the draft. */
-function rebaseGenWork() {
-  const live = genWork ? timelineModel.layerById(layers, genWork.id) : null;
-  if (!live || live.keyframes === genWorkBase) return;
-  const moved = rebaseWorkKeys(genWork.keyframes, genWorkBase, live.keyframes);
-  genWorkBase = live.keyframes;
+function rebaseGenWork(ctx) {
+  const live = ctx.work ? timelineModel.layerById(layers, ctx.work.id) : null;
+  if (!live || live.keyframes === ctx.workBase) return;
+  const moved = rebaseWorkKeys(ctx.work.keyframes, ctx.workBase, live.keyframes);
+  ctx.workBase = live.keyframes;
   if (!moved) return;
-  genWork = { ...genWork, keyframes: moved.keyframes };
-  if (genKeyframe) genKeyframe = { ...genKeyframe, t: Math.round((genKeyframe.t + moved.dt) * 1e6) / 1e6 };
-  if (genWindow && genWindow.strip) genWindow.strip.draw();
+  ctx.work = { ...ctx.work, keyframes: moved.keyframes };
+  if (ctx.keyframe) ctx.keyframe = { ...ctx.keyframe, t: Math.round((ctx.keyframe.t + moved.dt) * 1e6) / 1e6 };
+  if (ctx.strip) ctx.strip.draw();
 }
 
 /**
@@ -242,8 +277,8 @@ function rebaseGenWork() {
  * the modal's own, sees to anything the fold does to the rest of the clip,
  * a shape given another kind having every box refitted.
  */
-function genFoldedLayer(gen, keyId, hook) {
-  const layer = genLayerNow();
+function genFoldedLayer(ctx, gen, keyId, hook) {
+  const layer = genLayerNow(ctx.layerId);
   if (!layer || !gen) return layer;
   const base = hook ? hook(layer, gen) : layer;
   const r = genAcceptedLayers(layer.id, gen, true, keyId, [base]);
@@ -251,109 +286,132 @@ function genFoldedLayer(gen, keyId, hook) {
 }
 
 /** The modal's settings into the clip's draft, when they changed. */
-function genFold() {
-  if (!genWork || !genWindow || !genWindow.changed()) return;
+function genFold(ctx) {
+  if (!ctx.work || !ctx.modal || !ctx.changed()) return;
   const id = newKeyframeId();
-  const layer = genFoldedLayer(genWindow.draftGen(), id, genWindow.fold);
+  const layer = genFoldedLayer(ctx, ctx.draftGen(), id, ctx.fold);
   if (!layer) return;
-  storeGenWork(layer);
-  const made = genKeyframe && !genKeyframe.id && timelineModel.keyframesFor(layer).find((k) => k.id === id);
-  if (made) genKeyframe = { ...made, layerId: layer.id };
+  storeGenWork(ctx, layer);
+  const made = ctx.keyframe && !ctx.keyframe.id && timelineModel.keyframesFor(layer).find((k) => k.id === id);
+  if (made) ctx.keyframe = { ...made, layerId: layer.id };
   // What the modal shows is the draft's now, so it counts as unchanged.
-  genWindow.reload(genShownGen(layer));
+  ctx.reload(genShownGen(ctx, layer));
 }
 
 /** The clip's settings at the keyframe being edited, as the modal shows them. */
-function genShownGen(layer) {
-  return genKeyframe ? timelineModel.withKeyed(layer.gen, genKeyframe) : layer.gen;
+function genShownGen(ctx, layer) {
+  return ctx.keyframe ? timelineModel.withKeyed(layer.gen, ctx.keyframe) : layer.gen;
 }
 
-const genSession = makeKeySession({
-  active: () => !!genWork && !!genWindow && genWindow.layerId === genWork.id,
-  layer: () => genLayerNow(),
-  store: storeGenWork,
-  fold: genFold,
-  target: () => genKeyframe,
-  setTarget: (k) => {
-    genKeyframe = k && genWork ? { ...k, layerId: genWork.id } : null;
-  },
-  reseed: () => {
-    const layer = genLayerNow();
-    if (layer && genWindow) genWindow.reload(genShownGen(layer));
-  },
-  refresh: () => {},
-  draw: () => {
-    if (genWindow && genWindow.strip) genWindow.strip.draw();
-  },
-});
+function makeGenSession(ctx) {
+  return makeKeySession({
+    active: () => !!ctx.work && !!ctx.modal && genWindows.get(ctx.layerId) === ctx,
+    layer: () => genLayerNow(ctx.layerId),
+    store: (layer) => storeGenWork(ctx, layer),
+    fold: () => genFold(ctx),
+    target: () => ctx.keyframe,
+    setTarget: (k) => {
+      ctx.keyframe = k && ctx.work ? { ...k, layerId: ctx.work.id } : null;
+    },
+    reseed: () => {
+      const layer = genLayerNow(ctx.layerId);
+      if (layer && ctx.modal) ctx.reload(genShownGen(ctx, layer));
+    },
+    refresh: () => {},
+    draw: () => {
+      if (ctx.modal && ctx.strip) ctx.strip.draw();
+    },
+  });
+}
 
 /**
  * A media window's strip, in `root` under its `stage`: drawn while `modal` is
  * the window open.
  */
 function makeGenStrip(modal, root, readout, canvas, stage) {
+  const ctxNow = () => {
+    const ctx = genCtxOfModal(modal);
+    return ctx && ctx.work ? ctx : null;
+  };
+  const via = (name) => (...args) => {
+    const ctx = ctxNow();
+    return ctx ? ctx.session[name](...args) : undefined;
+  };
   return makeKeyStrip(root, readout, canvas, {
     state: () => {
-      if (!genWindow || genWindow.modal !== modal || !genWork) return null;
-      const layer = genLayerNow();
+      const ctx = ctxNow();
+      if (!ctx) return null;
+      const layer = genLayerNow(ctx.layerId);
       if (!layer) return null;
       return {
         layer,
         keys: timelineModel.keyframesFor(layer),
-        editing: genKeyframe,
+        editing: ctx.keyframe,
         width: stage.clientWidth || parseFloat(stage.style.width) || 1,
         lower: false,
       };
     },
-    pick: (id) => genSession.pick(id),
-    move: (id, t) => genSession.move(id, t),
-    moved: (id) => genSession.moved(id),
-    scrub: (t) => genSession.scrub(t),
-    scrubbed: () => genSession.scrubbed(),
-    add: (t) => genSession.add(t),
-    remove: (id) => genSession.remove(id),
+    pick: via('pick'),
+    move: via('move'),
+    moved: via('moved'),
+    scrub: via('scrub'),
+    scrubbed: via('scrubbed'),
+    add: via('add'),
+    remove: via('remove'),
   });
 }
 
+/** Whether any media window is open. */
 function genWindowOpen() {
-  return !!genWindow;
+  for (const ctx of genWindows.values()) {
+    if (ctx.modal) return true;
+  }
+  return false;
 }
 
-function genWindowLayerId() {
-  return genWindow ? genWindow.layerId : null;
+/** The layers the open media windows are on. */
+function genWindowLayerIds() {
+  return [...genWindows.values()].filter((ctx) => ctx.modal).map((ctx) => ctx.layerId);
 }
 
 function genWindowOn(layerId) {
-  return !!genWindow && genWindow.layerId === layerId;
-}
-
-/** The open media window as a conflict confirmPopoutConflict can name, or null. */
-function genWindowConflict() {
-  if (!genWindow) return null;
-  return {
-    message: t('The media window is open. Going on closes it and discards what it has not accepted.'),
-    close: closeGenWindow,
-  };
-}
-
-/** The media window closed the way its Cancel would, if one is open. */
-function closeGenWindow() {
-  if (genWindow) genWindow.cancel();
+  const ctx = genCtxOf(layerId);
+  return !!ctx && !!ctx.modal;
 }
 
 /**
- * Every editor window open, as conflicts: the crop window, Crop Render Frame
- * and a media window. What opening another one asks about.
+ * The media window open on this layer as a conflict confirmPopoutConflict can
+ * name, or null.
  */
-function editorWindowConflicts() {
-  return [
-    !cropModal.hidden && {
-      message: t('Another crop window is open. Going on closes it and discards what it has not accepted.'),
-      close: closeCrop,
-    },
-    renderWindowConflict(),
-    genWindowConflict(),
-  ];
+function genWindowConflict(layerId) {
+  const ctx = genCtxOf(layerId);
+  if (!ctx || !ctx.modal) return null;
+  return {
+    message: t('The media window is open. Going on closes it and discards what it has not accepted.'),
+    close: () => ctx.cancel(),
+  };
+}
+
+/** Every open media window as conflicts. */
+function genWindowConflicts() {
+  return genWindowLayerIds().map(genWindowConflict);
+}
+
+/** The media windows closed the way their Cancel would. */
+function closeGenWindow() {
+  for (const ctx of [...genWindows.values()]) {
+    if (ctx.modal) ctx.cancel();
+  }
+}
+
+/**
+ * V3.8.2. What opening the media window that uses `modal` runs into: that
+ * same window open already, wherever it is, and Crop Render Frame, which moves
+ * the frame under all of them. The others do not interfere.
+ */
+function genOpenConflicts(modal) {
+  const same = genCtxOfModal(modal);
+  return [same && genWindowConflict(same.layerId), renderWindowConflict()];
 }
 
 /**
@@ -365,29 +423,36 @@ function editorWindowConflicts() {
  * if given, what the fold does to the rest of the clip.
  */
 function popOutGenWindow(modal, layerId, { title, cancel, relayout, draftGen, changed, reload, strip, fold }) {
-  genWindow = { modal, layerId, cancel, draftGen, changed, reload, strip, fold };
-  genPreviewKey = '';
-  genPreviewLayers = null;
+  const ctx = genCtxOf(layerId);
+  if (!ctx) return;
+  Object.assign(ctx, { modal, cancel, draftGen, changed, reload, strip, fold });
+  ctx.previewKey = '';
+  ctx.previewLayers = null;
   // V3.7.1. "Shape Settings - Editing Video 3", in the window and on it.
   const heading = modal.querySelector('.modal__title');
   if (title) heading.textContent = editorTitle(title, timelineModel.layerById(layers, layerId));
-  popOut(modal, 'media', {
+  // V3.8.2. A name of its own for each, since they can be out together: each
+  // is remembered where it was left, and docked or not, by itself.
+  popOut(modal, genWindowName(modal), {
     title: heading.textContent,
     cancel,
     relayout,
-    preview: previewGenDraft,
+    preview: () => previewGenDraft(ctx),
   });
+}
+
+/** The name a media modal's window goes by. */
+function genWindowName(modal) {
+  return modal.id.replace(/Modal$/, '').toLowerCase();
 }
 
 /** A kind's settings closing: back from the window, the preview its own again. */
 function popInGenWindow(modal) {
-  if (!genWindow || genWindow.modal !== modal) return;
-  genWindow = null;
+  const ctx = genCtxOfModal(modal);
+  if (!ctx) return;
+  ctx.modal = null;
   popIn(modal);
-  if (popoutPreview) {
-    popoutPreview = null;
-    drawComposite();
-  }
+  clearPopoutPreview(modal.id);
 }
 
 /**
@@ -395,31 +460,31 @@ function popInGenWindow(modal) {
  * shows the layer as Accept would leave it. A layer gone from under the window
  * takes the window with it.
  */
-function previewGenDraft() {
-  if (!genWindow) return;
-  const id = genWindow.layerId;
+function previewGenDraft(ctx) {
+  if (!ctx.modal || genWindows.get(ctx.layerId) !== ctx) return;
+  const id = ctx.layerId;
   if (!timelineModel.layerById(layers, id)) {
-    genWindow.cancel();
+    ctx.cancel();
     return;
   }
   // V3.7. The clip's draft through a trim made in the main window, and the
   // keyframe edited following the playhead.
-  rebaseGenWork();
-  genSession.follow();
-  const gen = genWindow.draftGen();
+  rebaseGenWork(ctx);
+  ctx.session.follow();
+  const gen = ctx.draftGen();
   if (!gen) return;
-  const key = JSON.stringify([gen, compositeAt, genWork, genKeyframe && [genKeyframe.id, genKeyframe.t]]);
-  if (key === genPreviewKey && layers === genPreviewLayers && !compositePlaying) return;
-  if (genWindow.strip && (layers !== genPreviewLayers || key !== genPreviewKey)) genWindow.strip.draw();
-  genPreviewKey = key;
-  genPreviewLayers = layers;
-  const fold = genWindow.fold;
-  const changed = genWindow.changed();
-  popoutPreview = {
+  const key = JSON.stringify([gen, compositeAt, ctx.work, ctx.keyframe && [ctx.keyframe.id, ctx.keyframe.t]]);
+  if (key === ctx.previewKey && layers === ctx.previewLayers && !compositePlaying) return;
+  if (ctx.strip && (layers !== ctx.previewLayers || key !== ctx.previewKey)) ctx.strip.draw();
+  ctx.previewKey = key;
+  ctx.previewLayers = layers;
+  const fold = ctx.fold;
+  const changed = ctx.changed();
+  setPopoutPreview(ctx.modal.id, {
     layerId: id,
     // V3.7. The clip's draft, the modal's settings folded in when they moved.
-    layerNow: () => (changed ? genFoldedLayer(gen, 'draft', fold) : genLayerNow()),
-  };
+    layerNow: () => (changed ? genFoldedLayer(ctx, gen, 'draft', fold) : genLayerNow(id)),
+  });
   if (!compositePlaying) drawComposite();
 }
 
@@ -466,7 +531,8 @@ function genAcceptedLayers(id, gen, changed, keyId, from = layers) {
   // here if it is new, and only when it changed, so editing a text's words
   // with the playhead between two keyframes does not leave a third behind.
   // Everything else goes to the layer, its own keyed settings untouched.
-  const k = genKeyframe && genKeyframe.layerId === id ? genKeyframe : null;
+  const ctx = genCtxOf(id);
+  const k = ctx && ctx.keyframe && ctx.keyframe.layerId === id ? ctx.keyframe : null;
   if (k) {
     if (!changed) return { next: from, moved: false, keyed: true };
     // The modal hands back its settings at the project's height, so the layer's
@@ -496,16 +562,14 @@ function genAcceptedLayers(id, gen, changed, keyId, from = layers) {
  * the add a step at all. `hook` is the modal's fold hook.
  */
 function acceptGenSettings(id, gen, changed, first, hook) {
-  genAddBefore = null;
+  genAddBefore.delete(id);
   const keyId = newKeyframeId();
+  const ctx = genCtxOf(id);
   let layer = genLayerNow(id);
-  if (layer && changed) layer = genFoldedLayer(gen, keyId, hook);
-  const k = genKeyframe && genKeyframe.layerId === id ? genKeyframe : null;
-  const dirty = changed || genWorkDirty;
-  genKeyframe = null;
-  genWork = null;
-  genWorkBase = null;
-  genWorkDirty = false;
+  if (layer && changed && ctx) layer = genFoldedLayer(ctx, gen, keyId, hook);
+  const k = ctx && ctx.keyframe && ctx.keyframe.layerId === id ? ctx.keyframe : null;
+  const dirty = changed || !!(ctx && ctx.workDirty);
+  genWindows.delete(id);
   if (!layer) return;
   if (dirty) {
     setLayers(timelineModel.setLayer(timelineModel.setGen(layers, id, layer.gen), id, { keyframes: layer.keyframes }));

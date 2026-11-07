@@ -51,13 +51,13 @@ const shapeFill = el('shapeFill');
 const shapeFillHint = el('shapeFillHint');
 const shapeGradient = el('shapeGradient');
 const shapeGradBar = el('shapeGradBar');
+const shapeGradHelp = el('shapeGradHelp');
 const shapeGradCanvas = el('shapeGradCanvas');
 const shapeGradStart = el('shapeGradStart');
 const shapeGradEnd = el('shapeGradEnd');
 const shapeGradAngle = el('shapeGradAngle');
 const shapeGradLine = el('shapeGradLine');
 const shapeHint = el('shapeHint');
-const shapeGradHint = el('shapeGradHint');
 const shapeStrip = makeGenStrip(shapeModal, shapeKeys, el('shapeKeysReadout'), el('shapeKeysCanvas'), shapeStage);
 
 let shapeLayerId = null;
@@ -166,8 +166,6 @@ function showShapeDraft(except) {
   shapeColorBtn.hidden = grad;
   shapeFillHint.hidden = !grad;
   shapeGradient.hidden = !grad;
-  // V3.7.1. Info's line about drawing the gradient, in Gradient only.
-  shapeGradHint.hidden = !grad;
   shapeGrad.showBoxes(except);
   shapeInvert.checked = d.invert;
   const show = (slider, box, value) => {
@@ -272,6 +270,7 @@ function sizeShapeStage() {
   if (noThird) shapeRingField.hidden = true;
   // V3.7. The gradient's bar as wide as the preview.
   shapeGradBar.style.width = shapeStage.style.width;
+  shapeGradHelp.style.width = shapeStage.style.width;
   paintShapeGradBar(true);
   placeShapeBox();
   shapeStrip.draw();
@@ -490,7 +489,7 @@ shapeColorBtn.addEventListener('click', async () => {
   };
   const picked = await pickColor(was, (color) => {
     if (shapeLayerId === id) set(color);
-  });
+  }, shapeModal);
   // The modal may have been closed under the picker, by Escape for one.
   if (shapeLayerId !== id) return;
   set(picked || was);
@@ -587,8 +586,9 @@ shapeAcceptBtn.addEventListener('click', () => {
 
 function cancelShapeSettings() {
   const first = shapeFirst;
+  const id = shapeLayerId;
   closeShapeSettings();
-  if (first) cancelGenAdd();
+  if (first) cancelGenAdd(id);
 }
 
 shapeCancelBtn.addEventListener('click', cancelShapeSettings);
@@ -636,7 +636,7 @@ const shapeGrad = makeGradientEditor({
     return { x: b.x + b.w / 2, y: b.y + b.h / 2 };
   },
   turn: () => (shapeDraft ? shapeDraft.rotation : 0),
-  pick: (color, live) => pickColor(color, live),
+  pick: (color, live) => pickColor(color, live, shapeModal),
   owner: () => shapeLayerId,
 });
 

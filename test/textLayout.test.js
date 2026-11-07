@@ -146,3 +146,22 @@ test('fontString quotes the family and scales the size', () => {
     'italic bold 20px "Segoe UI", sans-serif');
   assert.equal(L.fontString({ font: 'A"b', size: 10 }), '10px "Ab", sans-serif');
 });
+
+// V3.8.2. A word in two colours is two pieces, and the font's kerning between
+// them is kept the way the Edit Text box (one line of spans) has it.
+test('pieces in one font kern across the join, pieces in another do not', () => {
+  const kern = (text, style, scale) => {
+    const m = measure(text, style, scale);
+    const pairs = (text.match(/Te/g) || []).length;
+    return { ...m, width: m.width - pairs * 2 * style.size * scale / 20 };
+  };
+  const go = (runs) => L.layoutText({ runs, style: BASE, align: { h: 'left', v: 'top' }, width: 1000, height: 500, measure: kern });
+  const split = go([{ text: 'T', style: { color: '#f00' } }, { text: 'e', style: { color: '#00f' } }]);
+  const whole = go([{ text: 'Te', style: {} }]);
+  const [t, e] = split.lines[0].pieces;
+  assert.equal(t.x, 0);
+  assert.equal(e.x, 8, 'the e starts where the kerned T leaves off, not at 10');
+  assert.equal(split.lines[0].width, whole.lines[0].width);
+  const other = go([{ text: 'T', style: {} }, { text: 'e', style: { bold: true } }]);
+  assert.equal(other.lines[0].pieces[1].x, 10, 'another font, nothing to kern against');
+});

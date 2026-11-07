@@ -615,3 +615,79 @@ test('a move that turns takes the square road, its angle an expression of t', ()
   })];
   assert.equal(find(graphOf(buildComposeArgs({ layers: plain, project: HD, output: 'o.mp4', sources: SOURCES })), 'rotate=').length, 0);
 });
+
+// --- V3.8.1, the shape of a fade ---------------------------------------------
+
+// The few ffmpeg expression functions the curves use, in JavaScript, so the
+// file's maths can be held against the window's. clip, if, lt, pow, cos, PI.
+function evalFfmpegExpr(expr, x) {
+  const js = expr
+    .replace(/\bPI\b/g, 'Math.PI')
+    .replace(/\bpow\(/g, 'Math.pow(')
+    .replace(/\bcos\(/g, 'Math.cos(');
+  const clip = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  const lt = (a, b) => a < b;
+  const iff = (c, a, b) => (c ? a : b);
+  // `if` is a keyword in JavaScript, so the call is renamed before it is built.
+  return new Function('clip', 'lt', 'iff', 'x', 'return ' + js.replace(/\bif\(/g, 'iff(') + ';')(clip, lt, iff, x);
+}
+
+test('every curve is the same maths in the file as in the window', () => {
+  for (const id of timeline.FADE_CURVE_IDS) {
+    for (let i = 0; i <= 20; i += 1) {
+      const p = i / 20;
+      const got = evalFfmpegExpr(timeline.fadeCurveExpr(id, 'clip(x,0,1)'), p);
+      assert.ok(Math.abs(got - timeline.fadeShape(id, p)) < 1e-9, id + ' at ' + p + ': ' + got);
+    }
+  }
+});
+
+test('a project with only straight fades exports with the fade filters it always had', () => {
+  const layers = [vid({ id: 'v', duration: 10, fadeIn: 2, fadeOut: 2 }), aud({ id: 'a', duration: 10, fadeIn: 1 })];
+  const graph = graphOf(buildComposeArgs({ layers, project: HD, output: 'out.mp4', sources: SOURCES }));
+  // The picture's fade is the one that writes alpha; the sound's is afade.
+  assert.equal(find(graph, ':alpha=1').length, 1);
+  assert.equal(find(graph, 'afade=t=in').length, 1);
+  assert.equal(find(graph, 'geq=').length, 0);
+  assert.equal(find(graph, 'aeval=').length, 0);
+});
+
+test('a curved picture fade is a ramp multiplied into its alpha', () => {
+  const layers = [vid({ id: 'v', start: 1, duration: 10, fadeIn: 2, fadeInCurve: 'quadIn' })];
+  const graph = graphOf(buildComposeArgs({ layers, project: HD, output: 'out.mp4', sources: SOURCES }));
+  assert.equal(find(graph, 'fade=t=').length, 0, 'no linear fade is left on it');
+  const ramp = find(graph, 'geq=')[0];
+  assert.ok(ramp.includes('color=c=white:s=16x16:r=30:d=10.0'), ramp);
+  assert.ok(ramp.includes('pow(clip(T/2.0\\,0\\,1)\\,2)'), ramp);
+  // Laid where the layer is, like the picture it multiplies.
+  assert.ok(ramp.includes('setpts=PTS-STARTPTS+1.0/TB'), ramp);
+  assert.equal(find(graph, 'blend=all_mode=multiply').length, 1);
+  assert.equal(find(graph, 'alphamerge').length, 1);
+});
+
+test('a straight fade in beside a curved fade out is one ramp for both', () => {
+  const layers = [vid({ id: 'v', duration: 10, fadeIn: 2, fadeOut: 3, fadeOutCurve: 'cubicOut' })];
+  const graph = graphOf(buildComposeArgs({ layers, project: HD, output: 'out.mp4', sources: SOURCES }));
+  const ramp = find(graph, 'geq=')[0];
+  assert.ok(ramp.includes('clip(T/2.0\\,0\\,1)'), ramp);
+  assert.ok(ramp.includes('clip((T-7.0)/3.0\\,0\\,1)'), ramp);
+  assert.equal(find(graph, 'fade=t=').length, 0);
+});
+
+test('a curved sound fade is a gain per sample, in the layer own time, before the delay', () => {
+  const layers = [aud({ id: 'a', duration: 8, start: 5, fadeIn: 1, fadeInCurve: 'quadInOut', fadeOut: 2 })];
+  const graph = graphOf(buildComposeArgs({ layers, project: HD, output: 'out.mp4', sources: SOURCES }));
+  const chain = find(graph, 'aeval=')[0];
+  assert.equal(find(graph, 'afade').length, 0);
+  assert.ok(chain.includes("aeval='val(ch)*"), chain);
+  assert.ok(chain.includes('clip(t/1.0\\,0\\,1)'), chain);
+  assert.ok(chain.includes('clip((t-6.0)/2.0\\,0\\,1)'), chain);
+  assert.ok(chain.endsWith(':c=same,adelay=5000:all=1[a0]'), chain);
+});
+
+test('a curve on a fade of no length changes nothing in the file', () => {
+  const layers = [vid({ id: 'v', duration: 10, fadeInCurve: 'quadIn' })];
+  const graph = graphOf(buildComposeArgs({ layers, project: HD, output: 'out.mp4', sources: SOURCES }));
+  assert.equal(find(graph, 'geq=').length, 0);
+  assert.equal(find(graph, 'yuva420p').length, 0);
+});

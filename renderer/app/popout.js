@@ -200,6 +200,9 @@ const carried = new Map();
 
 /** `sub` into the window `modal` is popped out in, if it is. */
 function carryOver(sub, modal) {
+  // V3.8.2. Several windows can be out, so one dialog asked for over another
+  // window comes home first rather than taking this one for its home.
+  carryBack(sub);
   const state = modal && popped.get(modal);
   if (!state || state.gone || sub.ownerDocument === state.win.document) return;
   carried.set(sub, { parent: sub.parentNode, next: sub.nextSibling });
@@ -240,7 +243,7 @@ function confirmPopoutConflict(conflicts, run) {
   if (!live.length) return run();
   showChoice({
     title: t('Warning'),
-    message: live.map((c) => c.message),
+    message: [...new Set(live.map((c) => c.message))],
     buttons: [
       { id: 'confirm', label: t('Confirm') },
       { id: 'abort', label: t('Abort'), primary: true },
@@ -391,12 +394,16 @@ function dockCellAt(x, y) {
 /** Where the window `name` was docked last, or null for a window. */
 function dockedLast(name) {
   const all = (typeof appSettings === 'object' && appSettings && appSettings.popoutDock) || {};
-  return DOCK_CELLS.includes(all[name]) ? all[name] : null;
+  // V3.8.2. The one name the three media windows had before they got their own.
+  const kept = all[name] || (/^(bar|shape|text)$/.test(name) ? all.media : null);
+  return DOCK_CELLS.includes(kept) ? kept : null;
 }
 
 function rememberDock(name, where) {
   if (typeof appSettings !== 'object' || !appSettings) return;
   const next = { ...(appSettings.popoutDock || {}) };
+  // V3.8.2. Its own entry now, the old shared one having done its part.
+  if (/^(bar|shape|text)$/.test(name)) delete next.media;
   if (where) next[name] = where;
   else delete next[name];
   if (JSON.stringify(next) === JSON.stringify(appSettings.popoutDock || {})) return;
@@ -414,7 +421,10 @@ const DOCK_CLOSE_ICON = '<svg viewBox="0 0 12 12"><path d="M3 3L9 9M9 3L3 9" /><
  */
 function dockInto(modal, name, opts, where, panel) {
   const cell = dockCell(where);
-  if (!cell) return false;
+  // V3.8.2. One window to a frame: the user, "Let Start Frame and End Frame
+  // have different settings windows docked". One whose frame is taken opens
+  // as a window of its own.
+  if (!cell || cell.classList.contains('preview-cell--docked')) return false;
   const host = document.createElement('div');
   host.className = 'dock-host';
   const head = document.createElement('div');
@@ -433,7 +443,17 @@ function dockInto(modal, name, opts, where, panel) {
   shut.dataset.noTranslate = '';
   shut.innerHTML = DOCK_CLOSE_ICON;
   shut.title = t('Close');
-  head.append(title, out, shut);
+  // V3.8.2. The user: "Re-center the title text horizontal for docked
+  // windows, the buttons shift it to the left". The buttons are in a group on
+  // the right, and an unseen copy of them stands on the left, so the title
+  // between has the same room either side and is centred on the cell.
+  const tools = document.createElement('div');
+  tools.className = 'dock-head__tools';
+  tools.append(out, shut);
+  const lead = document.createElement('div');
+  lead.className = 'dock-head__tools dock-head__lead';
+  lead.setAttribute('aria-hidden', 'true');
+  head.append(lead, title, tools);
   const body = document.createElement('div');
   body.className = 'dock-body';
   host.append(head, body);
@@ -443,7 +463,14 @@ function dockInto(modal, name, opts, where, panel) {
   modal.classList.add('modal--popped');
   // The Info button into the title row, the panel's own title being the row.
   const info = panel.querySelector(':scope > .info-tip');
-  if (info) head.insertBefore(info, out);
+  if (info) tools.insertBefore(info, out);
+  for (const tool of tools.children) {
+    const copy = tool.classList.contains('info-tip')
+      ? Object.assign(document.createElement('div'), { className: 'info-tip' })
+      : tool.cloneNode(true);
+    if (tool.classList.contains('info-tip')) copy.appendChild(tool.querySelector('.info-tip__btn').cloneNode(true));
+    lead.appendChild(copy);
+  }
   const state = { cell, host, body, panel, name, opts, where, info, timer: 0, settle: [], ro: null };
   docked.set(modal, state);
   out.addEventListener('click', () => popOutAgain(modal));

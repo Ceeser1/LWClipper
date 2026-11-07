@@ -43,7 +43,7 @@ function pickColor(color, onInput, over) {
   // V3.6.2. Over the media window when it is out, which is where it was
   // asked for from. V3.7.1: or over `over`, the Crop and Mask window for a
   // mask's colour.
-  carryOver(colorModal, over || (genWindow && genWindow.modal));
+  carryOver(colorModal, over);
   colorModal.hidden = false;
   drawPickWheel();
   showPick(null);

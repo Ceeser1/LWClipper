@@ -52,6 +52,68 @@ function chain(parts) {
   return parts.filter(Boolean).join(',');
 }
 
+// ---- V3.8.1. A fade that is not a straight line ----
+//
+// ffmpeg's fade filter only draws straight lines, and afade only has the curves
+// it has been given, none of which is the quad in-out. So a layer with a curved
+// fade is faded by the same sum the window does, written as an expression:
+//
+//   a sound   aeval, which multiplies every sample by the gain at its own time
+//   a picture a 16x16 grey square whose brightness is the gain at each frame's
+//             time (geq on 256 pixels costs nothing), scaled to the picture,
+//             multiplied into its alpha by blend, and put back with alphamerge
+//
+// A layer whose fades are all straight keeps the fade and afade filters it has
+// always had, so a project without curves exports exactly as before.
+
+/** ffmpeg parses a comma in an expression as the end of the filter. */
+function escapeExpr(expr) {
+  return expr.replace(/,/g, '\\,');
+}
+
+/** Whether a layer has a fade that is not linear, and so needs the expression. */
+function hasCurvedFade(l) {
+  const fades = timeline.fadesOf(l);
+  const curves = timeline.fadeCurvesOf(l);
+  return (fades.in > 0 && curves.in !== 'linear') || (fades.out > 0 && curves.out !== 'linear');
+}
+
+/**
+ * Both of a layer's fades as one gain between 0 and 1, an expression of `time`,
+ * the seconds into the layer. The window's fadeAlphaAt, in ffmpeg's words.
+ */
+function fadeGainExpr(l, time) {
+  const fades = timeline.fadesOf(l);
+  const curves = timeline.fadeCurvesOf(l);
+  const parts = [];
+  if (fades.in > 0) {
+    parts.push(timeline.fadeCurveExpr(curves.in, 'clip(' + time + '/' + fixed(fades.in) + ',0,1)'));
+  }
+  if (fades.out > 0) {
+    parts.push('(1-' + timeline.fadeCurveExpr(curves.out,
+      'clip((' + time + '-' + fixed(l.duration - fades.out) + ')/' + fixed(fades.out) + ',0,1)') + ')');
+  }
+  return parts.join('*') || '1';
+}
+
+/**
+ * Fades a picture's alpha by a curve. `input` is the picture's label with its
+ * brackets, `tail` the filters that follow the fade on the same chain, and the
+ * result is left in `label`. The ramp is laid on the layer's own timeline
+ * position, like the picture, so the two meet frame for frame.
+ */
+function curvedFade(graph, l, n, input, fps, tail, label) {
+  const k = String(n);
+  graph.push(input + 'split[fs' + k + '][fb' + k + ']');
+  graph.push('[fb' + k + ']alphaextract[fx' + k + ']');
+  graph.push('color=c=white:s=16x16:r=' + fps + ':d=' + fixed(l.duration)
+    + ",format=gray,geq=lum='255*(" + escapeExpr(fadeGainExpr(l, 'T'))
+    + ")',setpts=PTS-STARTPTS+" + fixed(l.start) + '/TB[fr' + k + ']');
+  graph.push('[fr' + k + '][fx' + k + ']scale2ref[fq' + k + '][fy' + k + ']');
+  graph.push('[fy' + k + '][fq' + k + ']blend=all_mode=multiply:shortest=1[fm' + k + ']');
+  graph.push('[fs' + k + '][fm' + k + ']' + chain(['alphamerge', ...tail]) + '[' + label + ']');
+}
+
 // ---- V3.3. A picture that moves between keyframes ----
 //
 // crop cannot do it: its width and height are worked out once, when the graph
@@ -209,14 +271,20 @@ function movingLayer(graph, l, n, motion, prev, { input, fps, source, projW, pro
   const fades = timeline.fadesOf(l);
   const alpha = timeline.alphaOf(l);
   const label = 'v' + n;
-  graph.push('[' + tag('mp') + '][' + tag('mm') + ']' + chain([
-    'alphamerge',
-    fades.in > 0 ? 'fade=t=in:st=' + fixed(l.start) + ':d=' + fixed(fades.in) + ':alpha=1' : null,
-    fades.out > 0
-      ? 'fade=t=out:st=' + fixed(l.start + l.duration - fades.out) + ':d=' + fixed(fades.out) + ':alpha=1'
-      : null,
-    alpha < 1 ? 'colorchannelmixer=aa=' + fixed(alpha) : null,
-  ]) + '[' + label + ']');
+  if (hasCurvedFade(l)) {
+    graph.push('[' + tag('mp') + '][' + tag('mm') + ']alphamerge[' + tag('mf') + ']');
+    curvedFade(graph, l, n, '[' + tag('mf') + ']', fps,
+      [alpha < 1 ? 'colorchannelmixer=aa=' + fixed(alpha) : null], label);
+  } else {
+    graph.push('[' + tag('mp') + '][' + tag('mm') + ']' + chain([
+      'alphamerge',
+      fades.in > 0 ? 'fade=t=in:st=' + fixed(l.start) + ':d=' + fixed(fades.in) + ':alpha=1' : null,
+      fades.out > 0
+        ? 'fade=t=out:st=' + fixed(l.start + l.duration - fades.out) + ':d=' + fixed(fades.out) + ':alpha=1'
+        : null,
+      alpha < 1 ? 'colorchannelmixer=aa=' + fixed(alpha) : null,
+    ]) + '[' + label + ']');
+  }
   const next = 'bg' + n;
   graph.push('[' + prev + '][' + label + ']overlay=' + bx + ':' + by
     + ':eof_action=pass:' + enableExpr(l.start, timeline.endOf(l)) + '[' + next + ']');
@@ -284,15 +352,22 @@ function movingTurnedLayer(graph, l, n, motion, prev, { input, fps, source, mask
   const fades = timeline.fadesOf(l);
   const alpha = timeline.alphaOf(l);
   const label = 'v' + n;
-  graph.push('[' + tag('mp') + '][' + tag('mm') + ']' + chain([
-    'alphamerge',
-    fades.in > 0 ? 'fade=t=in:st=' + fixed(l.start) + ':d=' + fixed(fades.in) + ':alpha=1' : null,
-    fades.out > 0
-      ? 'fade=t=out:st=' + fixed(l.start + l.duration - fades.out) + ':d=' + fixed(fades.out) + ':alpha=1'
-      : null,
-    alpha < 1 ? 'colorchannelmixer=aa=' + fixed(alpha) : null,
-    "rotate=a='" + turn + "':ow=" + side + ':oh=' + side + ':c=none',
-  ]) + '[' + label + ']');
+  const turnFilter = "rotate=a='" + turn + "':ow=" + side + ':oh=' + side + ':c=none';
+  if (hasCurvedFade(l)) {
+    graph.push('[' + tag('mp') + '][' + tag('mm') + ']alphamerge[' + tag('mf') + ']');
+    curvedFade(graph, l, n, '[' + tag('mf') + ']', fps,
+      [alpha < 1 ? 'colorchannelmixer=aa=' + fixed(alpha) : null, turnFilter], label);
+  } else {
+    graph.push('[' + tag('mp') + '][' + tag('mm') + ']' + chain([
+      'alphamerge',
+      fades.in > 0 ? 'fade=t=in:st=' + fixed(l.start) + ':d=' + fixed(fades.in) + ':alpha=1' : null,
+      fades.out > 0
+        ? 'fade=t=out:st=' + fixed(l.start + l.duration - fades.out) + ':d=' + fixed(fades.out) + ':alpha=1'
+        : null,
+      alpha < 1 ? 'colorchannelmixer=aa=' + fixed(alpha) : null,
+      turnFilter,
+    ]) + '[' + label + ']');
+  }
   const next = 'bg' + n;
   graph.push('[' + prev + '][' + label + "]overlay=x='round(" + dx + '+' + dw + '/2-' + half + ")':y='round("
     + dy + '+' + dh + '/2-' + half + ")':eval=frame:eof_action=pass:" + enableExpr(l.start, timeline.endOf(l))
@@ -501,25 +576,32 @@ function buildComposeArgs({
           head = '[mp' + n + '][mk' + n + ']alphamerge';
         }
       }
-      graph.push(chain([
-          head,
-          rotate,
-          fades.in > 0
-            ? 'fade=t=in:st=' + fixed(l.start) + ':d=' + fixed(fades.in) + ':alpha=1'
-            : null,
-          fades.out > 0
-            ? 'fade=t=out:st=' + fixed(l.start + l.duration - fades.out)
-              + ':d=' + fixed(fades.out) + ':alpha=1'
-            : null,
-          // V2.4. The layer's maximum alpha, last, because it is the ceiling
-          // the two ramps rise to rather than a third ramp of its own.
-          // colorchannelmixer multiplies the alpha it is handed rather than
-          // replacing it, so a layer at 60% that fades in arrives at 60% and
-          // not at 100%. That is the same multiply layerAlphaAt does in the
-          // preview, which is what keeps the file and the window one picture.
-          alpha < 1 ? 'colorchannelmixer=aa=' + fixed(alpha) : null,
-        ])
-        + '[' + label + ']');
+      // V2.4. The layer's maximum alpha, last, because it is the ceiling the
+      // two ramps rise to rather than a third ramp of its own.
+      // colorchannelmixer multiplies the alpha it is handed rather than
+      // replacing it, so a layer at 60% that fades in arrives at 60% and not at
+      // 100%. That is the same multiply layerAlphaAt does in the preview, which
+      // is what keeps the file and the window one picture.
+      const ceiling = alpha < 1 ? 'colorchannelmixer=aa=' + fixed(alpha) : null;
+      if (hasCurvedFade(l)) {
+        // V3.8.1. A fade with a curve: the picture so far, then the curved fade.
+        graph.push(chain([head, rotate]) + '[fh' + n + ']');
+        curvedFade(graph, l, n, '[fh' + n + ']', fps, [ceiling], label);
+      } else {
+        graph.push(chain([
+            head,
+            rotate,
+            fades.in > 0
+              ? 'fade=t=in:st=' + fixed(l.start) + ':d=' + fixed(fades.in) + ':alpha=1'
+              : null,
+            fades.out > 0
+              ? 'fade=t=out:st=' + fixed(l.start + l.duration - fades.out)
+                + ':d=' + fixed(fades.out) + ':alpha=1'
+              : null,
+            ceiling,
+          ])
+          + '[' + label + ']');
+      }
 
       const next = 'bg' + n;
       const xy = turnedXY || (parts ? parts.overlay.slice('overlay='.length) : '0:0');
@@ -553,11 +635,18 @@ function buildComposeArgs({
           // to stay last, so the fades go before it, which means they are still
           // in the layer's own timebase: a fade in starts at 0 here, where on
           // the video side it starts at the layer's timeline position.
-          fades.in > 0 ? 'afade=t=in:st=' + fixed(0) + ':d=' + fixed(fades.in) : null,
-          fades.out > 0
-            ? 'afade=t=out:st=' + fixed(l.duration - fades.out)
-              + ':d=' + fixed(fades.out)
-            : null,
+          // V3.8.1. A curved fade is a gain per sample instead, in the layer's
+          // own time like the afade it replaces. val(ch) is the sample of each
+          // channel in turn, so a stereo layer stays stereo.
+          ...(hasCurvedFade(l)
+            ? ["aeval='val(ch)*" + escapeExpr(fadeGainExpr(l, 't')) + "':c=same"]
+            : [
+              fades.in > 0 ? 'afade=t=in:st=' + fixed(0) + ':d=' + fixed(fades.in) : null,
+              fades.out > 0
+                ? 'afade=t=out:st=' + fixed(l.duration - fades.out)
+                  + ':d=' + fixed(fades.out)
+                : null,
+            ]),
           // adelay pads the front with silence, which is how a layer lands at
           // its timeline position. Nothing may reset the timestamps after it.
           l.start > 0 ? 'adelay=' + msFixed(l.start) + ':all=1' : null,

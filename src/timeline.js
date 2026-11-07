@@ -639,6 +639,11 @@ const timelineModel = (() => {
       // second time.
       fadeIn: Math.max(0, round(props.fadeIn || 0)),
       fadeOut: Math.max(0, round(props.fadeOut || 0)),
+      // V3.8.1. The shape of each fade, by name. Declared here for the reason
+      // fadeIn is: a field createLayer does not name is a field the project
+      // open path drops. Linear for anything unknown, old files included.
+      fadeInCurve: curveId(props.fadeInCurve),
+      fadeOutCurve: curveId(props.fadeOutCurve),
       // V2.4. The ceiling the fades rise to, asked for as a line across the
       // clip: "Add a new horizontal line to set maximum alpha of video tracks."
       // 1 for every layer until somebody drags that line, so nothing written
@@ -746,10 +751,85 @@ const timelineModel = (() => {
     const fades = fadesOf(layer);
     if (!fades.in && !fades.out) return 1;
     const into = clamp(round(t - (Number(layer.start) || 0)), 0, span);
+    const curves = fadeCurvesOf(layer);
     let alpha = 1;
-    if (fades.in > 0) alpha *= Math.min(1, into / fades.in);
-    if (fades.out > 0) alpha *= Math.min(1, (span - into) / fades.out);
+    // V3.8.1. A fade in is the curve itself, a fade out is what the curve has
+    // not yet taken away. Linear is the line these two sums drew before curves.
+    if (fades.in > 0) alpha *= fadeShape(curves.in, clamp(into / fades.in, 0, 1));
+    if (fades.out > 0) {
+      alpha *= 1 - fadeShape(curves.out, clamp((into - (span - fades.out)) / fades.out, 0, 1));
+    }
     return clamp(alpha, 0, 1);
+  }
+
+  // ---- V3.8.1. The shape of a fade ----
+  //
+  // "Different video and audio fade in/out options, not only linear but also
+  // ease-in (InQuad), ease-out (OutQuad), ease-in-out (InOutQuad)". Nine of
+  // them, the most the pop-up holds: three rows of three.
+  //
+  // A curve is how far the fade has got, 0 to 1, at a point 0 to 1 of the way
+  // through it. A fade in is that number as the layer's opacity or volume; a
+  // fade out is one minus it, so "ease in" means the same thing at both ends:
+  // it starts slowly and ends fast, and a fade out with it holds on to the
+  // picture for a while and lets go at the last moment.
+  //
+  // **Each curve is written twice, once for JavaScript and once as an ffmpeg
+  // expression, and they sit side by side so they can be read against each
+  // other.** The window answers the question with `at`; the file answers it
+  // with `expr`, in geq for a picture and aeval for a sound. A test evaluates
+  // both and compares them, which is what keeps the preview and the export one
+  // picture. `x` in an expression is itself an expression, already clipped to
+  // 0..1, and is repeated rather than named because ffmpeg has no variables.
+  const FADE_CURVES = [
+    { id: 'linear', at: (p) => p, expr: (x) => x },
+    { id: 'quadIn', at: (p) => p * p, expr: (x) => 'pow(' + x + ',2)' },
+    { id: 'quadOut', at: (p) => 1 - (1 - p) * (1 - p), expr: (x) => '(1-pow(1-' + x + ',2))' },
+    {
+      id: 'quadInOut',
+      at: (p) => (p < 0.5 ? 2 * p * p : 1 - Math.pow(2 - 2 * p, 2) / 2),
+      expr: (x) => 'if(lt(' + x + ',0.5),2*pow(' + x + ',2),1-pow(2-2*' + x + ',2)/2)',
+    },
+    { id: 'cubicIn', at: (p) => p * p * p, expr: (x) => 'pow(' + x + ',3)' },
+    { id: 'cubicOut', at: (p) => 1 - Math.pow(1 - p, 3), expr: (x) => '(1-pow(1-' + x + ',3))' },
+    {
+      id: 'cubicInOut',
+      at: (p) => (p < 0.5 ? 4 * p * p * p : 1 - Math.pow(2 - 2 * p, 3) / 2),
+      expr: (x) => 'if(lt(' + x + ',0.5),4*pow(' + x + ',3),1-pow(2-2*' + x + ',3)/2)',
+    },
+    {
+      id: 'quartInOut',
+      at: (p) => (p < 0.5 ? 8 * Math.pow(p, 4) : 1 - Math.pow(2 - 2 * p, 4) / 2),
+      expr: (x) => 'if(lt(' + x + ',0.5),8*pow(' + x + ',4),1-pow(2-2*' + x + ',4)/2)',
+    },
+    {
+      id: 'sineInOut',
+      at: (p) => (1 - Math.cos(Math.PI * p)) / 2,
+      expr: (x) => '((1-cos(PI*' + x + '))/2)',
+    },
+  ];
+  const FADE_CURVE_IDS = FADE_CURVES.map((c) => c.id);
+
+  /** A curve name as one the model knows; anything else is linear. */
+  function curveId(v) {
+    return FADE_CURVE_IDS.includes(v) ? v : 'linear';
+  }
+
+  /** How far a fade has got, 0 to 1, a fraction p of the way through it. */
+  function fadeShape(curve, p) {
+    const c = FADE_CURVES.find((k) => k.id === curve) || FADE_CURVES[0];
+    return clamp(c.at(clamp(Number(p) || 0, 0, 1)), 0, 1);
+  }
+
+  /** The same curve as an ffmpeg expression of `x`, an expression running 0 to 1. */
+  function fadeCurveExpr(curve, x) {
+    const c = FADE_CURVES.find((k) => k.id === curve) || FADE_CURVES[0];
+    return c.expr(x);
+  }
+
+  /** A layer's two curves. Linear for every layer that never chose one. */
+  function fadeCurvesOf(layer) {
+    return { in: curveId(layer && layer.fadeInCurve), out: curveId(layer && layer.fadeOutCurve) };
   }
 
   // ---- V2.4. The maximum alpha of a layer ----
@@ -1818,6 +1898,28 @@ const timelineModel = (() => {
     return next;
   }
 
+  /**
+   * V3.8.1. Set the shape of one of a layer's fades.
+   *
+   * The same layer object back when it already has that curve, as setAlpha
+   * does, so a caller can tell nothing moved. A fade of no length keeps the curve
+   * it is given: it applies the moment the fade is dragged out.
+   */
+  function setFadeCurve(layers, id, which, curve) {
+    const key = which === 'out' ? 'fadeOutCurve' : 'fadeInCurve';
+    const want = curveId(curve);
+    return replace(layers, id, (l) => (curveId(l[key]) === want && l[key] === want ? l : { ...l, [key]: want }));
+  }
+
+  /** The same, for a whole group, as fadeGroup is for the length. */
+  function fadeCurveGroup(layers, id, which, curve) {
+    const members = groupOf(layers, id);
+    if (members.length < 2) return setFadeCurve(layers, id, which, curve);
+    let next = layers;
+    for (const member of members) next = setFadeCurve(next, member.id, which, curve);
+    return next;
+  }
+
   // ---- grouping, Step 14 ----
   //
   // A video file dropped into a video layer also makes an audio layer for its
@@ -1899,6 +2001,9 @@ const timelineModel = (() => {
       duration: kept,
       fadeIn: round(Math.min(layer.fadeIn || 0, kept)),
       fadeOut: 0,
+      // V3.8.1. The cut end is not a fade and does not keep a curve either, or
+      // a fade dragged out there later would come out in a shape nobody chose.
+      fadeOutCurve: 'linear',
     };
     const right = {
       ...layer,
@@ -1907,6 +2012,7 @@ const timelineModel = (() => {
       duration: rest,
       sourceIn: isStill(layer) ? layer.sourceIn : round(layer.sourceIn + kept),
       fadeIn: 0,
+      fadeInCurve: 'linear',
       fadeOut: round(Math.min(layer.fadeOut || 0, rest)),
       groupId,
       // V3.3. Both halves keep every keyframe, the right one on its own clock,
@@ -2046,6 +2152,41 @@ const timelineModel = (() => {
       : l));
   }
 
+  /**
+   * V3.8.2. Slide several layers at once, and the groups they are in, by the
+   * shift that puts `id` at `newStart`. One shift for all of them, clamped
+   * by the earliest, so none is cut off at the start of the timeline while the
+   * others carry on.
+   */
+  function moveSet(layers, ids, id, newStart) {
+    const layer = layerById(layers, id);
+    if (!layer) return layers;
+    const moving = new Set();
+    for (const one of ids) {
+      for (const m of groupOf(layers, one)) moving.add(m.id);
+    }
+    moving.add(id);
+    if (moving.size < 2) return moveLayer(layers, id, newStart);
+    const earliest = Math.min(...layers.filter((l) => moving.has(l.id)).map((l) => l.start));
+    const shift = Math.max(round(newStart - layer.start), -earliest);
+    return layers.map((l) => (moving.has(l.id)
+      ? { ...l, start: round(Math.max(0, l.start + shift)) }
+      : l));
+  }
+
+  /**
+   * V3.8.2. The whole timeline slid left so that `point` becomes 0, when
+   * nothing starts before it: every layer's start less `point`. Layers are
+   * handed back unchanged when something does start earlier (it would be cut
+   * off), or when `point` is no later than 0.
+   */
+  function shiftToZero(layers, point) {
+    const by = round(point);
+    if (!layers.length || by <= 0) return layers;
+    if (layers.some((l) => l.start < by - 1e-6)) return layers;
+    return layers.map((l) => ({ ...l, start: round(Math.max(0, l.start - by)) }));
+  }
+
   /** How far one layer's given edge may travel, as a low and high shift. */
   function trimRange(layer, edge) {
     if (edge === 'start') {
@@ -2120,6 +2261,12 @@ const timelineModel = (() => {
     reframeGen,
     fadesOf,
     fadeAlphaAt,
+    FADE_CURVE_IDS,
+    fadeShape,
+    fadeCurveExpr,
+    fadeCurvesOf,
+    setFadeCurve,
+    fadeCurveGroup,
     alphaOf,
     layerAlphaAt,
     sourceTimeFor,
@@ -2131,6 +2278,8 @@ const timelineModel = (() => {
     trimCeiling,
     addLayer,
     removeLayer,
+    moveSet,
+    shiftToZero,
     reorderLayer,
     arrangeLanes,
     readingOrder,

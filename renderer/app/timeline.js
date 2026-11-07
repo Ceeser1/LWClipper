@@ -93,6 +93,59 @@ function syncScrollbarInset() {
   timelineStage.style.setProperty('--timeline-scrollbar', bar + 'px');
 }
 
+// ---- V3.8.2. The sideways scroll bar ----
+//
+// A native scroller, so it looks and acts exactly as the stack's own vertical
+// one does: an empty strip as wide as the content in pixels (the timeline from
+// 0 to the last track's end, plus one frame width so the end can reach the left
+// edge), whose scrollLeft is the view's scroll in pixels. It is shown only while
+// a track lies partly or wholly out of view to the left or the right.
+
+// Set while the view writes scrollLeft, so that the scroll event that causes is
+// not taken for the user's.
+let hBarWriting = false;
+
+function updateTimelineHBar() {
+  const width = timelineLane.clientWidth;
+  if (!timelineDriving() || !width || !layers.length || !(tlView.scale > 0)) {
+    timelineHBar.hidden = true;
+    timelineStage.style.setProperty('--timeline-hbar', '0px');
+    return;
+  }
+  const left = tlView.scroll;
+  const right = left + width / tlView.scale;
+  const first = Math.min(...layers.map((l) => l.start));
+  const last = timelineModel.totalDuration(layers);
+  const out = first < left - 1e-6 || last > right + 1e-6;
+  timelineHBar.hidden = !out;
+  // The lane (and so the playhead's line) stops above the bar.
+  timelineStage.style.setProperty('--timeline-hbar', out ? timelineHBar.offsetHeight + 'px' : '0px');
+  if (!out) return;
+  timelineHSpan.style.width = (last * tlView.scale + width) + 'px';
+  const want = left * tlView.scale;
+  if (Math.abs(timelineHBar.scrollLeft - want) > 0.5) {
+    hBarWriting = true;
+    timelineHBar.scrollLeft = want;
+    // The scroll event is asynchronous; cleared on the next frame.
+    requestAnimationFrame(() => { hBarWriting = false; });
+  }
+}
+
+timelineHBar.addEventListener('scroll', () => {
+  if (hBarWriting || busy) return;
+  const width = timelineLane.clientWidth;
+  const duration = timelineDuration();
+  if (!duration || !width) return;
+  tlFitted = false;
+  tlView = {
+    scale: tlView.scale,
+    scroll: timelineView.clampScroll(timelineHBar.scrollLeft / tlView.scale, tlView.scale, duration, width),
+  };
+  noteTimelineFit(width);
+  drawTimeline();
+  updatePlayhead();
+});
+
 /** Whether the view a gesture just produced is still the fitted one. */
 function noteTimelineFit(width) {
   tlFitted = tlView.scroll === 0
@@ -181,6 +234,7 @@ function drawTimeline() {
   const duration = timelineDuration();
   positionTimelineMarkers();
   positionLayerClips();
+  updateTimelineHBar();
   if (!duration) return;
 
   // The selected span, so the two markers read as the ends of something rather
@@ -242,13 +296,11 @@ const TIMELINE_DRAG_SLOP = 3;
 //   is what the left-right cursor there promises and the only way to reach the
 //   rest of a clip once the view is zoomed past what the frame can show;
 //
-//   on the stack, it scrubs, because that surface belongs to the layers and
-//   sliding the view out from under a layer being dragged is not what anyone
-//   means by it.
+//   on empty space in a row, V3.8.2, it draws a range, and the clips that lie
+//   wholly inside it are chosen when it is let go.
 //
-// On the ruler the seek has to wait for the release: until the pointer has
-// moved there is no telling which of the two gestures this was going to be. On
-// the stack there is no such doubt, so it seeks from the press.
+// On both the seek waits for the release: until the pointer has moved there is
+// no telling which of the two gestures this was going to be.
 timelineStage.addEventListener('pointerdown', (evt) => {
   if (evt.button !== 0 || busy || !timelineDuration()) return;
   const rect = timelineLane.getBoundingClientRect();
@@ -265,18 +317,20 @@ timelineStage.addEventListener('pointerdown', (evt) => {
   // showed up once something had given the timeline a duration, because with
   // none this handler returns on the line above and was never in the way.
   if (evt.target.closest('button, input, select, textarea, label')) return;
-  const drag = { startX: evt.clientX, lastX: evt.clientX, panning: false };
-  // A press on the stack is a scrub from the moment it lands, click or drag
-  // alike, so a single click seeks the top layer now and lands the rest on the
-  // release exactly as a drag does.
-  if (!onRuler) {
-    beginScrub();
-    seekTimeline(toTime(evt.clientX));
-  }
+  const drag = { startX: evt.clientX, startY: evt.clientY, lastX: evt.clientX, panning: false, box: null };
 
   const onMove = (ev) => {
     if (!onRuler) {
-      seekTimeline(toTime(ev.clientX));
+      if (!drag.box && Math.hypot(ev.clientX - drag.startX, ev.clientY - drag.startY) < TIMELINE_DRAG_SLOP) return;
+      if (!drag.box) {
+        drag.box = document.createElement('div');
+        drag.box.className = 'timeline-marquee';
+        document.body.appendChild(drag.box);
+      }
+      drag.at = marqueeRect(drag, ev);
+      const b = drag.at;
+      drag.box.style.cssText = 'left:' + b.left + 'px;top:' + b.top + 'px;width:'
+        + (b.right - b.left) + 'px;height:' + (b.bottom - b.top) + 'px';
       return;
     }
     if (!drag.panning && Math.abs(ev.clientX - drag.startX) < TIMELINE_DRAG_SLOP) return;
@@ -290,13 +344,66 @@ timelineStage.addEventListener('pointerdown', (evt) => {
     updatePlayhead();
   };
   const onUp = (ev) => {
-    if (onRuler && !drag.panning) seekTimeline(toTime(ev.clientX));
+    if (!onRuler) {
+      if (drag.box) {
+        drag.box.remove();
+        if (ev.type === 'pointerup') chooseInRange(drag.at, rect, evt.shiftKey || ev.shiftKey);
+      } else if (ev.type === 'pointerup') {
+        beginScrub();
+        seekTimeline(toTime(ev.clientX));
+      }
+    } else if (!drag.panning) {
+      seekTimeline(toTime(ev.clientX));
+    }
     // Unconditional, so a pointercancel lands the layers too. It returns at
     // once when no scrub was running.
     endScrub();
   };
   beginDrag(timelineStage, evt, onMove, onUp, true);
 });
+
+/** V3.8.2. The dragged range, kept inside the rows it is drawn over. */
+function marqueeRect(drag, ev) {
+  const stack = timelineStack.getBoundingClientRect();
+  const lane = timelineLane.getBoundingClientRect();
+  const clampX = (x) => Math.min(Math.max(x, lane.left), lane.right);
+  const clampY = (y) => Math.min(Math.max(y, stack.top), stack.bottom);
+  const x0 = clampX(drag.startX);
+  const x1 = clampX(ev.clientX);
+  const y0 = clampY(drag.startY);
+  const y1 = clampY(ev.clientY);
+  return { left: Math.min(x0, x1), right: Math.max(x0, x1), top: Math.min(y0, y1), bottom: Math.max(y0, y1) };
+}
+
+/**
+ * V3.8.2. Choose the clips whose start and end both lie inside the range, on
+ * the rows it reaches. Shift adds them to the ones already chosen.
+ */
+function chooseInRange(box, laneRect, add) {
+  if (!box) return;
+  const from = timelineView.xToTime(tlView, box.left - laneRect.left);
+  const to = timelineView.xToTime(tlView, box.right - laneRect.left);
+  const rows = [...timelineStack.querySelectorAll('.layer-track')].filter((track) => {
+    const r = track.getBoundingClientRect();
+    return r.bottom > box.top && r.top < box.bottom;
+  });
+  const inside = [];
+  for (const track of rows) {
+    for (const clip of track.querySelectorAll('.layer-clip[data-layer-id]')) {
+      const layer = timelineModel.layerById(layers, clip.dataset.layerId);
+      if (layer && layer.start >= from && timelineModel.endOf(layer) <= to) inside.push(layer.id);
+    }
+  }
+  const ids = add ? [...selectionIds(), ...inside] : inside;
+  setLayerSelection(ids, inside[inside.length - 1] || selectedLayerId);
+}
+
+// V3.8.2. Whether the timeline is what was clicked last, which is what Ctrl+A
+// belongs to. A click anywhere else hands the key back to the page.
+let timelineClicked = false;
+document.addEventListener('pointerdown', (evt) => {
+  timelineClicked = !!(evt.target.closest && evt.target.closest('.timeline-section'));
+}, true);
 
 // Wheel zooms about the cursor, Shift and wheel scrolls sideways. deltaX is
 // added to deltaY for the scroll because a trackpad already reports a
@@ -313,13 +420,27 @@ timelineStage.addEventListener('wheel', (evt) => {
   // back to the browser, which scrolls .timeline-stack itself.
   if (overTimelineRows(evt)) return;
   evt.preventDefault();
+  // V3.8.2. Ctrl and wheel scrolls the rows up and down when there are more
+  // than fit, instead of zooming. With nothing to scroll it zooms as before.
+  if (evt.ctrlKey && !evt.shiftKey && timelineStack.scrollHeight > timelineStack.clientHeight) {
+    timelineStack.scrollTop += evt.deltaY || evt.deltaX;
+    return;
+  }
   const rect = timelineLane.getBoundingClientRect();
   if (evt.shiftKey) {
     tlView = timelineView.panBy(tlView, evt.deltaY + evt.deltaX, duration, rect.width);
   } else {
     const notches = -Math.sign(evt.deltaY || evt.deltaX);
     if (!notches) return;
-    tlView = timelineView.zoomAt(tlView, evt.clientX - rect.left,
+    // V3.8.2. Zooming in with no track reaching past the right edge of the view
+    // closes in on the tracks there are, from the left (towards 00:00), and
+    // not about the pointer, which may be over empty space that then slides the
+    // tracks out of the frame. Zooming out, or a track further right, keeps the
+    // pointer as the fixed point.
+    const right = tlView.scroll + rect.width / tlView.scale;
+    const tracksBeyond = timelineModel.totalDuration(layers) > right + 1e-6;
+    const anchor = notches > 0 && layers.length && !tracksBeyond ? 0 : evt.clientX - rect.left;
+    tlView = timelineView.zoomAt(tlView, anchor,
       Math.pow(TIMELINE_ZOOM_STEP, notches), duration, rect.width);
   }
   noteTimelineFit(rect.width);
@@ -396,7 +517,9 @@ function bindTimelineMarker(markerEl, isStart) {
       armDwell();
     }
 
+    let moved = false;
     const onMove = (ev) => {
+      moved = true;
       const factor = modifierFactor(ev);
       if (factor !== drag.factor) {
         drag.anchorX = ev.clientX;
@@ -407,7 +530,18 @@ function bindTimelineMarker(markerEl, isStart) {
       // Seconds per pixel is the zoom, so a marker moves under the cursor at
       // whatever scale the view is showing rather than at a fixed rate.
       const delta = ((ev.clientX - drag.anchorX) / tlView.scale) * drag.factor;
-      const value = drag.anchorValue + delta;
+      let value = drag.anchorValue + delta;
+      // V3.8.2. The markers are pulled onto the end (out) or the start (in) of a
+      // track when they come within a few pixels of it, lit green with the
+      // track's edge.
+      {
+        const snap = snapMarkerToTrackEdge(value, isStart);
+        value = snap.value;
+        lightSnap(snap.layerId
+          ? [timelineStack.querySelector('.layer-clip[data-layer-id="' + snap.layerId
+            + '"] .layer-clip__edge--' + (isStart ? 'start' : 'end'))]
+          : []);
+      }
       if (isStart) slider.setStart(value);
       else slider.setEnd(value);
       if (!compositing()) return;
@@ -419,12 +553,14 @@ function bindTimelineMarker(markerEl, isStart) {
     };
     const onUp = (ev) => {
       document.body.classList.remove('trim-dragging');
+      lightSnap([]);
       setDragHint(1.0);
       clearTimeout(dwell);
       // The release is the commit. Cheap when a dwell already built this frame:
       // seekDecodersTo skips a decoder that is already on the right frame, so
       // re-rendering an unchanged trim costs nothing but the restore.
       renderTrimFrames(mine);
+      if (isStart && moved) restartAtMarker();
       // Whether what came out of the drag is the fitted view again, which is
       // what decides if a window resize refits it.
       noteTimelineFit(laneAtPress.width);
@@ -432,6 +568,42 @@ function bindTimelineMarker(markerEl, isStart) {
     };
     beginDrag(grabEl, evt, onMove, onUp);
   });
+}
+
+/**
+ * V3.8.2. A marker's time, moved onto the nearest end (the out marker) or start
+ * (the in marker) of a track that is within CLIP_SNAP_PX of it on screen.
+ * Pixels rather than seconds, since a few pixels are a different number of
+ * seconds at every zoom.
+ */
+function snapMarkerToTrackEdge(value, isStart) {
+  let best = null;
+  for (const l of layers) {
+    const edge = isStart ? l.start : timelineModel.endOf(l);
+    const gap = Math.abs(edge - value) * tlView.scale;
+    if (gap <= CLIP_SNAP_PX && (!best || gap < best.gap)) best = { gap, edge, layerId: l.id };
+  }
+  return best ? { value: best.edge, layerId: best.layerId } : { value, layerId: null };
+}
+
+/**
+ * V3.8.2. An in marker let go with nothing on the timeline before it: that
+ * point becomes 00:00:00. Every track slides left by as much, the out marker
+ * and the playhead with them, and the marker is at the start again. One undo
+ * step with the marker's own move.
+ */
+function restartAtMarker() {
+  if (!timelineDriving() || busy) return;
+  const point = slider.start;
+  const shifted = timelineModel.shiftToZero(layers, point);
+  if (shifted === layers) return;
+  const end = slider.end - point;
+  const at = compositeAt - point;
+  setLayers(shifted);
+  slider.setRange(timelineModel.trimCeiling(layers), 0, Math.max(end, slider.minSpan));
+  seekComposite(Math.max(0, at));
+  refreshSelection(null);
+  renderTrimFrames();
 }
 
 bindTimelineMarker(timelineTrimIn, true);
@@ -482,6 +654,10 @@ timelinePlayhead.addEventListener('pointerdown', (evt) => {
 // The whole document, and the only thing an undo snapshot would need to hold.
 let layers = [];
 let selectedLayerId = null;
+// V3.8.2. The clips chosen together (Ctrl+A, Shift and click, a dragged range),
+// beside selectedLayerId, which stays the one the windows and the keys act on.
+// Empty unless two or more are chosen, and then it holds selectedLayerId too.
+let selectedLayerIds = new Set();
 // V3.3. The keyframe last clicked, as { layerId, id }, or null. Its own
 // selection beside the clip's: Delete takes the keyframe while one is chosen
 // and the clip once it is not. See renderer/app/keyframes.js.

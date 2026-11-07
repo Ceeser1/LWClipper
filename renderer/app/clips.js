@@ -74,7 +74,7 @@ function paintLayerSelection() {
   // V2.9. The row lights when the selected clip is on it, and the clip itself
   // says which of the row's clips that is.
   for (const clip of timelineStack.querySelectorAll('.layer-clip[data-layer-id]')) {
-    clip.classList.toggle('layer-clip--selected', clip.dataset.layerId === selectedLayerId);
+    clip.classList.toggle('layer-clip--selected', layerIsSelected(clip.dataset.layerId));
   }
   for (const row of timelineStack.querySelectorAll('.layer-row[data-lane]')) {
     row.classList.toggle('layer-row--selected',
@@ -82,8 +82,40 @@ function paintLayerSelection() {
   }
 }
 
+/** V3.8.2. Whether a clip is chosen, alone or among several. */
+function layerIsSelected(id) {
+  return !!id && (id === selectedLayerId || selectedLayerIds.has(id));
+}
+
+/** V3.8.2. Every chosen clip's id. */
+function selectionIds() {
+  if (selectedLayerIds.size) return [...selectedLayerIds];
+  return selectedLayerId ? [selectedLayerId] : [];
+}
+
+/**
+ * V3.8.2. Choose these clips together. `primary` stays the one the windows
+ * and keys act on, the last of them when it is not one of them.
+ */
+function setLayerSelection(ids, primary) {
+  const list = [...new Set(ids)].filter((id) => timelineModel.layerById(layers, id));
+  selectedLayerIds = list.length > 1 ? new Set(list) : new Set();
+  selectedLayerId = list.includes(primary) ? primary : (list[list.length - 1] || null);
+  paintLayerSelection();
+  paintKeyframeSelection();
+  updateCropBtn();
+}
+
+/** Shift and click: a clip in or out of the chosen ones. */
+function toggleLayerSelection(id) {
+  const ids = selectionIds();
+  if (ids.includes(id)) setLayerSelection(ids.filter((one) => one !== id), selectedLayerId);
+  else setLayerSelection([...ids, id], id);
+}
+
 function selectLayer(id) {
-  if (selectedLayerId === id) return;
+  if (selectedLayerId === id && !selectedLayerIds.size) return;
+  selectedLayerIds = new Set();
   selectedLayerId = id;
   paintLayerSelection();
   // V3.6.3. The diamonds are white on the selected clip and grey elsewhere.
@@ -115,6 +147,13 @@ function setLayers(next, restoring) {
   settledLayers = layers;
   if (selectedLayerId && !timelineModel.layerById(layers, selectedLayerId)) {
     selectedLayerId = null;
+  }
+  if (selectedLayerIds.size) {
+    const kept = [...selectedLayerIds].filter((id) => timelineModel.layerById(layers, id));
+    selectedLayerIds = kept.length > 1 ? new Set(kept) : new Set();
+    if (selectedLayerId === null || (kept.length && !kept.includes(selectedLayerId))) {
+      selectedLayerId = kept[kept.length - 1] || null;
+    }
   }
   dropUnusedStrips();
   renderLayerRows();
@@ -307,7 +346,7 @@ function buildLaneRow(type, lane, members) {
   row.dataset.type = type;
   row.dataset.lane = String(lane);
   if (members.every((l) => !l.enabled)) row.classList.add('layer-row--off');
-  if (members.some((l) => l.id === selectedLayerId)) row.classList.add('layer-row--selected');
+  if (members.some((l) => layerIsSelected(l.id))) row.classList.add('layer-row--selected');
 
   const head = document.createElement('div');
   head.className = 'layer-head';
@@ -422,7 +461,7 @@ function buildLaneRow(type, lane, members) {
   // a row always did. A press on a clip selects that clip itself, and stops
   // there, so it never reaches this.
   row.addEventListener('pointerdown', () => {
-    if (members.some((l) => l.id === selectedLayerId)) return;
+    if (members.some((l) => layerIsSelected(l.id))) return;
     selectLayer(members[0].id);
   });
   return row;
@@ -550,7 +589,7 @@ function buildLayerClip(track, layer) {
   clip.className = 'layer-clip';
   clip.dataset.layerId = layer.id;
   if (!layer.enabled) clip.classList.add('layer-clip--off');
-  if (layer.id === selectedLayerId) clip.classList.add('layer-clip--selected');
+  if (layerIsSelected(layer.id)) clip.classList.add('layer-clip--selected');
   // Step 17. The file's own name with its extension. This was layer.src, the
   // whole path, which is longer than a tooltip usefully is; layer.name is not
   // it either, because a download's title arrives there instead of a filename.
@@ -667,12 +706,14 @@ function buildLayerClip(track, layer) {
     // spelled out over setProjectError: the checker sees a literal after t(
     // and nothing else.
     dot.title = which === 'in'
-      ? t('Drag right to fade this layer in')
-      : t('Drag left to fade this layer out');
+      ? t('Drag right to fade this layer in. Right click for the curve.')
+      : t('Drag left to fade this layer out. Right click for the curve.');
     clip.appendChild(dot);
     // From nothing: a press on the handle starts the fade at zero and grows it
     // with the pointer, which is the gesture as described.
     bindFadeDrag(dot, layer.id, which, true);
+    // V3.8.1. And a right click on it chooses the fade's shape.
+    bindFadeMenu(dot, layer.id, which);
 
     const line = document.createElement('div');
     line.className = 'clip-fade-line clip-fade-line--' + which;
@@ -682,6 +723,7 @@ function buildLayerClip(track, layer) {
     // From where it stands, so moving a fade that exists does not throw it away
     // and redraw it from the corner.
     bindFadeDrag(line, layer.id, which, false);
+    bindFadeMenu(line, layer.id, which);
   }
 
   bindClipDrag(clip, layer.id);
@@ -814,6 +856,12 @@ const CLIP_SNAP_PX = 5;
  */
 function snapLines(layer) {
   const own = new Set(timelineModel.groupOf(layers, layer.id).map((l) => l.id));
+  // V3.8.2. Clips moving together with it are not neighbours to snap to.
+  if (selectedLayerIds.has(layer.id)) {
+    for (const id of selectedLayerIds) {
+      for (const m of timelineModel.groupOf(layers, id)) own.add(m.id);
+    }
+  }
   const lines = [{ at: compositeAt, layerId: null, part: 'playhead' }];
   for (const l of layers) {
     if (own.has(l.id)) continue;
@@ -912,10 +960,26 @@ function bindClipDrag(clip, layerId) {
     // way past. Selecting here instead means the press does one thing.
     evt.stopPropagation();
     evt.preventDefault();
-    selectLayer(layerId);
-
     const grip = evt.target.closest && evt.target.closest('.layer-clip__edge');
     const edge = grip ? grip.dataset.edge : null;
+    // V3.8.2. Shift and click chooses clips one by one and moves nothing.
+    if (evt.shiftKey && !edge) {
+      toggleLayerSelection(layerId);
+      return;
+    }
+    // A press on one of several chosen clips keeps them, so they can all be
+    // carried; they are narrowed to it only if the press turns out to be a click.
+    const together = !edge && selectedLayerIds.has(layerId);
+    if (together) {
+      if (selectedLayerId !== layerId) {
+        selectedLayerId = layerId;
+        paintLayerSelection();
+        paintKeyframeSelection();
+        updateCropBtn();
+      }
+    } else {
+      selectLayer(layerId);
+    }
     // What the gesture is dragging: the clip's position, or the edge's own
     // place on the timeline.
     const valueOf = (l) => (edge === 'end' ? timelineModel.endOf(l) : l.start);
@@ -953,7 +1017,9 @@ function bindClipDrag(clip, layerId) {
     const apply = (value) => {
       layers = edge
         ? timelineModel.trimGroup(layers, layerId, edge, value)
-        : timelineModel.moveGroup(layers, layerId, value);
+        : (together
+          ? timelineModel.moveSet(layers, [...selectedLayerIds], layerId, value)
+          : timelineModel.moveGroup(layers, layerId, value));
       drawTimeline();
       updatePlayhead();
     };
@@ -985,7 +1051,7 @@ function bindClipDrag(clip, layerId) {
       if (!here) return;
       // The row first, because the neighbours to snap to are the ones on the row
       // the clip will land on.
-      if (!edge) drag.target = laneTargetAt(here.type, here.lane, ev.clientY);
+      if (!edge && !together) drag.target = laneTargetAt(here.type, here.lane, ev.clientY);
       const lane = drag.target ? drag.target.lane : here.lane;
       const snap = snapClipValue(here, edge, drag.anchorValue + delta, lane);
       apply(snap.value);
@@ -995,7 +1061,7 @@ function bindClipDrag(clip, layerId) {
       lightSnap(snap.line
         ? [clip.querySelector('.layer-clip__edge--' + snap.side), snapLineElement(snap.line)]
         : []);
-      if (!edge) {
+      if (!edge && !together) {
         const now = timelineModel.layerById(layers, layerId);
         if (now) placeLaneGhost(drag, clip, now);
       }
@@ -1030,8 +1096,12 @@ function bindClipDrag(clip, layerId) {
       // the press; a clip takes the press to select and drag, so a quick
       // click that never became a drag seeks here, on its release. Not on a
       // trim edge, whose press means the edge.
-      else if (!edge && ev.type === 'pointerup' && performance.now() - drag.pressedAt <= CLIP_CLICK_MS) {
-        seekTimeline(timelineView.xToTime(tlView, ev.clientX - rect.left));
+      else {
+        // V3.8.2. A click on one of several chosen clips narrows them to it.
+        if (together) selectLayer(layerId);
+        if (!edge && ev.type === 'pointerup' && performance.now() - drag.pressedAt <= CLIP_CLICK_MS) {
+          seekTimeline(timelineView.xToTime(tlView, ev.clientX - rect.left));
+        }
       }
     };
     beginDrag(clip, evt, onMove, onUp);
@@ -1155,6 +1225,122 @@ function bindFadeDrag(node, layerId, which, fromZero) {
   });
 }
 
+// ---- V3.8.1. The shape of a fade ----
+//
+// "While hovering the Fade-in/out circle, right clicking should bring up a
+// little box menu where you can select which type of fade you want to pick."
+// Three rows of three, nine curves at most: "Clicking anywhere while the pop-up
+// is opened or selecting one of the types closes the pop-up."
+//
+// The menu is the clip menu's own element and variable, so everything that
+// already closes that one (a press outside it, Escape, the window losing focus,
+// a resize, the wheel) closes this one as well, and only one of the two is ever
+// open. Its order is timelineModel.FADE_CURVE_IDS, row by row.
+
+/**
+ * What each curve is called under its picture. Each name is a literal in a t()
+ * call and not built, which is what the locale checker can see.
+ */
+function fadeCurveLabels() {
+  return {
+    linear: t('Linear'),
+    quadIn: t('In Quad'),
+    quadOut: t('Out Quad'),
+    quadInOut: t('In-Out Quad'),
+    cubicIn: t('In Cubic'),
+    cubicOut: t('Out Cubic'),
+    cubicInOut: t('In-Out Cubic'),
+    quartInOut: t('In-Out Quart'),
+    sineInOut: t('In-Out Sine'),
+  };
+}
+
+// A picture of one curve, in the shape it has on this end of the clip: the
+// same traceFadeRamp the clip itself is drawn with.
+function drawFadeCurveIcon(canvas, curve, out, on) {
+  const ratio = window.devicePixelRatio || 1;
+  const w = 40;
+  const h = 24;
+  canvas.width = Math.round(w * ratio);
+  canvas.height = Math.round(h * ratio);
+  canvas.style.width = w + 'px';
+  canvas.style.height = h + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(ratio, ratio);
+  ctx.strokeStyle = '#45454e';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(0.5, 0.5, w - 1, h - 1);
+  ctx.strokeStyle = on ? '#8fe0a4' : '#d2d2d8';
+  ctx.lineWidth = 1.6;
+  ctx.beginPath();
+  traceFadeRamp(ctx, curve, out, 4, w - 4, 4, h - 4);
+  ctx.stroke();
+}
+
+/**
+ * Open the curve menu for one end of a layer's fade, at the pointer.
+ *
+ * Chooses for the layer's whole group, as the fade length does, so a picture
+ * and its own sound change shape together. The commit is the undo step.
+ */
+function openFadeMenu(evt, layerId, which) {
+  // The same guards as the clip menu: not while busy, and only where the
+  // timeline is what is driving.
+  if (busy || !timelineDriving()) return;
+  const layer = timelineModel.layerById(layers, layerId);
+  if (!layer) return;
+  evt.preventDefault();
+  // Not on to the timeline's own right click, which would open the clip menu
+  // over this one.
+  evt.stopPropagation();
+  selectLayer(layerId);
+  closeClipMenu();
+
+  const current = timelineModel.fadeCurvesOf(layer)[which];
+  const labels = fadeCurveLabels();
+  const menu = document.createElement('div');
+  menu.className = 'clip-menu clip-menu--fade';
+  menu.setAttribute('role', 'menu');
+  for (const id of timelineModel.FADE_CURVE_IDS) {
+    const b = document.createElement('button');
+    b.className = 'clip-fade-choice' + (id === current ? ' clip-fade-choice--on' : '');
+    b.setAttribute('role', 'menuitemradio');
+    b.setAttribute('aria-checked', id === current ? 'true' : 'false');
+    b.title = labels[id];
+    const icon = document.createElement('canvas');
+    drawFadeCurveIcon(icon, id, which === 'out', id === current);
+    const name = document.createElement('span');
+    name.textContent = labels[id];
+    b.append(icon, name);
+    b.addEventListener('click', () => {
+      // The ticked one again is not a change, so it is not an undo step.
+      if (id === current) return;
+      setLayers(timelineModel.fadeCurveGroup(layers, layerId, which, id));
+      commitHistory();
+    });
+    menu.appendChild(b);
+  }
+  // Any click inside it closes it, the gaps between the choices included. A
+  // choice has already acted by the time this runs.
+  menu.addEventListener('click', closeClipMenu);
+  menu.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    closeClipMenu();
+  });
+  document.body.appendChild(menu);
+
+  const w = menu.offsetWidth;
+  const h = menu.offsetHeight;
+  menu.style.left = Math.max(4, Math.min(evt.clientX, window.innerWidth - w - 4)) + 'px';
+  menu.style.top = Math.max(4, Math.min(evt.clientY, window.innerHeight - h - 4)) + 'px';
+  clipMenu = menu;
+}
+
+/** Right click on a fade's handle, or on the line it left, opens its curves. */
+function bindFadeMenu(node, layerId, which) {
+  node.addEventListener('contextmenu', (evt) => openFadeMenu(evt, layerId, which));
+}
+
 // How far the pointer moves before a press on the alpha bar is a drag. The
 // same two pixels the fade handles use, on the other axis.
 const ALPHA_DRAG_SLOP = 2;
@@ -1264,13 +1450,37 @@ function addEmptyRow(type) {
  * one time lanes are renumbered.
  */
 function deleteRow(type, lane) {
+  // V3.8.2. A row holding grouped tracks asks first: their partners go with it
+  // (Delete Group) or are left ungrouped (Delete Single).
+  const members = layers.filter((l) => l.type === type && l.lane === lane);
+  const grouped = members.filter((l) => timelineModel.groupOf(layers, l.id).length > 1);
+  if (grouped.length) {
+    const groupIds = [...new Set(grouped.map((l) => l.groupId))];
+    const partners = layers.filter((l) => groupIds.includes(l.groupId) && !members.includes(l)).map((l) => l.id);
+    confirmGroupedDelete(t('This layer contains grouped tracks.'),
+      () => deleteRowNow(type, lane, [], groupIds),
+      () => deleteRowNow(type, lane, partners, []));
+    return;
+  }
+  deleteRowNow(type, lane, [], []);
+}
+
+/**
+ * The row, and `alsoIds`, the tracks of other rows that were grouped with it;
+ * or `disband`, the groups to dissolve in what is left.
+ */
+function deleteRowNow(type, lane, alsoIds, disband) {
   // V3.3. A row holding the track a crop window is open on asks first.
   const hit = !cropModal.hidden && layers.some((l) => l.id === cropLayerId && l.type === type && l.lane === lane);
   // V3.6.2. And one holding the track a media window is open on.
-  const genHit = layers.some((l) => genWindowOn(l.id) && l.type === type && l.lane === lane);
-  confirmPopoutConflict([hit && cropWindowConflict(), genHit && genWindowConflict()], () => {
+  const genHits = layers.filter((l) => genWindowOn(l.id) && l.type === type && l.lane === lane);
+  const alsoHits = alsoIds.flatMap((id) => [!cropModal.hidden && cropLayerId === id && cropWindowConflict(), genWindowConflict(id)]);
+  confirmPopoutConflict([hit && cropWindowConflict(), ...genHits.map((l) => genWindowConflict(l.id)), ...alsoHits], () => {
     laneRows[type] = rowsOf(type) - 1;
-    setLayers(timelineModel.removeLane(layers, type, lane));
+    let next = timelineModel.removeLane(layers, type, lane);
+    for (const id of alsoIds) next = timelineModel.removeLayer(next, id);
+    for (const g of disband) next = timelineModel.ungroup(next, g);
+    setLayers(next);
     commitHistory();
   });
 }
@@ -1838,9 +2048,10 @@ function drawClipArt(layer, canvas, leftX, width, height) {
  * fade-in-end line. For fade-out its reversed, from the top left of the
  * fade-out-start line to the bottom right end of the track."
  *
- * Straight, because the ramp really is straight. fadeAlphaAt works out a linear
- * ramp and ffmpeg's fade filter draws one, so a curve here would be a drawing
- * of something that does not happen. "Only linear fading for now, no curves."
+ * Straight until V3.8.1, because the ramp really was straight: "Only linear
+ * fading for now, no curves." Now each ramp is drawn as the curve its fade has
+ * (traceFadeRamp), which is the one fadeAlphaAt and the file both use, so the
+ * line is still a drawing of something that happens.
  *
  * V2.5. It stops at the alpha line rather than at the top of the clip, and so
  * its angle follows the bar: "The diagonal fade in/out bar should only get as
@@ -1871,6 +2082,26 @@ function transitionInto(layer) {
   return transitionCache.into.get(layer.id) || null;
 }
 
+/**
+ * One fade's ramp as a path from x0 to x1, between the clip's bottom (nothing)
+ * and `top` (all of it). `out` runs it the other way up, the fade out's
+ * 1 - curve. Straight ramps stay the two points they have always been; a curve
+ * is traced in steps of about three pixels so it reads as smooth at any zoom.
+ */
+function traceFadeRamp(ctx, curve, out, x0, x1, top, height) {
+  const level = (p) => {
+    const shape = timelineModel.fadeShape(curve, p);
+    return height - (out ? 1 - shape : shape) * (height - top);
+  };
+  ctx.moveTo(x0, level(0));
+  if (curve === 'linear') {
+    ctx.lineTo(x1, level(1));
+    return;
+  }
+  const steps = Math.max(8, Math.min(120, Math.ceil(Math.abs(x1 - x0) / 3)));
+  for (let i = 1; i <= steps; i += 1) ctx.lineTo(x0 + ((x1 - x0) * i) / steps, level(i / steps));
+}
+
 function drawClipFades(layer, ctx, leftX, width, height) {
   const fades = timelineModel.fadesOf(layer);
   if (!fades.in && !fades.out) return;
@@ -1886,14 +2117,16 @@ function drawClipFades(layer, ctx, leftX, width, height) {
   ctx.strokeStyle = 'rgba(224, 228, 238, 0.85)';
   ctx.lineWidth = 1.5;
   ctx.beginPath();
+  // V3.8.1. Each ramp is the curve it was given: opacity at a point p of the
+  // way through, the same fadeShape the preview and the file use, so what is
+  // drawn here is what plays. A straight one is still the two-point line.
+  const curves = timelineModel.fadeCurvesOf(layer);
   if (fades.in > 0) {
-    ctx.moveTo(xAt(layer.start), height);
-    ctx.lineTo(xAt(layer.start + fades.in), top);
+    traceFadeRamp(ctx, curves.in, false, xAt(layer.start), xAt(layer.start + fades.in), top, height);
   }
   if (fades.out > 0) {
     const end = timelineModel.endOf(layer);
-    ctx.moveTo(xAt(end - fades.out), top);
-    ctx.lineTo(xAt(end), height);
+    traceFadeRamp(ctx, curves.out, true, xAt(end - fades.out), xAt(end), top, height);
   }
   // V2.9.1 item 5. Where this clip is the later of two overlapping on a lane,
   // the earlier one's way out is drawn across the overlap too, so the two
@@ -1916,8 +2149,9 @@ function drawClipFades(layer, ctx, leftX, width, height) {
     const underTop = under
       ? layerGeometry.alphaRow(artAlphaSpan(layer, height), timelineModel.alphaOf(under)) - CLIP_BORDER
       : top;
-    ctx.moveTo(xAt(layer.start), underTop);
-    ctx.lineTo(xAt(layer.start + cross.overlap), height);
+    // V3.8.1. What this clip's fade in covers of the one under it, so the
+    // under one's ramp is the same curve the other way up.
+    traceFadeRamp(ctx, curves.in, true, xAt(layer.start), xAt(layer.start + cross.overlap), underTop, height);
   }
   ctx.stroke();
   ctx.restore();

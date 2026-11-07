@@ -1217,3 +1217,89 @@ test('clips on different lanes never make a transition', () => {
     video({ id: 'B', start: 8, duration: 10, lane: 1 })]);
   assert.equal(T.overlapsOf(list).size, 0);
 });
+
+// ---- V3.8.1. The shape of a fade ----
+
+test('there are nine fade curves, the most the pop-up holds', () => {
+  assert.equal(T.FADE_CURVE_IDS.length, 9);
+  assert.equal(T.FADE_CURVE_IDS[0], 'linear');
+});
+
+test('every curve runs from nothing to all of it and never goes backwards', () => {
+  for (const id of T.FADE_CURVE_IDS) {
+    assert.equal(T.fadeShape(id, 0), 0, id);
+    assert.ok(Math.abs(T.fadeShape(id, 1) - 1) < 1e-9, id);
+    let last = 0;
+    for (let i = 1; i <= 100; i += 1) {
+      const v = T.fadeShape(id, i / 100);
+      assert.ok(v >= last - 1e-12, id + ' went backwards at ' + i);
+      last = v;
+    }
+  }
+});
+
+test('the quad curves are the ones they are named for', () => {
+  assert.equal(T.fadeShape('quadIn', 0.5), 0.25);
+  assert.equal(T.fadeShape('quadOut', 0.5), 0.75);
+  assert.equal(T.fadeShape('quadInOut', 0.25), 0.125);
+  assert.equal(T.fadeShape('quadInOut', 0.75), 0.875);
+  assert.equal(T.fadeShape('cubicIn', 0.5), 0.125);
+});
+
+test('a layer with no curve fades in a straight line, as before', () => {
+  const l = video({ id: 'a', duration: 10, fadeIn: 4, fadeOut: 4 });
+  assert.deepEqual(T.fadeCurvesOf(l), { in: 'linear', out: 'linear' });
+  assert.equal(T.fadeAlphaAt(l, 1), 0.25);
+  assert.equal(T.fadeAlphaAt(l, 8), 0.5);
+});
+
+test('a fade in follows its curve, and a fade out is what the curve has not yet taken', () => {
+  const l = video({ id: 'a', duration: 10, fadeIn: 4, fadeOut: 4, fadeInCurve: 'quadIn', fadeOutCurve: 'quadIn' });
+  // Half way through the fade in: half of the way, squared.
+  assert.equal(T.fadeAlphaAt(l, 2), 0.25);
+  // Half way through the fade out: one minus that, so it holds on at first.
+  assert.equal(T.fadeAlphaAt(l, 8), 0.75);
+  const out = video({ id: 'b', duration: 10, fadeOut: 4, fadeOutCurve: 'quadOut' });
+  assert.equal(T.fadeAlphaAt(out, 8), 0.25);
+});
+
+test('a curve name the model does not know is linear', () => {
+  const l = video({ id: 'a', fadeInCurve: 'wobble', fadeOutCurve: 7 });
+  assert.deepEqual(T.fadeCurvesOf(l), { in: 'linear', out: 'linear' });
+  assert.equal(l.fadeInCurve, 'linear');
+});
+
+test('a curve survives the layer being built again, as a project open does', () => {
+  const l = video({ id: 'a', fadeInCurve: 'sineInOut', fadeOutCurve: 'cubicOut' });
+  const again = T.createLayer(JSON.parse(JSON.stringify(l)));
+  assert.equal(again.fadeInCurve, 'sineInOut');
+  assert.equal(again.fadeOutCurve, 'cubicOut');
+});
+
+test('choosing the curve a fade already has hands back the same layer', () => {
+  const list = [video({ id: 'a', fadeInCurve: 'quadIn' })];
+  assert.equal(T.setFadeCurve(list, 'a', 'in', 'quadIn')[0], list[0]);
+  assert.equal(T.setFadeCurve(list, 'a', 'out', 'linear')[0], list[0]);
+  const next = T.setFadeCurve(list, 'a', 'out', 'cubicOut');
+  assert.equal(next[0].fadeOutCurve, 'cubicOut');
+  assert.equal(next[0].fadeInCurve, 'quadIn');
+  assert.equal(list[0].fadeOutCurve, 'linear', 'the old list was not touched');
+});
+
+test('a curve is set on a picture and its own sound together', () => {
+  const g = T.newGroupId();
+  const list = [video({ id: 'v', groupId: g }), audio({ id: 'a', groupId: g }), video({ id: 'x' })];
+  const next = T.fadeCurveGroup(list, 'v', 'in', 'quadInOut');
+  assert.equal(next[0].fadeInCurve, 'quadInOut');
+  assert.equal(next[1].fadeInCurve, 'quadInOut');
+  assert.equal(next[2].fadeInCurve, 'linear');
+});
+
+test('a cut end does not keep the curve of the fade that ended there', () => {
+  const list = [video({ id: 'v', duration: 20, fadeIn: 2, fadeOut: 2, fadeInCurve: 'quadIn', fadeOutCurve: 'cubicOut' })];
+  const [left, right] = T.readingOrder(T.splitLayer(list, 'v', 10));
+  assert.equal(left.fadeInCurve, 'quadIn');
+  assert.equal(left.fadeOutCurve, 'linear');
+  assert.equal(right.fadeInCurve, 'linear');
+  assert.equal(right.fadeOutCurve, 'cubicOut');
+});

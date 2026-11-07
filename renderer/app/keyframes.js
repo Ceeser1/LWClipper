@@ -197,7 +197,7 @@ function genKeyframeToEdit(layer) {
  * Cancel would and goes on, Abort leaves both as they were.
  */
 function keyframeWindowConflicts(layerId) {
-  return [cropWindowOn(layerId) && cropWindowConflict(), genWindowOn(layerId) && genWindowConflict()];
+  return [cropWindowOn(layerId) && cropWindowConflict(), genWindowConflict(layerId)];
 }
 
 function keyframeWindowOn(layerId) {

@@ -51,13 +51,13 @@ const maskGuideX = el('maskGuideX');
 const maskGuideY = el('maskGuideY');
 const maskHint = el('maskHint');
 const maskZoomHint = el('maskZoomHint');
-const maskGradHint = el('maskGradHint');
 // V3.7.1. Color or Gradient, Shape Settings' pair, and the gradient's editor.
 const maskFill = el('maskFill');
 const maskColorBtn = el('maskColorBtn');
 const maskFillHint = el('maskFillHint');
 const maskGradient = el('maskGradient');
 const maskGradBar = el('maskGradBar');
+const maskGradHelp = el('maskGradHelp');
 const maskGradCanvas = el('maskGradCanvas');
 const maskGradStart = el('maskGradStart');
 const maskGradEnd = el('maskGradEnd');
@@ -286,6 +286,7 @@ function resizeMaskStage() {
   maskGrid.style.width = w + 'px';
   // V3.7.1. The gradient's bar as wide as the preview too.
   maskGradBar.style.width = w + 'px';
+  maskGradHelp.style.width = w + 'px';
   maskCanvas.style.left = '0px';
   maskCanvas.style.top = '0px';
   maskCanvas.style.width = w + 'px';
@@ -410,7 +411,6 @@ function showMaskDraft(except) {
   maskColorBtn.hidden = grad;
   maskFillHint.hidden = !grad;
   maskGradient.hidden = !grad;
-  maskGradHint.hidden = !grad || cropTab !== 'mask';
   maskGrad.showBoxes(except);
   // Remove Mask has something to take off once there is a mask or a draft,
   // and nothing once it has been pressed.

@@ -207,11 +207,30 @@ const textLayout = (() => {
       let ascent = 0;
       let descent = 0;
       let x = 0;
+      // Two runs in one font (a word given a colour of its own) are drawn as
+      // two pieces, but the font kerns across the join exactly as the Edit
+      // Text box does, where the runs are spans of one line. So a piece that
+      // follows another in the same font starts where the text so far,
+      // measured as one, leaves its last letter, not where the last piece's
+      // own width ends. Without it "Te" in two colours has a gap after the T.
+      let chainFont = null;
+      let chainText = '';
+      let chainX = 0;
       for (const p of pieces) {
         const m = measure(p.text, p.style, scale);
-        p.x = x;
+        const font = fontString(p.style, scale);
+        if (font === chainFont) {
+          p.x = chainX + measure(chainText + p.text, p.style, scale).width - m.width;
+          chainText += p.text;
+          x = chainX + measure(chainText, p.style, scale).width;
+        } else {
+          chainFont = font;
+          chainText = p.text;
+          chainX = x;
+          p.x = x;
+          x += m.width;
+        }
         p.width = m.width;
-        x += m.width;
         ascent = Math.max(ascent, m.ascent);
         descent = Math.max(descent, m.descent);
       }

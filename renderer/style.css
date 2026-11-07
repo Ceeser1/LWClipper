@@ -215,6 +215,10 @@ button:disabled {
 /* Cancel and Clear, which are never both up: Clear hides itself for the length
    of a job and Cancel appears for exactly that length. The row is here so the
    pair occupy one slot rather than the layout shifting as they trade places. */
+.main-actions[hidden] {
+  display: none;
+}
+
 .main-actions {
   flex: none;
   display: flex;
@@ -1201,6 +1205,7 @@ body.advanced .timeline-section {
      tracks narrower than the ruler above them and every clip would sit fifteen
      pixels wide of the mark it is drawn against. */
   --timeline-scrollbar: 0px;
+  --timeline-hbar: 0px;
   /* The wheel zooms here rather than scrolling anything, and a touchpad swipe
      must not rubber-band the window behind it either. */
   overscroll-behavior: contain;
@@ -1320,7 +1325,7 @@ body.splitting-layers {
   left: var(--timeline-gutter);
   right: var(--timeline-scrollbar);
   top: 0;
-  bottom: 0;
+  bottom: var(--timeline-hbar, 0px);
   overflow: hidden;
   /* So the ruler and the track rows underneath still take the clicks. The two
      trim markers opt back in for themselves. */
@@ -2408,6 +2413,41 @@ body.lane-lifting * {
 .clip-menu__item:disabled {
   color: #66666f;
   cursor: default;
+}
+
+/* V3.8.1. The fade curve pop-up: three columns, at most three rows, each choice
+   a picture of its curve over its name. */
+.clip-menu--fade {
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  gap: 3px;
+  padding: 5px;
+}
+
+.clip-fade-choice {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  min-width: 66px;
+  padding: 5px 6px 4px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #d2d2d8;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.clip-fade-choice:hover {
+  background: rgba(120, 200, 140, 0.16);
+  color: #ebebf0;
+}
+
+.clip-fade-choice--on {
+  border-color: #8fe0a4;
+  color: #ebebf0;
 }
 
 /* V3. The entry that opens a submenu, with the arrow the user asked for. */
@@ -3890,6 +3930,21 @@ button.color-swatch:hover:not(:disabled) {
   margin: 0 auto 10px;
 }
 
+/* V3.8.2. The Color | Gradient field is the grid's last, on a row of its own,
+   so the gradient's bar comes right under it. */
+.gen-grid .gen-field--fill {
+  grid-column: 1 / -1;
+}
+
+/* V3.8.2. The gradient's how-to, always shown with it, as wide as the bar. */
+.gradient-help {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #b8b8c0;
+  text-align: center;
+}
+
 /* As wide as the preview, set with it; the dots stand on its middle. */
 .gradient-bar {
   position: relative;
@@ -4450,8 +4505,22 @@ body.popout-body > .modal__panel {
   color: #ebebf0;
 }
 
+/* V3.8.2. The buttons in a group on the right, an unseen copy of it on the
+   left: the title between is centred on the cell whatever the buttons take. */
+.dock-head__tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.dock-head__lead {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 /* The panel's Info button, moved up into the row while it is docked. */
-.dock-head > .info-tip {
+.dock-head .info-tip {
   position: relative;
   top: auto;
   right: auto;
@@ -4593,4 +4662,35 @@ button.dock-btn--close:hover:not(:disabled) {
 
 .dock-body .crop-actions > button {
   white-space: nowrap;
+}
+
+/* V3.8.2. The range drawn on empty space in the rows, to choose what is wholly
+   inside it. Over the page rather than in the stack, which scrolls. */
+.timeline-marquee {
+  position: fixed;
+  z-index: 50;
+  pointer-events: none;
+  border: 1px solid rgba(120, 200, 140, 0.9);
+  background: rgba(120, 200, 140, 0.14);
+}
+
+/* V3.8.2. The timeline's sideways scroll bar: a native one, so it is the
+   stack's vertical bar turned on its side. Starts at the gutter and stops where
+   the vertical bar's width begins, so it is as wide as the lane. */
+.timeline-hbar {
+  margin-left: var(--timeline-gutter);
+  margin-right: var(--timeline-scrollbar);
+  overflow-x: scroll;
+  overflow-y: hidden;
+  touch-action: pan-x;
+}
+
+.timeline-hbar__span {
+  height: 1px;
+}
+
+/* V3.8.2. One button of a question's row kept to the left, as Cancel is in the
+   delete-grouped-tracks question, the others staying on the right. */
+.choice-buttons .choice-buttons__left {
+  margin-right: auto;
 }

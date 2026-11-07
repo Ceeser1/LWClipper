@@ -155,7 +155,7 @@ test('the editor windows\' hints are in their Info pop-up, not in the window', (
   assert.equal(pops.length, 5, 'Crop and Mask, Crop Render Frame, Bar, Shape and Text');
   const inPops = pops.join('\n');
   for (const id of ['cropHint', 'cropPanHint', 'placeHint', 'placeZoomHint', 'maskHint', 'maskZoomHint',
-    'maskGradHint', 'cropKeysHint', 'renderHint', 'shapeHint', 'shapeGradHint', 'textHint']) {
+    'cropKeysHint', 'renderHint', 'shapeHint', 'textHint']) {
     assert.ok(inPops.includes('id="' + id + '"'), id + ' is in an Info pop-up');
   }
   const outside = pops.reduce((html, pop) => html.replace(pop, ''), HTML);

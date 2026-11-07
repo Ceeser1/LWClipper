@@ -168,7 +168,7 @@ barColorBtn.addEventListener('click', async () => {
   const id = barLayerId;
   const picked = await pickColor(was, (color) => {
     if (barLayerId === id) changeBar({ color }, null);
-  });
+  }, barModal);
   // The modal may have been closed under the picker, by Escape for one.
   if (barLayerId !== id) return;
   changeBar({ color: picked || was }, null);
@@ -191,8 +191,9 @@ barAcceptBtn.addEventListener('click', () => {
 
 function cancelBarSettings() {
   const first = barFirst;
+  const id = barLayerId;
   closeBarSettings();
-  if (first) cancelGenAdd();
+  if (first) cancelGenAdd(id);
 }
 
 barCancelBtn.addEventListener('click', cancelBarSettings);
