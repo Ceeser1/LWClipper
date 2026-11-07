@@ -42,6 +42,26 @@ const {
 // being wrong.
 const timelineModel = require('./src/timeline');
 const { ProcessCancelledError } = require('./src/processRunner');
+const launchArgs = require('./src/launchArgs');
+
+// V3.8.5. One app, however it was started. A .lwc double-clicked while the app
+// is open goes to the window that is already there, which asks the Different
+// LWC Project question if a project is open, rather than to a second app
+// beside it. The lock is keyed on userData, so a portable and an installed
+// copy are one app too: they share that folder.
+//
+// The files waiting for the window, oldest first. Several can arrive at once:
+// Explorer starts one process per file when several are selected and opened.
+let outsideQueue = launchArgs.projectArgs(process.argv, process.cwd(), projectFile.EXT);
+// Packaged builds only. A development run shares userData with the installed
+// app, and handing its launch to that one and quitting would look like the
+// dev build failing to start.
+const firstInstance = !app.isPackaged
+  || app.requestSingleInstanceLock({ open: outsideQueue });
+// Gone before ready, so none of the startup below runs and nothing the running
+// app owns (its session marker, its waveforms) is touched. The guards in
+// whenReady and will-quit are for the moment before the exit lands.
+if (!firstInstance) app.exit(0);
 
 // ffprobe reads the duration either way; the extension only decides whether the
 // trim runs the audio path (stream copy) or the video path. Both lists live in
@@ -382,6 +402,7 @@ ipcMain.handle('app:allowClose', () => {
 });
 
 app.whenReady().then(() => {
+  if (!firstInstance) return;
   // First start only: open in the language Windows is set to display in, when
   // there is a translation for it. Writing it means every start after this one
   // reads a saved choice rather than guessing again, so switching the app to
@@ -417,6 +438,8 @@ app.on('window-all-closed', () => {
 // Waveforms and filmstrips are worth nothing once the app is closed, so the
 // folders go with it rather than growing across sessions.
 app.on('will-quit', () => {
+  // The running app's folders, not this one's.
+  if (!firstInstance) return;
   waveform.clearPeaks();
   filmstrip.clearStrips();
   endSession();
@@ -1079,6 +1102,33 @@ function openProject(filePath) {
 }
 
 ipcMain.handle('project:open', (_event, filePath) => openProject(filePath));
+
+// ---- a project opened from outside the app ----
+//
+// V3.8.5. The window takes the waiting files one at a time, when it is ready
+// to ask about one: after the restore question at startup, and never while
+// another question is up or a job is running. Main only keeps the list and
+// says when it grew, since only the window knows when it can ask.
+
+/** A second start of the app: its files join the list and the window comes forward. */
+app.on('second-instance', (_event, argv, cwd, data) => {
+  // What the second instance worked out from its own command line, in its own
+  // folder. The argv here is Chromium's copy of it with switches added, kept
+  // as the fallback.
+  const named = data && Array.isArray(data.open)
+    ? data.open
+    : launchArgs.projectArgs(argv, cwd, projectFile.EXT);
+  outsideQueue = launchArgs.enqueue(outsideQueue, named);
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  // Brought forward even with no file named: starting the app again while it
+  // is open is asking for the window.
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+  if (named.length) mainWindow.webContents.send('project:outside');
+});
+
+ipcMain.handle('project:takeOutside', () => outsideQueue.shift() || null);
 
 // ---- auto-save and crash restore ----
 //

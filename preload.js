@@ -52,6 +52,13 @@ contextBridge.exposeInMainWorld('lwclipper', {
     ipcRenderer.invoke('project:save', { filePath, state, previous }),
   projectOpenDialog: () => ipcRenderer.invoke('project:openDialog'),
   openProject: (filePath) => ipcRenderer.invoke('project:open', filePath),
+  // V3.8.5. A .lwc opened from outside: the next one waiting, or null, and a
+  // call when one more has arrived.
+  takeOutsideProject: () => ipcRenderer.invoke('project:takeOutside'),
+  onOutsideProject: (callback) => {
+    ipcRenderer.removeAllListeners('project:outside');
+    ipcRenderer.on('project:outside', () => callback());
+  },
   // V3.6.1. Auto-save and crash restore. A restore opens through openProject.
   autosave: (state, origin) => ipcRenderer.invoke('autosave:write', { state, origin }),
   crashedAutosaves: () => ipcRenderer.invoke('autosave:crashed'),

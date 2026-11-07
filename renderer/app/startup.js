@@ -359,6 +359,8 @@ window.lwclipper.onProgress(({ frac, text }) => setProgress(frac, text));
 window.lwclipper.onClosing(async () => {
   if (await confirmDiscard()) window.lwclipper.allowClose();
 });
+// V3.8.5. A .lwc double-clicked while the app is open.
+window.lwclipper.onOutsideProject(() => openFromOutside());
 window.lwclipper.onWindowState((state) => setWindowMaxed(!!(state && state.maximized)));
 window.lwclipper.windowMaximized().then((maxed) => setWindowMaxed(!!maxed));
 setBusy(false);
@@ -369,7 +371,9 @@ refreshToolsLabel();
 // frame is English even when another language is saved; it is one frame.
 // V3.6.1. Then the restore question after a crash, once it can be asked in
 // the language the app is set to.
-loadSettings().then(offerRestore);
+// V3.8.5. Then a project the app was started with, whatever the restore
+// question came to, so finally rather than then.
+loadSettings().then(offerRestore).finally(startOutsideOpening);
 // Builds the format toggle from what the main process says it can write. Async,
 // so the row starts empty for a frame; nothing is enabled until a file is
 // loaded anyway.
