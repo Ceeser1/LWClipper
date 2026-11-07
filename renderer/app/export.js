@@ -330,7 +330,7 @@ async function exportProject(title) {
     }
     const result = await window.lwclipper.compose(
       prepared.layers, projectFrame(), { start: slider.start, end: slider.end },
-      destination, compressionPercent());
+      destination, compressionPercent(), chosenDevice());
     if (!result.ok) reportFailure(result);
     else setStatus('Saved to {path}', { path: result.data });
     finishRendering(result);
@@ -365,6 +365,76 @@ function exportWindowOpen() {
   return !exportModal.hidden;
 }
 
+// ---- V4.4. Render using ----
+//
+// The user: "For exporting it would be nice to have the option to chose
+// between "Render using [x] GPU [ ] CPU [ ] Both"." Both is what the GPU
+// already is: ffmpeg builds the frames on the CPU and only the encode moves,
+// so the choice is Auto, GPU or CPU. Auto and GPU render the same way; GPU
+// only says so when the GPU let it down and the CPU took over.
+
+const exportDeviceLabel = el('exportDeviceLabel');
+const exportDeviceRow = el('exportDeviceRow');
+const exportDevice = el('exportDevice');
+const exportDeviceNote = el('exportDeviceNote');
+const RENDER_DEVICES = ['auto', 'gpu', 'cpu'];
+const GPU_OUTPUTS = ['mp4', 'mov'];
+
+// null until the main process has tried a real encode on the GPU.
+let gpuAvailable = null;
+
+function chosenDevice() {
+  const saved = appSettings && appSettings.renderDevice;
+  return RENDER_DEVICES.includes(saved) ? saved : 'auto';
+}
+
+/** What this export will actually run on, as far as the window knows. */
+function effectiveDevice() {
+  if (chosenDevice() === 'cpu') return 'cpu';
+  if (!GPU_OUTPUTS.includes(outputFormat)) return 'cpu';
+  return gpuAvailable === false ? 'cpu' : chosenDevice();
+}
+
+function refreshDeviceRow() {
+  const audio = outputIsAudio();
+  exportDeviceLabel.hidden = audio;
+  exportDeviceRow.hidden = audio;
+  if (audio) return;
+  const gpuFormat = GPU_OUTPUTS.includes(outputFormat);
+  const shown = effectiveDevice();
+  exportDevice.querySelectorAll('button').forEach((b) => {
+    const device = b.dataset.device;
+    b.classList.toggle('btn--active', device === shown);
+    b.disabled = device !== 'cpu' && (!gpuFormat || gpuAvailable === false);
+  });
+  let note;
+  if (!gpuFormat) note = t('WebM is always rendered on the CPU.');
+  else if (gpuAvailable === false) note = t('No GPU encoder was found, so the CPU renders.');
+  else if (gpuAvailable === null) note = t('Checking the GPU...');
+  else if (shown === 'auto') note = t('The GPU encodes when it can.');
+  else if (shown === 'gpu') note = t('The GPU encodes, the CPU builds the frames.');
+  else note = t('The CPU does all of it.');
+  exportDeviceNote.textContent = note;
+}
+
+async function checkGpu() {
+  if (gpuAvailable !== null) return;
+  try {
+    const info = await window.lwclipper.gpuInfo();
+    gpuAvailable = !!(info && info.available);
+  } catch {
+    gpuAvailable = false;
+  }
+  if (exportWindowOpen()) refreshDeviceRow();
+}
+
+exportDevice.addEventListener('click', async (evt) => {
+  const btn = evt.target.closest('button[data-device]');
+  if (!btn || btn.disabled) return;
+  appSettings = (await window.lwclipper.setSettings({ renderDevice: btn.dataset.device })).settings;
+  refreshDeviceRow();
+});
+
 function canExport() {
   return timelineDriving() && !busy && savable();
 }
@@ -378,6 +448,7 @@ function refreshExportWindow() {
   exportSizeLabel.hidden = audio;
   exportSize.hidden = audio;
   updateCutControls();
+  refreshDeviceRow();
   exportGoBtn.disabled = !canExport();
 }
 
@@ -388,6 +459,7 @@ function openExportWindow() {
   exportNameField.value = exportName();
   exportModal.hidden = false;
   refreshExportWindow();
+  checkGpu();
   exportNameField.focus();
   exportNameField.select();
 }
@@ -488,6 +560,11 @@ function finishRendering(result) {
     renderingBar.value = 1;
     renderingStatus.textContent = t('Saved to {path}', { path: rendering.path });
     renderingStatus.dataset.tone = '';
+    // V4.4. Auto falls back without a word; a GPU that was asked for says it.
+    if (result.fellBack && chosenDevice() === 'gpu') {
+      renderingStatus.textContent += '\n' + t('The GPU could not render this, so the CPU did.');
+      renderingStatus.dataset.tone = 'warn';
+    }
     renderingOpenBtn.hidden = false;
     renderingFolderBtn.hidden = false;
     renderingOpenBtn.focus();

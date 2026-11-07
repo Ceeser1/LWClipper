@@ -21,6 +21,7 @@ const toolPaths = require('./src/toolPaths');
 const ytdlp = require('./src/ytdlp');
 const trimmer = require('./src/trimmer');
 const composer = require('./src/composer');
+const renderDevice = require('./src/renderDevice');
 const waveform = require('./src/waveform');
 const filmstrip = require('./src/filmstrip');
 const projectFile = require('./src/project');
@@ -468,6 +469,11 @@ ipcMain.handle('app:about', async () => {
   return aboutCache;
 });
 
+// V4.4. Whether the Export window may offer the GPU, from a real encode.
+ipcMain.handle('render:gpu', async () => ({
+  available: await renderDevice.gpuAvailable(toolPaths.findFfmpeg()),
+}));
+
 // V4.1. About's link. The one address it may open, and only in the browser.
 ipcMain.handle('shell:openGithub', () => shell.openExternal(GITHUB_URL));
 
@@ -746,16 +752,37 @@ ipcMain.handle('video:trim', async (_event, { media, destination, start, end, ac
  * a trim, so typing a different extension into the dialog is what picks the
  * format on both paths rather than only on one.
  */
-ipcMain.handle('video:compose', async (_event, { layers, project, trim, destination, compression }) => {
+ipcMain.handle('video:compose', async (_event, {
+  layers, project, trim, destination, compression, device,
+}) => {
   const token = startJob();
   try {
     const hasVideo = (layers || []).some((l) => l.type === 'video' && l.enabled && l.src);
     const format = containerFor(destination, !hasVideo);
     const sources = composer.sourceSizes(layers || [], trimmer.probeMedia);
-    const saved = await composer.render(
-      { layers, project, trim, output: destination, format, compression, sources },
-      sendProgress, token);
-    return { ok: true, data: saved };
+    // V4.4. The GPU when it was asked for (or Auto) and it opens here. An
+    // audio file has no picture to encode, so it never asks the probe.
+    const gpu = hasVideo && renderDevice.sanitizeChoice(device) !== 'cpu'
+      && renderDevice.gpuCanWrite(format)
+      && await renderDevice.gpuAvailable(toolPaths.findFfmpeg());
+    const encoder = renderDevice.resolveEncoder(device, format, gpu);
+    const job = { layers, project, trim, output: destination, format, compression, sources };
+    let saved;
+    let fellBack = false;
+    try {
+      saved = await composer.render({ ...job, encoder }, sendProgress, token);
+    } catch (e) {
+      // A GPU that opened for the probe can still refuse a real job (out of
+      // encoder sessions, a frame size it will not take). The CPU writes the
+      // same file, so the export goes on there rather than failing.
+      if (encoder !== 'nvenc' || e instanceof ProcessCancelledError) throw e;
+      fellBack = true;
+      sendProgress(0, t('The GPU could not render this, rendering on the CPU...'));
+      saved = await composer.render({ ...job, encoder: 'cpu' }, sendProgress, token);
+    }
+    return {
+      ok: true, data: saved, device: encoder === 'nvenc' && !fellBack ? 'gpu' : 'cpu', fellBack,
+    };
   } catch (e) {
     return { ok: false, cancelled: e instanceof ProcessCancelledError, error: String(e.message || e) };
   } finally {

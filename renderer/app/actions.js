@@ -552,3 +552,38 @@ document.addEventListener('pointerdown', (evt) => {
 window.addEventListener('blur', closeMenus);
 window.addEventListener('resize', closeMenus);
 refreshMenuBar();
+
+// ---- V4.4.1. The render resolution in the menu bar ----
+//
+// The user: "move the "Render Resolution X x Y" in the center of the menu bar
+// if it fits, else right bound in the menu bar. Like this there is even more
+// space on the main window". In advanced editing the readout was the only
+// thing left in the row above the previews, so the row goes and the readout
+// lives in the menu bar. Simple editing has no menu bar and keeps the row.
+// Centred on the bar while it clears the last heading, right-aligned once it
+// would not (a narrow window, or longer German headings).
+
+const MENU_RESOLUTION_GAP = 12;
+
+function placeMenuResolution() {
+  const home = timelineDriving() ? menuBar : videoHead;
+  if (renderResolution.parentNode !== home) home.appendChild(renderResolution);
+  renderResolution.classList.remove('render-resolution--right');
+  if (home !== menuBar || renderResolution.hidden) return;
+  const heads = menuBar.querySelectorAll('.menu-bar__head');
+  const last = heads[heads.length - 1];
+  if (!last) return;
+  const fits = renderResolution.getBoundingClientRect().left
+    >= last.getBoundingClientRect().right + MENU_RESOLUTION_GAP;
+  renderResolution.classList.toggle('render-resolution--right', !fits);
+}
+
+// Anything that changes a width the test reads: the window, a heading's label
+// after a language switch, the readout's own numbers.
+if (typeof ResizeObserver === 'function') {
+  const watch = new ResizeObserver(() => placeMenuResolution());
+  watch.observe(menuBar);
+  watch.observe(renderResolution);
+  menuBar.querySelectorAll('.menu-bar__head').forEach((h) => watch.observe(h));
+}
+placeMenuResolution();

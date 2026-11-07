@@ -515,6 +515,17 @@
           <input id="exportHeight" class="export-size__box" type="text" readonly tabindex="-1" />
           <span class="export-size__note">Set in Crop Render Frame</span>
         </div>
+        <!-- V4.4. What encodes the picture. The frames are built on the CPU
+             either way; only the encode moves to the GPU. -->
+        <span id="exportDeviceLabel" class="export-grid__label">Render using</span>
+        <div id="exportDeviceRow" class="export-device">
+          <div id="exportDevice" class="format-toggle" role="group" aria-labelledby="exportDeviceLabel">
+            <button type="button" data-device="auto">Auto</button>
+            <button type="button" data-device="gpu">GPU</button>
+            <button type="button" data-device="cpu">CPU</button>
+          </div>
+          <span id="exportDeviceNote" class="export-size__note" data-no-translate></span>
+        </div>
       </div>
       <div id="exportControls" class="export-controls"></div>
       <div class="export-actions">

@@ -370,5 +370,17 @@
   "Choose two or more tracks to join.": "Choose two or more tracks to join.",
   "Only tracks on the same layer can be joined.": "Only tracks on the same layer can be joined.",
   "Texts, shapes and bars cannot be joined.": "Texts, shapes and bars cannot be joined.",
-  "Only neighbouring tracks can be joined: another track is between them.": "Only neighbouring tracks can be joined: another track is between them."
+  "Only neighbouring tracks can be joined: another track is between them.": "Only neighbouring tracks can be joined: another track is between them.",
+  "Render using": "Render using",
+  "Auto": "Auto",
+  "GPU": "GPU",
+  "CPU": "CPU",
+  "Checking the GPU...": "Checking the GPU...",
+  "The GPU encodes when it can.": "The GPU encodes when it can.",
+  "The GPU encodes, the CPU builds the frames.": "The GPU encodes, the CPU builds the frames.",
+  "The CPU does all of it.": "The CPU does all of it.",
+  "WebM is always rendered on the CPU.": "WebM is always rendered on the CPU.",
+  "No GPU encoder was found, so the CPU renders.": "No GPU encoder was found, so the CPU renders.",
+  "The GPU could not render this, rendering on the CPU...": "The GPU could not render this, rendering on the CPU...",
+  "The GPU could not render this, so the CPU did.": "The GPU could not render this, so the CPU did."
 }

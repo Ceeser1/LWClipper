@@ -21,9 +21,10 @@ contextBridge.exposeInMainWorld('lwclipper', {
   trim: (media, destination, start, end, accurate, compression, audio, crop, video) =>
     ipcRenderer.invoke('video:trim',
       { media, destination, start, end, accurate, compression, audio, crop, video }),
-  compose: (layers, project, trim, destination, compression) =>
+  compose: (layers, project, trim, destination, compression, device) =>
     ipcRenderer.invoke('video:compose',
-      { layers, project, trim, destination, compression }),
+      { layers, project, trim, destination, compression, device }),
+  gpuInfo: () => ipcRenderer.invoke('render:gpu'),
   audioPeaks: (filePath, duration, buckets) =>
     ipcRenderer.invoke('audio:peaks', { filePath, duration, buckets }),
   abortAudioPeaks: () => ipcRenderer.invoke('audio:abortPeaks'),

@@ -370,5 +370,17 @@
   "Choose two or more tracks to join.": "Wähle zwei oder mehr Spuren zum Verbinden aus.",
   "Only tracks on the same layer can be joined.": "Nur Spuren auf derselben Ebene können verbunden werden.",
   "Texts, shapes and bars cannot be joined.": "Texte, Formen und Balken können nicht verbunden werden.",
-  "Only neighbouring tracks can be joined: another track is between them.": "Nur benachbarte Spuren können verbunden werden: Eine andere Spur liegt dazwischen."
+  "Only neighbouring tracks can be joined: another track is between them.": "Nur benachbarte Spuren können verbunden werden: Eine andere Spur liegt dazwischen.",
+  "Render using": "Rendern mit",
+  "Auto": "Auto",
+  "GPU": "GPU",
+  "CPU": "CPU",
+  "Checking the GPU...": "GPU wird geprüft...",
+  "The GPU encodes when it can.": "Die GPU kodiert, wenn sie kann.",
+  "The GPU encodes, the CPU builds the frames.": "Die GPU kodiert, die CPU baut die Bilder.",
+  "The CPU does all of it.": "Die CPU macht alles.",
+  "WebM is always rendered on the CPU.": "WebM wird immer auf der CPU gerendert.",
+  "No GPU encoder was found, so the CPU renders.": "Kein GPU-Encoder gefunden, daher rendert die CPU.",
+  "The GPU could not render this, rendering on the CPU...": "Die GPU konnte das nicht rendern, es wird auf der CPU gerendert...",
+  "The GPU could not render this, so the CPU did.": "Die GPU konnte das nicht rendern, daher hat es die CPU gemacht."
 }

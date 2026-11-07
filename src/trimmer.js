@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const {
-  compressionSetting, volumeFactor, cropFilter, containerFor, canCopyInto,
+  compressionSetting, gpuCompressionSetting, volumeFactor, cropFilter, containerFor, canCopyInto,
 } = require('./backend');
 const toolPaths = require('./toolPaths');
 const progress = require('./progress');
@@ -20,7 +20,17 @@ const MIN_SPAN = 0.05;
 // -row-mt with -cpu-used 4 more than halves the encode for the same file size.
 // It is still around six times an x264 veryfast pass, which is the cost of the
 // container rather than something tuning can fix.
-function videoTrackArgs(format, compression) {
+//
+// V4.4. `encoder` 'nvenc' hands an mp4 or mov picture to the Nvidia encoder
+// instead. WebM has no Nvidia encoder (the cards only encode H.264, HEVC and,
+// from RTX 40 on, AV1), so it stays on libvpx whatever is asked. H.264 rather
+// than HEVC, so a file from the GPU plays wherever one from the CPU does.
+function videoTrackArgs(format, compression, encoder = 'cpu') {
+  if (encoder === 'nvenc' && format !== 'webm') {
+    return ['-c:v', 'h264_nvenc', '-preset', 'p4', '-tune', 'hq', '-rc', 'vbr',
+      '-cq', String(gpuCompressionSetting(compression)), '-b:v', '0', '-spatial-aq', '1',
+      '-pix_fmt', 'yuv420p'];
+  }
   const q = String(compressionSetting(format, compression));
   if (format === 'webm') {
     return ['-c:v', 'libvpx-vp9', '-crf', q, '-b:v', '0',

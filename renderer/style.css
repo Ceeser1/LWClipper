@@ -5137,3 +5137,51 @@ body.advanced .save-section {
   border-left: 1px dashed rgba(235, 235, 240, 0.45);
   pointer-events: none;
 }
+
+/* ---- V4.4. Render using ---- */
+
+.export-device {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.export-device[hidden] {
+  display: none;
+}
+
+.export-device .export-size__note {
+  white-space: normal;
+}
+
+.rendering-status[data-tone="warn"] {
+  color: #e0c48f;
+  white-space: pre-line;
+}
+
+/* ---- V4.4.1. The render resolution in the menu bar ---- */
+
+/* The row above the previews held nothing but the readout in advanced
+   editing, and the readout is in the menu bar now (placeMenuResolution). */
+body.advanced #videoHead {
+  display: none;
+}
+
+/* Anchors the readout, centred on the bar by .render-resolution's own rules. */
+body.advanced .menu-bar {
+  position: relative;
+}
+
+/* Too wide to clear the headings centred: back in the flow, at the right. */
+.menu-bar .render-resolution--right {
+  position: static;
+  transform: none;
+  margin-left: auto;
+  padding: 0 6px 0 12px;
+  /* A window too narrow for even that cuts the text short rather than
+     pushing it out past the bar's edge. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

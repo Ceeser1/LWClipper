@@ -35,6 +35,9 @@ const DEFAULTS = {
   // V4.2. The keys bound in Key Binds, by action id: { 'edit.copy': ['Ctrl+C'] }.
   // Only the ones that differ from their defaults; null until one does.
   keyBinds: null,
+  // V4.4. What renders an export's picture: 'auto' (the GPU when it can),
+  // 'gpu' or 'cpu'. See src/renderDevice.js.
+  renderDevice: 'auto',
 };
 
 function settingsFile() {

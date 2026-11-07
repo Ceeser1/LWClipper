@@ -272,6 +272,8 @@ function applyBestCompression() {
  */
 function applyAdvancedEditing() {
   document.body.classList.toggle('advanced', !!appSettings.advancedEditing);
+  // V4.4.1. The readout moves between the menu bar and the preview row.
+  if (typeof placeMenuResolution === 'function') placeMenuResolution();
   // The trim means a different thing on each side of this switch.
   applyTrimSubject();
   // The timeline frame has no width at all while it is out of the flow, so it

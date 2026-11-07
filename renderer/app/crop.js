@@ -389,6 +389,9 @@ function updateRenderResolution() {
     const frame = projectFrame();
     renderResolutionText.textContent = t('Render Resolution: {w} x {h}',
       { w: frame.width, h: frame.height });
+    // V4.4.1. It sits in the menu bar here; whether centred fits is a
+    // question of its width.
+    if (typeof placeMenuResolution === 'function') placeMenuResolution();
     return;
   }
   const size = sourceSize();

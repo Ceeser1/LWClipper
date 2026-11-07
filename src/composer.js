@@ -413,6 +413,7 @@ function buildComposeArgs({
   format = 'mp4',
   compression = null,
   sources = {},
+  encoder = 'cpu',
 }) {
   const live = layers.filter((l) => l.enabled && l.src && l.duration > 0);
   const videoLayers = live.filter((l) => l.type === 'video');
@@ -677,7 +678,7 @@ function buildComposeArgs({
   args.push(...maps);
 
   if (videoLayers.length) {
-    args.push(...videoTrackArgs(format, compression));
+    args.push(...videoTrackArgs(format, compression, encoder));
     args.push('-r', String(fps));
   } else {
     args.push('-vn');
@@ -743,6 +744,7 @@ async function render({
   format = 'mp4',
   compression = null,
   sources = {},
+  encoder = 'cpu',
 }, onProgress, cancelToken) {
   const ffmpeg = toolPaths.findFfmpeg();
   if (!ffmpeg) throw new Error('ffmpeg.exe was not found alongside the app.');
@@ -763,7 +765,7 @@ async function render({
 
   fs.mkdirSync(path.dirname(out), { recursive: true });
   const args = buildComposeArgs({
-    layers, project, trim, output: out, format, compression, sources,
+    layers, project, trim, output: out, format, compression, sources, encoder,
   });
 
   const reader = progress.ffmpegProgress(span.duration);

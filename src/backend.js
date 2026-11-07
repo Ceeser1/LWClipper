@@ -271,6 +271,20 @@ function compressionSetting(format, percent) {
   return table ? table[compressionStep(percent)] : null;
 }
 
+// V4.4. The same four steps for the Nvidia encoder (h264_nvenc, preset p4,
+// tune hq, vbr with -cq). Its numbers do not mean what x264's do: at cq 23 the
+// file came out nearly twice the size. Matched by VMAF on two lossless 1080p
+// references cut from real footage (2026-11-07), each step at or a point
+// under the x264 score on the harder clip and above it on the other:
+//   x264 crf 18/23/28/32 scored 97.7/94.2/87.0/77.6 and 94.6/88.1/76.2/61.8,
+//   nvenc cq 25/30/34/38 scored 97.5/93.1/87.0/77.3 and 95.8/90.0/81.7/71.1.
+// p5 scored the same as p4 and took nearly twice as long, so p4.
+const GPU_COMPRESSION_TABLE = { 0: 25, 25: 30, 50: 34, 75: 38 };
+
+function gpuCompressionSetting(percent) {
+  return GPU_COMPRESSION_TABLE[compressionStep(percent)];
+}
+
 function crfForCompression(percent) {
   return COMPRESSION_TABLES.mp4[compressionStep(percent)];
 }
@@ -444,6 +458,8 @@ module.exports = {
   crfForCompression,
   vp9CrfForCompression,
   compressionSetting,
+  gpuCompressionSetting,
+  GPU_COMPRESSION_TABLE,
   compressionStep,
   supportsCompression,
   compressionDisplay,
