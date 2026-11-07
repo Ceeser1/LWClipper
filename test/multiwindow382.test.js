@@ -277,7 +277,8 @@ test('the timeline has a sideways scroll bar, shown while a track lies out of vi
 
 test('Project saved. is a passing line: it takes the Clear button out and goes after a few seconds', () => {
   const shell = read('renderer', 'app', 'shell.js');
-  assert.ok(/TRANSIENT_STATUS = \{ 'Project saved\.': \d+ \}/.test(shell));
+  // V4.3 added the join hints to the same table, one entry a line.
+  assert.ok(/TRANSIENT_STATUS = \{\s*'Project saved\.': \d+,/.test(shell));
   assert.ok(shell.includes('mainActions.hidden = (transientStatusShown() || inWindow) && !busy;'));
   assert.ok(/\.main-actions\[hidden\]\s*\{\s*display:\s*none/.test(CSS));
 });

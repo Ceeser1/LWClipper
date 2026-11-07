@@ -544,6 +544,17 @@ function dockPopOut(modal, where) {
   return true;
 }
 
+/**
+ * V4.1. The panels out in windows of their own put into the language just
+ * chosen: translateDom walks the main document, which they are no longer in.
+ */
+function translatePopped(wasShowing) {
+  for (const state of popped.values()) {
+    if (!state.gone) translateDom(state.panel, wasShowing);
+  }
+  for (const sub of carried.keys()) translateDom(sub, wasShowing);
+}
+
 /** The popped out modal whose window is `name`, or null. */
 function poppedNamed(name) {
   for (const [modal, state] of popped) {
@@ -569,8 +580,11 @@ function paintDockTargets(on, over) {
 }
 
 if (window.lwclipper && window.lwclipper.onPopoutDrag) {
+  // V4.1. A window that is a list rather than an editor (Preferences, Key
+  // Binds) says noDock, and is never offered a frame.
+  const dockable = (modal) => !!modal && !(popped.get(modal).opts || {}).noDock;
   window.lwclipper.onPopoutDrag(({ name, x, y }) => {
-    if (!poppedNamed(name)) return;
+    if (!dockable(poppedNamed(name))) return;
     paintDockTargets(true, dockCellAt(x, y));
     clearTimeout(dockGlowTimer);
     dockGlowTimer = setTimeout(() => paintDockTargets(false, null), DOCK_GLOW_HOLD);
@@ -579,7 +593,7 @@ if (window.lwclipper && window.lwclipper.onPopoutDrag) {
     clearTimeout(dockGlowTimer);
     paintDockTargets(false, null);
     const modal = poppedNamed(name);
-    const where = modal ? dockCellAt(x, y) : null;
+    const where = dockable(modal) ? dockCellAt(x, y) : null;
     if (where) dockPopOut(modal, where);
   });
 }

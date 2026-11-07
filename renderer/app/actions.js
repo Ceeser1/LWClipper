@@ -25,6 +25,9 @@
 //   take     the key is taken from the page even when the action cannot run
 //   stop     the press is stopped as well as prevented, for the preview's own
 //            media controls, which answer arrows with a seek of their own
+//   keyLabel what Key Binds calls it, when the menu's label carries more
+//            (Undo's count)
+//   flyout   V4.1, a panel shown beside the entry instead of a run
 //   checked  a tick beside the entry
 //   enabled  whether it can run now; a menu entry that cannot is greyed out
 //   run      what it does
@@ -58,6 +61,11 @@ const ACTIONS = [
     id: 'file.saveAs', menu: 'file', label: () => t('Save project as...'), keys: ['Ctrl+Shift+S'], take: true,
     enabled: () => true, run: () => saveProject(true),
   },
+  {
+    // V4.1. The menu bar's Export button, which is not in a dropdown.
+    id: 'file.export', menu: null, label: () => t('Export'), keys: ['Ctrl+E'], take: true,
+    enabled: () => canExport(), run: () => openExportWindow(),
+  },
   { divider: 'file' },
   {
     // The system's own key, so it is shown and not listened for. The close it
@@ -69,6 +77,7 @@ const ACTIONS = [
   // ---- Edit ----
   {
     id: 'edit.undo', menu: 'edit', keys: ['Ctrl+Z'], guard: 'undo', repeat: true, take: true,
+    keyLabel: () => t('Undo'),
     label: () => (undoCounts().undo === 1
       ? t('Undo (1 step possible)')
       : t('Undo ({n} steps possible)', { n: undoCounts().undo })),
@@ -76,6 +85,7 @@ const ACTIONS = [
   },
   {
     id: 'edit.redo', menu: 'edit', keys: ['Ctrl+Y', 'Ctrl+Shift+Z'], guard: 'undo', repeat: true, take: true,
+    keyLabel: () => t('Redo'),
     label: () => (undoCounts().redo === 1
       ? t('Redo (1 step possible)')
       : t('Redo ({n} steps possible)', { n: undoCounts().redo })),
@@ -108,9 +118,9 @@ const ACTIONS = [
     enabled: () => !busy && !!selectedLayerId, run: () => splitSelected(compositeAt),
   },
   {
-    // V4.3 builds it. Listed now so the menu has its final shape.
+    // V4.3. Two or more chosen; joinSelected says why when they cannot join.
     id: 'edit.join', menu: 'edit', label: () => t('Join selected tracks'), keys: ['J'], guard: 'letters',
-    enabled: () => false, run: () => {},
+    enabled: () => !busy && joinTryable(), run: () => joinSelected(),
   },
   {
     id: 'edit.group', menu: 'edit', label: () => t('Group selected tracks'), keys: ['Ctrl+G'], guard: 'letters', take: true,
@@ -178,10 +188,25 @@ const ACTIONS = [
 
   // ---- Settings ----
   {
-    // V4.1 makes it a window of its own; until then it is the Settings modal
-    // the cogwheel opens in simple editing.
+    // V4.1. A window of its own, the settings half of the cogwheel's panel.
     id: 'settings.preferences', menu: 'settings', label: () => t('Preferences'), keys: [],
-    enabled: () => true, run: () => openSettings(),
+    enabled: () => true, run: () => openPreferences(),
+  },
+  {
+    // V4.2. The keys of every entry above, changeable (keybinds.js).
+    id: 'settings.keys', menu: 'settings', label: () => t('Key Binds'), keys: [],
+    enabled: () => true, run: () => openKeyBinds(),
+  },
+  { divider: 'settings' },
+  {
+    // V4.1. Shown beside the entry while it is hovered, and kept while the
+    // pointer is over what it shows.
+    id: 'settings.types', menu: 'settings', label: () => t('Supported Types'), keys: [], flyout: 'types',
+    enabled: () => true, run: () => {},
+  },
+  {
+    id: 'settings.about', menu: 'settings', label: () => t('About'), keys: [], flyout: 'about',
+    enabled: () => true, run: () => {},
   },
 ];
 
@@ -284,9 +309,126 @@ function actionKeyText(action) {
 
 function closeMenus() {
   if (!menuOpen) return;
+  closeFlyout();
   menuOpen.head.classList.remove('menu-bar__head--open');
   menuOpen.drop.remove();
   menuOpen = null;
+}
+
+// ---- V4.1. Supported Types and About, beside their entries ----
+//
+// The user: "Hover-only menu entry and on pop-up keeps it, shows a popup
+// window besides". A panel to the right of the dropdown (to the left when the
+// window has no room), level with its entry, up for as long as the pointer is
+// on the entry or on the panel, and gone when another entry is hovered or the
+// menu closes. A click or Enter on the entry shows it too, for the keyboard.
+
+let flyout = null;        // { item, node, kind }
+
+function closeFlyout() {
+  if (!flyout) return;
+  flyout.item.classList.remove('menu-drop__item--flyout');
+  flyout.node.remove();
+  flyout = null;
+}
+
+function flyoutList(rows) {
+  const list = document.createElement('dl');
+  list.className = 'modal__list menu-flyout__list';
+  for (const [term, text] of rows) {
+    const dt = document.createElement('dt');
+    dt.textContent = term;
+    const dd = document.createElement('dd');
+    dd.dataset.noTranslate = '';
+    dd.textContent = text;
+    list.append(dt, dd);
+  }
+  return list;
+}
+
+function flyoutHeading(text) {
+  const head = document.createElement('div');
+  head.className = 'modal__section';
+  head.textContent = text;
+  return head;
+}
+
+async function fillTypesFlyout(node) {
+  const types = await window.lwclipper.supportedTypes();
+  const list = (xs) => (xs || []).map((e) => String(e).toUpperCase()).join(', ');
+  node.replaceChildren(
+    flyoutHeading(t('Input Types')),
+    flyoutList([
+      [t('Video'), list(types.video)],
+      [t('Audio'), list(types.audio)],
+      [t('Images'), list(types.image)],
+    ]),
+    flyoutHeading(t('Output Types')),
+    flyoutList([
+      [t('Video'), list((types.videoOut || []).map((f) => f.label))],
+      [t('Audio'), list((types.audioOut || []).map((f) => f.label))],
+    ]),
+  );
+}
+
+async function fillAboutFlyout(node) {
+  const about = await window.lwclipper.aboutInfo();
+  const name = document.createElement('div');
+  name.className = 'menu-flyout__name';
+  name.dataset.noTranslate = '';
+  name.textContent = 'LWClipper ' + about.app;
+  const unknown = t('not found');
+  const link = document.createElement('button');
+  link.className = 'menu-flyout__link';
+  link.dataset.noTranslate = '';
+  link.textContent = about.github.replace(/^https?:\/\//, '');
+  link.title = about.github;
+  link.addEventListener('click', () => {
+    window.lwclipper.openGithub();
+    closeMenus();
+  });
+  node.replaceChildren(
+    name,
+    flyoutHeading(t('Bundled')),
+    flyoutList([
+      ['ffmpeg', about.ffmpeg || unknown],
+      ['yt-dlp', about.ytdlp || unknown],
+      ['Electron', about.electron],
+      ['Chromium', about.chrome],
+      ['Node.js', about.node],
+    ]),
+    flyoutHeading(t('Source code')),
+    link,
+  );
+}
+
+function openFlyout(item, kind) {
+  if (flyout && flyout.item === item) return;
+  closeFlyout();
+  const node = document.createElement('div');
+  node.className = 'clip-menu menu-flyout';
+  node.dataset.flyout = kind;
+  const place = () => {
+    if (!flyout || flyout.node !== node || !menuOpen) return;
+    const drop = menuOpen.drop.getBoundingClientRect();
+    const row = item.getBoundingClientRect();
+    const w = node.offsetWidth;
+    const h = node.offsetHeight;
+    const right = drop.right + 2;
+    const left = right + w > window.innerWidth - 4 ? Math.max(4, drop.left - w - 2) : right;
+    node.style.left = left + 'px';
+    node.style.top = Math.max(4, Math.min(row.top - 5, window.innerHeight - h - 4)) + 'px';
+  };
+  node.textContent = t('Loading...');
+  document.body.appendChild(node);
+  item.classList.add('menu-drop__item--flyout');
+  flyout = { item, node, kind };
+  place();
+  const fill = kind === 'about' ? fillAboutFlyout : fillTypesFlyout;
+  fill(node).then(place, () => {
+    node.textContent = t('Could not be read.');
+    place();
+  });
 }
 
 /** The dropdown under a heading, built from the table as it is right now. */
@@ -323,12 +465,21 @@ function openMenu(head) {
     label.textContent = action.label();
     const key = document.createElement('span');
     key.className = 'menu-drop__key';
-    key.textContent = actionKeyText(action);
+    key.textContent = action.flyout ? '›' : actionKeyText(action);
     item.append(tick, label, key);
+    // V4.1. Hovering an entry shows its flyout, or puts away another's.
+    item.addEventListener('pointerenter', () => {
+      if (action.flyout) openFlyout(item, action.flyout);
+      else closeFlyout();
+    });
     // The same gate a key press goes through, so an entry is greyed exactly
     // when its key would do nothing.
     item.disabled = (!action.simple && !timelineDriving()) || !action.enabled();
     item.addEventListener('click', () => {
+      if (action.flyout) {
+        openFlyout(item, action.flyout);
+        return;
+      }
       closeMenus();
       if (!action.enabled()) return;
       action.run();
@@ -345,7 +496,30 @@ function openMenu(head) {
   menuOpen = { head, drop };
 }
 
-for (const head of menuBar.querySelectorAll('.menu-bar__head')) {
+/** V4.1. A heading that is a button of its own: Export. */
+function runHeadAction(head) {
+  closeMenus();
+  const action = ACTIONS.find((a) => a.id === head.dataset.run);
+  if (!action || !action.enabled()) return;
+  action.run();
+}
+
+/** Whether Export can be pressed now, kept up by the bar's own refresh. */
+function refreshMenuBar() {
+  for (const head of menuBar.querySelectorAll('.menu-bar__head[data-run]')) {
+    const action = ACTIONS.find((a) => a.id === head.dataset.run);
+    head.disabled = !action || !action.enabled();
+  }
+}
+
+for (const head of menuBar.querySelectorAll('.menu-bar__head[data-run]')) {
+  head.addEventListener('click', () => runHeadAction(head));
+  head.addEventListener('pointerenter', () => {
+    if (menuOpen) closeMenus();
+  });
+}
+
+for (const head of menuBar.querySelectorAll('.menu-bar__head[data-menu]')) {
   // On the press, so a press on an open heading can close it, and a press and
   // drag into the dropdown is how a menu has always been worked as well.
   head.addEventListener('pointerdown', (evt) => {
@@ -372,7 +546,9 @@ for (const head of menuBar.querySelectorAll('.menu-bar__head')) {
 document.addEventListener('pointerdown', (evt) => {
   if (!menuOpen) return;
   if (menuOpen.drop.contains(evt.target) || menuBar.contains(evt.target)) return;
+  if (flyout && flyout.node.contains(evt.target)) return;
   closeMenus();
 }, true);
 window.addEventListener('blur', closeMenus);
 window.addEventListener('resize', closeMenus);
+refreshMenuBar();

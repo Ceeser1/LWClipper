@@ -322,6 +322,9 @@ function createWindow() {
 // V3.3. The names the page may open a popped out editor under.
 const POPOUT_NAME = /^lwc-pop-[a-z]+$/;
 
+// V4.1. A first size for the windows that are not a picture to edit.
+const POPOUT_SIZES = { 'lwc-pop-prefs': [580, 640], 'lwc-pop-keys': [620, 720] };
+
 // V3.7.1. The editor windows open now, by their names.
 const popoutWindows = new Map();
 // V3.8. Where a window was before the drag that last moved it, and the ones
@@ -380,8 +383,10 @@ function popoutBounds(name) {
     if (onScreen) return saved;
   }
   const host = mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null;
-  const width = 960;
-  const height = 760;
+  // V4.1 and V4.2. Preferences and Key Binds are lists, not a picture to edit.
+  const size = POPOUT_SIZES[name] || [960, 760];
+  const width = size[0];
+  const height = size[1];
   if (!host) return { width, height };
   return {
     width,
@@ -405,6 +410,72 @@ ipcMain.handle('app:allowClose', () => {
 // for the unsaved work question exactly as that one is.
 ipcMain.handle('app:close', () => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+  return true;
+});
+
+// V4.1. Settings, About: the app's version and the tools bundled with it. Each
+// tool is asked once a run, on the first hover, and the answer kept: they do
+// not change under a running app, and a spawn per hover would be felt.
+const GITHUB_URL = 'https://github.com/Ceeser1/LWClipper';
+let aboutCache = null;
+
+function toolVersion(exe, args, pattern) {
+  return new Promise((resolve) => {
+    if (!exe) {
+      resolve(null);
+      return;
+    }
+    let out = '';
+    let child;
+    try {
+      child = spawn(exe, args, { windowsHide: true });
+    } catch {
+      resolve(null);
+      return;
+    }
+    const timer = setTimeout(() => {
+      try { child.kill(); } catch { /* gone */ }
+    }, 8000);
+    child.stdout.on('data', (d) => { out += d; });
+    child.on('error', () => {
+      clearTimeout(timer);
+      resolve(null);
+    });
+    child.on('close', () => {
+      clearTimeout(timer);
+      const m = pattern.exec(out);
+      resolve(m ? m[1] : (out.trim().split(/\r?\n/)[0] || null));
+    });
+  });
+}
+
+ipcMain.handle('app:about', async () => {
+  if (!aboutCache) {
+    const [ffmpeg, ytdlpVersion] = await Promise.all([
+      toolVersion(toolPaths.findFfmpeg(), ['-version'], /ffmpeg version (\S+)/),
+      toolVersion(toolPaths.findYtDlp(), ['--version'], /^\s*(\S+)/),
+    ]);
+    aboutCache = {
+      app: app.getVersion(),
+      electron: process.versions.electron,
+      chrome: process.versions.chrome,
+      node: process.versions.node,
+      ffmpeg,
+      ytdlp: ytdlpVersion,
+      github: GITHUB_URL,
+    };
+  }
+  return aboutCache;
+});
+
+// V4.1. About's link. The one address it may open, and only in the browser.
+ipcMain.handle('shell:openGithub', () => shell.openExternal(GITHUB_URL));
+
+// V4.1. The Rendering modal's Open Folder: the folder with the file chosen.
+ipcMain.handle('shell:showInFolder', (_event, filePath) => {
+  const target = String(filePath || '');
+  if (target && fs.existsSync(target)) shell.showItemInFolder(target);
+  else if (target) shell.openPath(path.dirname(target));
   return true;
 });
 

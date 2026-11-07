@@ -4839,3 +4839,301 @@ body.advanced .top-section {
   background: #8a8a94;
   border-radius: 0 0 2px 2px;
 }
+
+/* ---- V4.1. Export, the Rendering modal, Preferences, the flyouts ---- */
+
+/* Advanced editing has no save row: Export is in the menu bar, and the
+   controls the row held are borrowed by the Export window. */
+body.advanced .save-section {
+  display: none;
+}
+
+.menu-bar__head:disabled {
+  opacity: 0.45;
+}
+
+.modal__panel--export {
+  width: min(560px, 100%);
+  max-width: none;
+}
+
+.export-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 10px 14px;
+  margin-bottom: 12px;
+}
+
+.export-grid__label {
+  color: #d5d5dc;
+  font-size: 13px;
+  font-weight: bold;
+}
+
+.export-grid__label[hidden],
+.export-size[hidden] {
+  display: none;
+}
+
+.export-name {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.export-size {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Boxes, at the user's word, but not ones that take a value: the size is
+   Crop Render Frame's to decide. */
+.export-size__box {
+  width: 64px;
+  text-align: center;
+  color: #9a9aa4;
+  background: #232328;
+  cursor: default;
+}
+
+.export-size__x {
+  color: #8a8a94;
+}
+
+.export-size__note {
+  color: #8a8a94;
+  font-size: 12px;
+  margin-left: 6px;
+}
+
+/* The save row's own controls, one to a line. */
+.export-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 0 4px;
+  border-top: 1px solid #3a3a44;
+}
+
+.export-actions,
+.rendering-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+/* Cancel on the left, Export on the right, as asked. */
+.export-actions {
+  justify-content: space-between;
+}
+
+.modal__panel--rendering {
+  width: min(520px, 100%);
+  max-width: none;
+}
+
+.rendering-file {
+  color: #ebebf0;
+  text-align: center;
+  font-size: 13px;
+  margin-bottom: 10px;
+  overflow-wrap: anywhere;
+}
+
+.rendering-bar {
+  display: block;
+  width: 100%;
+  height: 14px;
+}
+
+.rendering-status {
+  color: #b8b8c0;
+  font-size: 12px;
+  min-height: 1.4em;
+  margin-top: 8px;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.rendering-status[data-tone="error"] {
+  color: #e08f8f;
+}
+
+.rendering-actions button[hidden] {
+  display: none;
+}
+
+/* The cogwheel's panel shows everything; as Preferences only the settings. */
+.settings-title--prefs {
+  display: none;
+}
+
+.settings-panel--prefs .settings-title--full,
+.settings-panel--prefs .settings-only--full,
+.settings-panel--prefs .settings-info {
+  display: none;
+}
+
+.settings-panel--prefs .settings-title--prefs {
+  display: inline;
+}
+
+/* The size of the boxes in the panel, wherever the panel is. */
+.settings-panel--prefs input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+}
+
+.menu-drop__item--flyout {
+  background: #3c3c44;
+}
+
+.menu-flyout {
+  z-index: 21;
+  min-width: 240px;
+  max-width: 380px;
+  padding: 10px 12px;
+  color: #d5d5dc;
+  font-size: 13px;
+}
+
+.menu-flyout .modal__section {
+  margin-top: 8px;
+}
+
+.menu-flyout .modal__section:first-child {
+  margin-top: 0;
+}
+
+.menu-flyout__list {
+  margin-bottom: 4px;
+}
+
+.menu-flyout__name {
+  color: #ebebf0;
+  font-size: 15px;
+  font-weight: bold;
+  margin-bottom: 4px;
+}
+
+.menu-flyout__link {
+  align-self: flex-start;
+  padding: 3px 8px;
+  color: #8fb8f0;
+}
+
+/* Drawn rather than written, so it is not a word to translate. */
+.export-size__x::before {
+  content: "x";
+}
+
+/* Over every other popup, the questions and the editors' dialogs included:
+   nothing else may be worked while a render runs. */
+#renderingModal {
+  z-index: 60;
+}
+
+/* ---- V4.2. Key Binds ---- */
+
+.modal__panel--keys {
+  width: min(600px, 100%);
+  max-width: none;
+}
+
+.keys-help {
+  margin: 0 0 12px;
+}
+
+.keys-section {
+  margin-top: 14px;
+}
+
+.keys-section:first-child {
+  margin-top: 0;
+}
+
+/* The entry, its box and its reset in a line; a note about a taken key
+   under the box. */
+.keys-row {
+  display: grid;
+  grid-template-columns: 1fr 190px auto;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 3px 0;
+}
+
+.keys-row__label {
+  color: #d5d5dc;
+  font-size: 13px;
+}
+
+.keys-box {
+  width: 100%;
+  box-sizing: border-box;
+  text-align: center;
+  cursor: pointer;
+  caret-color: transparent;
+}
+
+.keys-box--editing {
+  border-color: #5a8cdc;
+  background: #2e3646;
+}
+
+.keys-reset {
+  padding: 2px 8px;
+}
+
+.keys-row__note {
+  grid-column: 2 / -1;
+  color: #e0b06f;
+  font-size: 12px;
+}
+
+.keys-row__note:empty {
+  display: none;
+}
+
+.keys-actions {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 16px;
+}
+
+/* ---- V4.3. Joined tracks ---- */
+
+/* The pieces of a join drawn as one clip: no rounding and no border where
+   two of them meet, and a faint dashed line on the seam so it can still be
+   found. */
+.layer-clip--join-first {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-right-width: 0;
+}
+
+.layer-clip--join-mid {
+  border-radius: 0;
+  border-left-width: 0;
+  border-right-width: 0;
+}
+
+.layer-clip--join-last {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  border-left-width: 0;
+}
+
+.layer-clip--join-mid::before,
+.layer-clip--join-last::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  z-index: 2;
+  border-left: 1px dashed rgba(235, 235, 240, 0.45);
+  pointer-events: none;
+}

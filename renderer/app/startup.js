@@ -131,18 +131,64 @@ window.addEventListener('resize', () => {
 settingsBtn.addEventListener('click', () => openSettings());
 
 async function openSettings() {
+  // V4.1. The Preferences window is this panel, out in a window of its own.
+  if (isPoppedOut(settingsModal)) {
+    focusPopOut(settingsModal);
+    return;
+  }
   refreshSettingsPanel();
-  const types = await window.lwclipper.supportedTypes();
-  const list = (xs) => xs.map((e) => e.toUpperCase()).join(', ');
-  el('supportedVideo').textContent = list(types.video);
-  el('supportedAudio').textContent = list(types.audio);
-  el('supportedVideoOut').textContent = list((types.videoOut || []).map((f) => f.label));
-  el('supportedAudioOut').textContent = list((types.audioOut || []).map((f) => f.label));
+  await fillSupportedTypes();
+  settingsPanel.classList.remove('settings-panel--prefs');
   settingsModal.hidden = false;
 }
 
+/** The type lists, from the main process, in the panel and the flyout. */
+async function fillSupportedTypes(root = document) {
+  const types = await window.lwclipper.supportedTypes();
+  const list = (xs) => xs.map((e) => e.toUpperCase()).join(', ');
+  const put = (sel, text) => {
+    for (const node of root.querySelectorAll(sel)) node.textContent = text;
+  };
+  put('[data-types="video"]', list(types.video));
+  put('[data-types="audio"]', list(types.audio));
+  put('[data-types="videoOut"]', list((types.videoOut || []).map((f) => f.label)));
+  put('[data-types="audioOut"]', list((types.audioOut || []).map((f) => f.label)));
+}
+
+// ---- V4.1. Settings, Preferences ----
+//
+// The user: "Opens a "settings", now called "Preferences" window, no modal
+// anymore, with: language, compression, use advanced editing, cache, app
+// files". The settings half of the panel the cogwheel opens, out in a window
+// of its own the way the editors are (popout.js), so the main window stays
+// usable beside it. Supported Types and About are entries of their own in the
+// menu. If no window can be had it is the modal it always was.
+const settingsPanel = settingsModal.querySelector('.modal__panel');
+
+function openPreferences() {
+  if (isPoppedOut(settingsModal)) {
+    focusPopOut(settingsModal);
+    return;
+  }
+  // Open as the full modal: put back to the settings alone, in place.
+  refreshSettingsPanel();
+  settingsPanel.classList.add('settings-panel--prefs');
+  settingsModal.hidden = false;
+  popOut(settingsModal, 'prefs', {
+    title: t('Preferences'),
+    cancel: closeSettings,
+    noDock: true,
+    relayout: () => {
+      if (settingsPanel.ownerDocument !== document) notePopoutWant(settingsPanel, settingsPanel.scrollHeight);
+      fitPopOut(settingsModal);
+    },
+  }, true);
+}
+
 function closeSettings() {
+  popIn(settingsModal);
   settingsModal.hidden = true;
+  settingsPanel.classList.remove('settings-panel--prefs');
 }
 
 settingsCloseBtn.addEventListener('click', closeSettings);
@@ -292,6 +338,8 @@ async function confirmClear() {
 
   let ticked = [];
   const choice = await showChoice({
+    // V4.1. Over the Preferences window when it is asked from there.
+    over: settingsModal,
     title: t('Clear cache'),
     message: messages,
     checks: projectClaim.rowsFor(claims, sizes).map((row) => ({

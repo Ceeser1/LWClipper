@@ -15,6 +15,8 @@
     <button class="menu-bar__head" data-menu="edit">Edit</button>
     <button class="menu-bar__head" data-menu="playback">Playback</button>
     <button class="menu-bar__head" data-menu="view">View</button>
+    <!-- V4.1. A button rather than a dropdown: it opens the Export window. -->
+    <button class="menu-bar__head" data-run="file.export">Export</button>
     <button class="menu-bar__head" data-menu="settings">Settings</button>
   </nav>
 
@@ -323,7 +325,9 @@
     </div>
   </div>
 
-  <section class="section">
+  <!-- V4.1. Advanced editing has no save row: its controls are borrowed by the
+       Export window while it is open (export.js). -->
+  <section class="section save-section" id="saveSection">
     <div class="row save-row">
       <!-- Hidden for audio-only sources: frames there are about 26 ms, so a
            copied cut already lands within one of the asked-for point and there
@@ -365,9 +369,12 @@
 
   <div id="settingsModal" class="modal" hidden>
     <div class="modal__panel" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
-      <div id="settingsTitle" class="modal__title">Settings &amp; Info</div>
+      <!-- V4.1. The same panel is the menu bar's Preferences window, which
+           shows only the settings: Supported Types and About are entries of
+           their own there. -->
+      <div id="settingsTitle" class="modal__title"><span class="settings-title--full">Settings &amp; Info</span><span class="settings-title--prefs">Preferences</span></div>
 
-      <div class="modal__section">Settings</div>
+      <div class="modal__section settings-only--full">Settings</div>
 
       <div class="setting-row">
         <span class="setting-row__label">Language</span>
@@ -437,6 +444,7 @@
         <button id="deleteAppFilesBtn" class="danger-btn">Delete App files</button>
       </div>
 
+      <div class="settings-info">
       <div class="settings-divider"></div>
 
       <div class="modal__section">Sources</div>
@@ -447,14 +455,14 @@
 
       <div class="modal__section">Input Types</div>
       <dl class="modal__list">
-        <dt>Video</dt><dd id="supportedVideo"></dd>
-        <dt>Audio</dt><dd id="supportedAudio"></dd>
+        <dt>Video</dt><dd id="supportedVideo" data-types="video"></dd>
+        <dt>Audio</dt><dd id="supportedAudio" data-types="audio"></dd>
       </dl>
 
       <div class="modal__section">Output Types</div>
       <dl class="modal__list">
-        <dt>Video</dt><dd id="supportedVideoOut"></dd>
-        <dt>Audio</dt><dd id="supportedAudioOut"></dd>
+        <dt>Video</dt><dd id="supportedVideoOut" data-types="videoOut"></dd>
+        <dt>Audio</dt><dd id="supportedAudioOut" data-types="audioOut"></dd>
       </dl>
 
       <div class="modal__section">Information</div>
@@ -473,6 +481,7 @@
         <strong>File compression:</strong> Optional and has the biggest impact on Video
         files. Some Types like WAV Audio don't support compression at all.
       </p>
+      </div>
       <button id="settingsCloseBtn" class="modal__close">Close</button>
     </div>
   </div>
@@ -490,7 +499,63 @@
     </div>
   </div>
 
-  <!-- Step 13. The one modal that answers back. Both existing modals open and
+  <!-- V4.1. Export (Ctrl+E). The frame rate, compression and format controls
+       are the save row's own, borrowed while it is open; the size is the
+       project's, decided in Crop Render Frame, so it is only shown here. -->
+  <div id="exportModal" class="modal" hidden>
+    <div class="modal__panel modal__panel--export" role="dialog" aria-modal="true" aria-labelledby="exportTitle">
+      <div id="exportTitle" class="modal__title">Export</div>
+      <div class="export-grid">
+        <label class="export-grid__label" for="exportNameField">Title</label>
+        <input id="exportNameField" class="export-name" type="text" spellcheck="false" />
+        <span id="exportSizeLabel" class="export-grid__label">Resolution</span>
+        <div id="exportSize" class="export-size">
+          <input id="exportWidth" class="export-size__box" type="text" readonly tabindex="-1" />
+          <span class="export-size__x" aria-hidden="true"></span>
+          <input id="exportHeight" class="export-size__box" type="text" readonly tabindex="-1" />
+          <span class="export-size__note">Set in Crop Render Frame</span>
+        </div>
+      </div>
+      <div id="exportControls" class="export-controls"></div>
+      <div class="export-actions">
+        <button id="exportCancelBtn">Cancel</button>
+        <button id="exportGoBtn" class="btn--active">Export</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- V4.1. The render itself. It cannot be closed while it runs, only
+       cancelled; when it is done it offers the file, its folder and Close. -->
+  <div id="renderingModal" class="modal modal--over" hidden>
+    <div class="modal__panel modal__panel--rendering" role="dialog" aria-modal="true" aria-labelledby="renderingTitle">
+      <div id="renderingTitle" class="modal__title" data-no-translate></div>
+      <div id="renderingFile" class="rendering-file" data-no-translate></div>
+      <progress id="renderingBar" class="rendering-bar" value="0" max="1"></progress>
+      <div id="renderingStatus" class="rendering-status" data-no-translate></div>
+      <div class="rendering-actions">
+        <button id="renderingCancelBtn" class="cancel-btn">Cancel</button>
+        <button id="renderingOpenBtn" hidden>Open File</button>
+        <button id="renderingFolderBtn" hidden>Open Folder</button>
+        <button id="renderingCloseBtn" class="btn--active" hidden>Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- V4.2. Settings, Key Binds: a window of its own, rows written by
+       keybinds.js from the action table. -->
+  <div id="keysModal" class="modal" hidden>
+    <div class="modal__panel modal__panel--keys" role="dialog" aria-modal="true" aria-labelledby="keysTitle">
+      <div id="keysTitle" class="modal__title">Key Binds</div>
+      <p class="setting-note keys-help">Click a box and press the keys. Enter or a click outside keeps them, Escape cancels.</p>
+      <div id="keysList" class="keys-list"></div>
+      <div class="keys-actions">
+        <button id="keysResetAllBtn" class="caution-btn">Reset all</button>
+        <button id="keysCloseBtn" class="btn--active">Close</button>
+      </div>
+    </div>
+  </div>
+
+ Both existing modals open and
        close through listeners and neither returns a decision; this one blocks
        whatever asked until a button is pressed. Its title, message, list and
        buttons are all written by showChoice, so the markup is only the shape. -->
@@ -1252,6 +1317,7 @@
   <script src="../src/geometry.js"></script>
   <script src="../src/history.js"></script>
   <script src="../src/keyCombo.js"></script>
+  <script src="../src/keyBinds.js"></script>
   <script src="../src/project.js"></script>
   <script src="../src/claim.js"></script>
   <script src="../src/autosave.js"></script>
@@ -1290,6 +1356,7 @@
   <script src="app/outside.js"></script>
   <script src="app/download.js"></script>
   <script src="app/actions.js"></script>
+  <script src="app/keybinds.js"></script>
   <script src="app/startup.js"></script>
 </body>
 </html>

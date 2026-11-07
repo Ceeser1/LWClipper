@@ -72,6 +72,10 @@ contextBridge.exposeInMainWorld('lwclipper', {
   allowClose: () => ipcRenderer.invoke('app:allowClose'),
   // V4.0. File, Close LWClipper: the window's own close, guard and all.
   closeApp: () => ipcRenderer.invoke('app:close'),
+  // V4.1. Settings, About, and the Rendering modal's Open Folder.
+  aboutInfo: () => ipcRenderer.invoke('app:about'),
+  openGithub: () => ipcRenderer.invoke('shell:openGithub'),
+  showInFolder: (filePath) => ipcRenderer.invoke('shell:showInFolder', filePath),
   // Asked once at startup, because the events only fire on a change and the
   // window can be launched maximized by the system.
   windowMaximized: () => ipcRenderer.invoke('window:isMaximized'),

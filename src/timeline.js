@@ -568,6 +568,10 @@ const timelineModel = (() => {
       // serialisable shape wants settling in one place, not because anything
       // reads it yet.
       groupId: props.groupId || null,
+      // V4.3. The join this layer is a piece of, null for none. Declared here
+      // for the reason groupId is: a field createLayer does not name is a
+      // field the project open path drops.
+      joinId: typeof props.joinId === 'string' && props.joinId ? props.joinId : null,
       // V2.9. Which row of its own kind the layer sits on: 0 is Video 1 or
       // Audio 1. Several layers can share one, which is how a row comes to hold
       // more than one clip. In the user's words the row is the layer and each
@@ -2062,6 +2066,14 @@ const timelineModel = (() => {
         next.push(l);
       }
     }
+    // V4.3. A piece of a join cut in two: the halves from the cut on are not
+    // the same clip as the ones before it any more.
+    if (target.joinId) {
+      const fresh2 = newJoinId();
+      return arrangeLanes(normalizeJoins(next.map((l) => (l.joinId === target.joinId && l.start >= cut - JOIN_EPS
+        ? { ...l, joinId: fresh2 }
+        : l))));
+    }
     return arrangeLanes(next);
   }
 
@@ -2085,7 +2097,8 @@ const timelineModel = (() => {
   function copyOf(layers, id) {
     const target = layerById(layers, id);
     if (!target) return null;
-    return { primary: target.id, items: groupOf(layers, id).map((l) => ({ ...l })) };
+    // V4.3. And the join, every piece of it with its group.
+    return { primary: target.id, items: linkedOf(layers, id).map((l) => ({ ...l })) };
   }
 
   /**
@@ -2105,23 +2118,40 @@ const timelineModel = (() => {
     if (!clip || !Array.isArray(clip.items) || !clip.items.length) return layers;
     const primary = clip.items.find((l) => l.id === clip.primary) || clip.items[0];
     const when = round(Math.max(0, Number(at) || 0));
-    const groupId = clip.items.length > 1 ? newGroupId() : null;
+    // V4.3. A new id for each group and each join that was copied, so the
+    // paste is linked the way the copy was and to nothing on the timeline. A
+    // copy from before joins was one group of everything in it.
+    const linked = clip.items.some((l) => l.joinId)
+      || new Set(clip.items.map((l) => l.groupId).filter(Boolean)).size > 1;
+    const oneGroup = !linked && clip.items.length > 1 ? newGroupId() : null;
+    const groups = new Map();
+    const joins = new Map();
+    const fresh = (map, key, make) => {
+      if (!key) return null;
+      if (!map.has(key)) map.set(key, make());
+      return map.get(key);
+    };
+    let primaryLane = null;
     let next = arrangeLanes(layers);
     // The copied layer first, so its lane is settled before anything else of
     // its kind asks for a new one.
     const order = [primary, ...clip.items.filter((l) => l !== primary)];
     for (const item of order) {
-      const want = item === primary ? laneValue(lane) : laneValue(item.lane);
+      // A piece of the copied clip's own join goes on the row it went on.
+      const samePiece = item !== primary && primary.joinId && item.joinId === primary.joinId;
+      const want = item === primary ? laneValue(lane) : (samePiece ? primaryLane : laneValue(item.lane));
       const onto = want !== null ? want : laneCount(next, item.type);
+      if (item === primary) primaryLane = onto;
       next = arrangeLanes([...next, {
         ...item,
         id: newId(),
         start: round(Math.max(0, when + (item.start - primary.start))),
         lane: onto,
-        groupId,
+        groupId: oneGroup || fresh(groups, item.groupId, newGroupId),
+        joinId: fresh(joins, item.joinId, newJoinId),
       }]);
     }
-    return next;
+    return normalizeJoins(next);
   }
 
   /** Breaks the link. The layers stay exactly where they are. */
@@ -2138,7 +2168,8 @@ const timelineModel = (() => {
    * start of the timeline: the video stops at zero and the sound carries on.
    */
   function moveGroup(layers, id, newStart) {
-    const members = groupOf(layers, id);
+    // V4.3. And the join it is a piece of, with every piece's group.
+    const members = linkedOf(layers, id);
     const layer = layerById(layers, id);
     if (!layer || members.length < 2) return moveLayer(layers, id, newStart);
     let shift = round(newStart - layer.start);
@@ -2163,7 +2194,8 @@ const timelineModel = (() => {
     if (!layer) return layers;
     const moving = new Set();
     for (const one of ids) {
-      for (const m of groupOf(layers, one)) moving.add(m.id);
+      // V4.3. A join moves whole, with its pieces' groups.
+      for (const m of linkedOf(layers, one)) moving.add(m.id);
     }
     moving.add(id);
     if (moving.size < 2) return moveLayer(layers, id, newStart);
@@ -2209,6 +2241,9 @@ const timelineModel = (() => {
     };
     const ids = new Map();
     const groups = new Map();
+    // V4.3. And each join a new id, among its own.
+    const joins = new Map();
+    const usedJoins = new Set(layers.map((l) => l.joinId).filter(Boolean));
     const below = {
       video: Math.max(0, Math.floor(Number(rows.video) || 0)),
       audio: Math.max(0, Math.floor(Number(rows.audio) || 0)),
@@ -2221,7 +2256,12 @@ const timelineModel = (() => {
         if (!groups.has(l.groupId)) groups.set(l.groupId, fresh(newGroupId, usedGroups));
         groupId = groups.get(l.groupId);
       }
-      return { ...l, id, groupId, lane: below[l.type === 'audio' ? 'audio' : 'video'] + l.lane };
+      let joinId = null;
+      if (l.joinId) {
+        if (!joins.has(l.joinId)) joins.set(l.joinId, fresh(newJoinId, usedJoins));
+        joinId = joins.get(l.joinId);
+      }
+      return { ...l, id, groupId, joinId, lane: below[l.type === 'audio' ? 'audio' : 'video'] + l.lane };
     });
     return { layers: arrangeLanes([...layers, ...added]), ids };
   }
@@ -2272,6 +2312,227 @@ const timelineModel = (() => {
       next = trimLayer(next, member.id, edge, round(at + shift));
     }
     return next;
+  }
+
+  // ---- V4.3. Joining ----
+  //
+  // The user: "Join selected tracks - J (This will combine end of track N with
+  // start of track N+1, only in the same layer. If selected tracks are not in
+  // the same layer raise a hint)", and asked whether pieces of different
+  // sources may join: "Joining different sources cut/split clips should be
+  // possible. In the background they can still be treated like different
+  // sources, but marked as joined ... They should just show as one track in
+  // the editor after joining. They can also keep a "flag" joined. When
+  // rightclicking such a track the menu could show ... "Un-join tracks"".
+  //
+  // So a joined clip is still its pieces, each a layer with its own source,
+  // crop, mask, keyframes and volume, and each carrying the same `joinId`. The
+  // pieces of one join are on one row and end to end: each starts where the
+  // one before it ends, which is what joining does to them (it closes the
+  // gap). They move together, the seams are hard cuts with no fade, and only
+  // the two outer edges trim and fade. normalizeJoins is what holds that true:
+  // a join whose pieces stopped meeting is broken where they stopped.
+
+  // Two ends this close are one seam. Positions are rounded to a microsecond,
+  // so this is only there for what a frame step can add on top of that.
+  const JOIN_EPS = 1e-4;
+
+  function newJoinId() {
+    return 'j' + Math.random().toString(36).slice(2, 10);
+  }
+
+  /** The pieces of the join `id` is in, by start; just the layer when none. */
+  function joinOf(layers, id) {
+    const layer = layerById(layers, id);
+    if (!layer) return [];
+    if (!layer.joinId) return [layer];
+    return layers.filter((l) => l.joinId === layer.joinId).sort((a, b) => a.start - b.start);
+  }
+
+  /** Where in its join a layer is: 'first', 'mid', 'last', or null for none. */
+  function joinPlace(layers, layer) {
+    if (!layer || !layer.joinId) return null;
+    const chain = joinOf(layers, layer.id);
+    if (chain.length < 2) return null;
+    const at = chain.findIndex((l) => l.id === layer.id);
+    if (at === 0) return 'first';
+    return at === chain.length - 1 ? 'last' : 'mid';
+  }
+
+  /**
+   * Everything that moves when `id` moves: its join and its group, and theirs
+   * in turn, so a joined picture brings each piece's sound and a grouped sound
+   * brings the whole joined picture.
+   */
+  function linkedOf(layers, id) {
+    const start = layerById(layers, id);
+    if (!start) return [];
+    const seen = new Set([start.id]);
+    const queue = [start];
+    while (queue.length) {
+      const l = queue.shift();
+      const near = [];
+      if (l.joinId) near.push(...layers.filter((o) => o.joinId === l.joinId));
+      if (l.groupId) near.push(...layers.filter((o) => o.groupId === l.groupId));
+      for (const o of near) {
+        if (seen.has(o.id)) continue;
+        seen.add(o.id);
+        queue.push(o);
+      }
+    }
+    return layers.filter((l) => seen.has(l.id));
+  }
+
+  /** Whether a layer can be a piece of a join: a file's picture or sound. */
+  function joinableKind(layer) {
+    return !!layer && layer.kind !== 'gen';
+  }
+
+  /**
+   * Whether the layers `ids` (and the joins they are already in) can be joined,
+   * and the pieces in order when they can: { ok, pieces } or { ok: false,
+   * reason }. Reasons: 'few' (fewer than two clips), 'kind' (a text, shape or
+   * bar), 'rows' (not all on one row), 'between' (another clip on the row
+   * sits between two of them).
+   */
+  function joinCheck(layers, ids) {
+    const chosen = new Map();
+    for (const id of ids || []) {
+      for (const l of joinOf(layers, id)) chosen.set(l.id, l);
+    }
+    const pieces = [...chosen.values()].sort((a, b) => a.start - b.start);
+    if (pieces.length < 2) return { ok: false, reason: 'few' };
+    if (pieces.some((l) => !joinableKind(l))) return { ok: false, reason: 'kind' };
+    const first = pieces[0];
+    if (pieces.some((l) => l.type !== first.type || laneValue(l.lane) !== laneValue(first.lane))) {
+      return { ok: false, reason: 'rows' };
+    }
+    if (new Set(pieces.map((l) => l.joinId || l.id)).size < 2) return { ok: false, reason: 'few' };
+    const others = layers.filter((l) => !chosen.has(l.id)
+      && l.type === first.type && laneValue(l.lane) === laneValue(first.lane));
+    for (let i = 1; i < pieces.length; i += 1) {
+      const from = pieces[i - 1].start;
+      const to = pieces[i].start;
+      if (others.some((o) => o.start > from + JOIN_EPS && o.start < to - JOIN_EPS)) {
+        return { ok: false, reason: 'between' };
+      }
+    }
+    return { ok: true, pieces };
+  }
+
+  /**
+   * The chosen clips joined into one: each piece after the first slid to start
+   * where the one before it ends, its group's other members slid by the same
+   * amount so a sound stays under its picture, and the fades at every seam
+   * taken off, since a seam is a cut. The first piece's join id is kept when
+   * it had one. Hands back the list it was given when they cannot be joined.
+   */
+  function join(layers, ids) {
+    const check = joinCheck(layers, ids);
+    if (!check.ok) return layers;
+    const joinId = check.pieces[0].joinId || newJoinId();
+    const pieceIds = check.pieces.map((l) => l.id);
+    const isPiece = new Set(pieceIds);
+    let next = layers;
+    for (let i = 1; i < pieceIds.length; i += 1) {
+      const before = layerById(next, pieceIds[i - 1]);
+      const piece = layerById(next, pieceIds[i]);
+      const shift = round(endOf(before) - piece.start);
+      if (!shift) continue;
+      const moving = new Set([piece.id]);
+      if (piece.groupId) {
+        for (const m of next) if (m.groupId === piece.groupId && !isPiece.has(m.id)) moving.add(m.id);
+      }
+      next = next.map((l) => (moving.has(l.id)
+        ? { ...l, start: round(Math.max(0, l.start + shift)) }
+        : l));
+    }
+    next = next.map((l) => {
+      if (!isPiece.has(l.id)) return l;
+      const at = pieceIds.indexOf(l.id);
+      const out = { ...l, joinId };
+      if (at > 0) {
+        out.fadeIn = 0;
+        out.fadeInCurve = 'linear';
+      }
+      if (at < pieceIds.length - 1) {
+        out.fadeOut = 0;
+        out.fadeOutCurve = 'linear';
+      }
+      return out;
+    });
+    return arrangeLanes(next);
+  }
+
+  /** The join `joinId` taken apart. The pieces stay exactly where they are. */
+  function unjoin(layers, joinId) {
+    if (!joinId) return layers;
+    return layers.map((l) => (l.joinId === joinId ? { ...l, joinId: null } : l));
+  }
+
+  /**
+   * Every join made true again: its pieces split into runs that are on one
+   * row and end to end, the first run keeping the id and every later one a
+   * new id, and a run of one piece no join at all. What breaks a join is
+   * anything that took one piece away from the others: a piece deleted from
+   * the middle, an undo that put one back somewhere else, a file edited by
+   * hand. Hands back the list it was given when every join already holds.
+   */
+  function normalizeJoins(layers) {
+    const byJoin = new Map();
+    for (const l of layers) {
+      if (!l.joinId) continue;
+      if (!byJoin.has(l.joinId)) byJoin.set(l.joinId, []);
+      byJoin.get(l.joinId).push(l);
+    }
+    if (!byJoin.size) return layers;
+    const fix = new Map();
+    for (const [joinId, members] of byJoin) {
+      const pieces = members.slice().sort((a, b) => a.start - b.start);
+      const runs = [[pieces[0]]];
+      for (let i = 1; i < pieces.length; i += 1) {
+        const run = runs[runs.length - 1];
+        const last = run[run.length - 1];
+        const meets = pieces[i].type === last.type
+          && laneValue(pieces[i].lane) === laneValue(last.lane)
+          && joinableKind(pieces[i])
+          && Math.abs(pieces[i].start - endOf(last)) <= JOIN_EPS;
+        if (meets) run.push(pieces[i]);
+        else runs.push([pieces[i]]);
+      }
+      runs.forEach((run, i) => {
+        const id = run.length < 2 ? null : (i === 0 ? joinId : newJoinId());
+        for (const l of run) if (l.joinId !== id) fix.set(l.id, id);
+      });
+    }
+    if (!fix.size) return layers;
+    return layers.map((l) => (fix.has(l.id) ? { ...l, joinId: fix.get(l.id) } : l));
+  }
+
+  /**
+   * A joined clip cut at `at`: at a seam it simply comes apart there, and
+   * inside a piece that piece is split (with its group, as splitLayer does)
+   * and the pieces from the cut on become a join of their own. Not joined, it
+   * is splitLayer. Hands back the list it was given when nothing is cut.
+   */
+  function splitJoinAt(layers, id, at) {
+    const chain = joinOf(layers, id);
+    const cut = round(Number(at));
+    if (chain.length < 2 || !Number.isFinite(cut)) return splitLayer(layers, id, at);
+    const seam = chain.slice(1).find((l) => Math.abs(l.start - cut) <= JOIN_EPS);
+    let next = layers;
+    if (!seam) {
+      const piece = chain.find((l) => l.start < cut && endOf(l) > cut);
+      if (!piece) return layers;
+      next = splitLayer(layers, piece.id, cut);
+      if (next === layers) return layers;
+    }
+    const fresh = newJoinId();
+    const joinId = chain[0].joinId;
+    next = next.map((l) => (l.joinId === joinId && l.start >= cut - JOIN_EPS
+      ? { ...l, joinId: fresh }
+      : l));
+    return normalizeJoins(next);
   }
 
   return {
@@ -2373,6 +2634,16 @@ const timelineModel = (() => {
     pasteInto,
     trimRange,
     trimGroup,
+    JOIN_EPS,
+    newJoinId,
+    joinOf,
+    joinPlace,
+    linkedOf,
+    joinCheck,
+    join,
+    unjoin,
+    normalizeJoins,
+    splitJoinAt,
   };
 })();
 

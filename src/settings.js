@@ -32,6 +32,9 @@ const DEFAULTS = {
   // their short names ('crop', 'bar', 'shape', 'text', 'render'): 'start' for Start Frame,
   // 'end' for End Frame. One not in it opens as a window. null until one is.
   popoutDock: null,
+  // V4.2. The keys bound in Key Binds, by action id: { 'edit.copy': ['Ctrl+C'] }.
+  // Only the ones that differ from their defaults; null until one does.
+  keyBinds: null,
 };
 
 function settingsFile() {

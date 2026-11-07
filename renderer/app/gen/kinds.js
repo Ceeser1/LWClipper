@@ -162,7 +162,16 @@ function openClipMenu(evt, track) {
   const clipEl = evt.target.closest('.layer-clip[data-layer-id]');
   const layerId = keyEl ? keyEl.dataset.layerId : clipEl && clipEl.dataset.layerId;
   const layer = layerId && timelineModel.layerById(layers, layerId);
-  if (layer) selectLayer(layer.id);
+  // V4.3. A right click on one of several chosen clips keeps them chosen, so
+  // Join can act on them; the one clicked is what the rest of the menu means.
+  if (layer && selectedLayerIds.has(layer.id)) {
+    selectedLayerId = layer.id;
+    paintLayerSelection();
+    paintKeyframeSelection();
+    updateCropBtn();
+  } else if (layer) {
+    selectLayer(layer.id);
+  }
 
   const menu = document.createElement('div');
   menu.className = 'clip-menu';
@@ -201,6 +210,9 @@ function openClipMenu(evt, track) {
   item(t('Edit Keyframe'), !!layer && !!keyEl, () => editKeyframe(layer.id, keyEl.dataset.keyId));
   item(t('Split here'), !!layer && timelineModel.canSplitAt(layer, at),
     () => splitSelected(at));
+  // V4.3. Join the chosen clips; on a joined one, take it apart again.
+  item(t('Join selected tracks'), !busy && joinTryable(), () => joinSelected());
+  if (layer && layer.joinId) item(t('Un-join tracks'), !busy, () => unjoinLayer(layer.id));
   item(t('Copy'), !!layer, () => copySelected());
   item(t('Paste'), !!layerClipboard, () => pasteAt(at, type, lane));
   item(t('Delete'), !!layer, () => deleteSelected());

@@ -303,41 +303,234 @@ async function exportLayers() {
  * Step 15. The timeline rendered to one file.
  *
  * The composite twin of saveClipTo, and deliberately the same shape: one
- * runJob, the same failure report, the same notice. What it hands over is the
- * project rather than a media file and a pair of markers, because in advanced
- * editing the markers are part of the project.
+ * runJob, the same failure report. What it hands over is the project rather
+ * than a media file and a pair of markers, because in advanced editing the
+ * markers are part of the project.
  *
  * The frame is projectFrame() rather than compositeFrame, so an audio-only
  * project still arrives with a size. Nothing reads it there, and handing the
  * encoder a 0x0 to ignore is a worse thing to rely on.
+ *
+ * V4.1. Started from the Export window, with the name chosen there, and shown
+ * in the Rendering modal rather than under the main window's status line.
  */
-async function exportProject() {
-  if (!savable()) return;
+async function exportProject(title) {
+  if (!savable()) return false;
   const destination = await window.lwclipper.saveAsDialog(
-    exportName(), outputIsAudio(), outputFormat, true);
-  if (!destination) return;
+    title || exportName(), outputIsAudio(), outputFormat, true);
+  if (!destination) return false;
+  closeExportWindow();
+  openRendering(destination);
   await runJob(async () => {
     const prepared = await exportLayers();
     if (!prepared.ok) {
       reportFailure(prepared);
+      finishRendering(prepared);
       return;
     }
     const result = await window.lwclipper.compose(
       prepared.layers, projectFrame(), { start: slider.start, end: slider.end },
       destination, compressionPercent());
-    if (!result.ok) {
-      reportFailure(result);
-      return;
-    }
-    setStatus('Saved to {path}', { path: result.data });
-    showSaveNotice(result.data);
+    if (!result.ok) reportFailure(result);
+    else setStatus('Saved to {path}', { path: result.data });
+    finishRendering(result);
   });
+  return true;
 }
+
+// ---- V4.1. The Export window ----
+//
+// The user: "Opens a window for the export options (Title, Framerate, File
+// compression, Output Format, [Cancel] left, [Export] right)", with the size
+// "defined by Crop Render", shown in boxes that cannot be edited. The frame
+// rate, compression and format are the save row's own controls, moved in for
+// as long as the window is open and back out after, so there is one of each
+// and nothing to keep in step (download.js does the same with the URL row).
+
+const exportModal = el('exportModal');
+const exportControls = el('exportControls');
+const exportNameField = el('exportNameField');
+const exportWidth = el('exportWidth');
+const exportHeight = el('exportHeight');
+const exportSizeLabel = el('exportSizeLabel');
+const exportSize = el('exportSize');
+const exportCancelBtn = el('exportCancelBtn');
+const exportGoBtn = el('exportGoBtn');
+const saveRowNode = document.querySelector('.save-row');
+const compressionGroup = saveRowNode.querySelector('.compression-group');
+const formatGroup = saveRowNode.querySelector('.format-group');
+const saveActions = saveRowNode.querySelector('.save-actions');
+
+function exportWindowOpen() {
+  return !exportModal.hidden;
+}
+
+function canExport() {
+  return timelineDriving() && !busy && savable();
+}
+
+/** The size and the rate's row, as the output is right now. */
+function refreshExportWindow() {
+  const frame = projectFrame();
+  const audio = outputIsAudio();
+  exportWidth.value = String(frame.width);
+  exportHeight.value = String(frame.height);
+  exportSizeLabel.hidden = audio;
+  exportSize.hidden = audio;
+  updateCutControls();
+  exportGoBtn.disabled = !canExport();
+}
+
+function openExportWindow() {
+  if (!canExport() || exportWindowOpen()) return;
+  // In the order they stood in on the row.
+  exportControls.append(fpsLabel, compressionGroup, formatGroup);
+  exportNameField.value = exportName();
+  exportModal.hidden = false;
+  refreshExportWindow();
+  exportNameField.focus();
+  exportNameField.select();
+}
+
+function closeExportWindow() {
+  if (!exportWindowOpen()) return;
+  exportModal.hidden = true;
+  saveActions.before(fpsLabel, compressionGroup, formatGroup);
+}
+
+exportCancelBtn.addEventListener('click', closeExportWindow);
+exportGoBtn.addEventListener('click', async () => {
+  if (!canExport()) return;
+  // A name made of nothing but spaces is no name; the main process strips
+  // what a file name cannot hold from the rest.
+  const title = exportNameField.value.trim() || exportName();
+  await exportProject(title);
+});
+exportNameField.addEventListener('keydown', (evt) => {
+  if (evt.key !== 'Enter') return;
+  evt.preventDefault();
+  exportGoBtn.click();
+});
+// A format button can change whether the output has a picture at all, and
+// with it whether the rate and the size mean anything.
+formatGroup.addEventListener('click', () => {
+  if (exportWindowOpen()) refreshExportWindow();
+});
+bindPopup(exportModal, closeExportWindow);
+
+// ---- V4.1. The Rendering modal ----
+//
+// The user: "When export is setup and the actual export to render it is
+// clicked, close the export window, open a non-closeable modal "Rendering...",
+// which blocks interactions with the rest of the app and that shows the chosen
+// file name and a progress bar with estimated time left. When finished show 3
+// buttons at the bottom of that modal: "Open File", "Open Folder", "Close"."
+// Escape and the backdrop do nothing while it runs; Cancel stops the render,
+// the same Cancel the main window has.
+
+const renderingModal = el('renderingModal');
+const renderingTitle = el('renderingTitle');
+const renderingFile = el('renderingFile');
+const renderingBar = el('renderingBar');
+const renderingStatus = el('renderingStatus');
+const renderingCancelBtn = el('renderingCancelBtn');
+const renderingOpenBtn = el('renderingOpenBtn');
+const renderingFolderBtn = el('renderingFolderBtn');
+const renderingCloseBtn = el('renderingCloseBtn');
+
+let rendering = null;     // { path, done }
+
+function fileNameOf(fullPath) {
+  return String(fullPath || '').split(/[\\/]/).filter(Boolean).pop() || '';
+}
+
+function openRendering(destination) {
+  rendering = { path: destination, done: false };
+  renderingTitle.textContent = t('Rendering...');
+  renderingFile.textContent = fileNameOf(destination);
+  renderingFile.title = destination;
+  // No value at first: the layers are drawn before ffmpeg says anything, and
+  // a bar that moves without knowing is the honest picture of that.
+  renderingBar.removeAttribute('value');
+  renderingStatus.textContent = t('Preparing the layers...');
+  renderingStatus.dataset.tone = '';
+  renderingCancelBtn.hidden = false;
+  renderingCancelBtn.disabled = false;
+  renderingOpenBtn.hidden = true;
+  renderingFolderBtn.hidden = true;
+  renderingCloseBtn.hidden = true;
+  renderingModal.hidden = false;
+  closeMenus();
+}
+
+/** Every progress line while the modal is up, from setProgress. */
+function noteRenderProgress(frac, text) {
+  if (!rendering || rendering.done) return;
+  if (frac !== null && frac !== undefined) renderingBar.value = Math.min(1, Math.max(0, frac));
+  if (text) renderingStatus.textContent = text;
+}
+
+function finishRendering(result) {
+  if (!rendering) return;
+  // Cancelled is the user's own answer and wants nothing more from them.
+  if (result && result.cancelled) {
+    closeRendering();
+    return;
+  }
+  rendering.done = true;
+  renderingCancelBtn.hidden = true;
+  renderingCloseBtn.hidden = false;
+  if (result && result.ok) {
+    rendering.path = result.data || rendering.path;
+    renderingTitle.textContent = t('Export finished');
+    renderingFile.textContent = fileNameOf(rendering.path);
+    renderingFile.title = rendering.path;
+    renderingBar.value = 1;
+    renderingStatus.textContent = t('Saved to {path}', { path: rendering.path });
+    renderingStatus.dataset.tone = '';
+    renderingOpenBtn.hidden = false;
+    renderingFolderBtn.hidden = false;
+    renderingOpenBtn.focus();
+  } else {
+    renderingTitle.textContent = t('Export failed');
+    renderingStatus.textContent = t('Error: {message}', { message: String((result && result.error) || '') });
+    renderingStatus.dataset.tone = 'error';
+    renderingCloseBtn.focus();
+  }
+}
+
+function closeRendering() {
+  rendering = null;
+  renderingModal.hidden = true;
+}
+
+renderingCancelBtn.addEventListener('click', async () => {
+  renderingCancelBtn.disabled = true;
+  renderingStatus.textContent = t('Cancelling...');
+  await window.lwclipper.cancelJob();
+});
+renderingOpenBtn.addEventListener('click', async () => {
+  if (!rendering) return;
+  const result = await window.lwclipper.openFile(rendering.path);
+  if (result && result.ok === false) {
+    renderingStatus.textContent = t('Could not open that file: {error}', { error: result.error });
+    renderingStatus.dataset.tone = 'error';
+  }
+});
+renderingFolderBtn.addEventListener('click', () => {
+  if (rendering) window.lwclipper.showInFolder(rendering.path);
+});
+renderingCloseBtn.addEventListener('click', closeRendering);
+// Over everything, the questions included. Only once it is done do Escape and
+// the backdrop do what Close does.
+bindPopup(renderingModal, () => {
+  if (rendering && rendering.done) closeRendering();
+}, 4);
 
 saveBtn.addEventListener('click', async () => {
   if (busy) return;
   if (timelineDriving()) {
-    await exportProject();
+    openExportWindow();
     return;
   }
   if (!media) return;

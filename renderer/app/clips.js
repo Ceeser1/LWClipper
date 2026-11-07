@@ -82,9 +82,17 @@ function paintLayerSelection() {
   }
 }
 
-/** V3.8.2. Whether a clip is chosen, alone or among several. */
+/**
+ * V3.8.2. Whether a clip is chosen, alone or among several. V4.3: or another
+ * piece of the join it is in, which shows as the one clip it is.
+ */
 function layerIsSelected(id) {
-  return !!id && (id === selectedLayerId || selectedLayerIds.has(id));
+  if (!id) return false;
+  if (id === selectedLayerId || selectedLayerIds.has(id)) return true;
+  const layer = timelineModel.layerById(layers, id);
+  if (!layer || !layer.joinId) return false;
+  return layers.some((l) => l.joinId === layer.joinId
+    && (l.id === selectedLayerId || selectedLayerIds.has(l.id)));
 }
 
 /** V3.8.2. Every chosen clip's id. */
@@ -138,7 +146,8 @@ function setLayers(next, restoring) {
   // V2.9. In lane order, whoever built the list. The composer reads the list
   // order as the stacking order and the rows are drawn from the lanes, so this
   // is the one place the two are made to agree.
-  const arranged = timelineModel.arrangeLanes(next);
+  // V4.3. And every join still end to end on one row, broken where it is not.
+  const arranged = timelineModel.normalizeJoins(timelineModel.arrangeLanes(next));
   // And the transitions brought up to date with whatever the gesture did to the
   // overlaps on each lane. Not on a restore, undo or a project opening, whose
   // fades are exactly what was saved and are put back as they were rather than
@@ -588,6 +597,13 @@ function buildLayerClip(track, layer) {
   const clip = document.createElement('div');
   clip.className = 'layer-clip';
   clip.dataset.layerId = layer.id;
+  // V4.3. A piece of a join is drawn as part of one clip: no edge or fade
+  // handle at a seam, only the join's two outer ends have them.
+  const joinPlace = timelineModel.joinPlace(layers, layer);
+  if (joinPlace) clip.classList.add('layer-clip--joined', 'layer-clip--join-' + joinPlace);
+  const seamAt = (side) => (side === 'start' || side === 'in'
+    ? joinPlace === 'mid' || joinPlace === 'last'
+    : joinPlace === 'mid' || joinPlace === 'first');
   if (!layer.enabled) clip.classList.add('layer-clip--off');
   if (layerIsSelected(layer.id)) clip.classList.add('layer-clip--selected');
   // Step 17. The file's own name with its extension. This was layer.src, the
@@ -618,6 +634,7 @@ function buildLayerClip(track, layer) {
   // positionLayerClips, which is the only place that knows how wide the clip
   // has ended up on screen.
   for (const side of ['start', 'end']) {
+    if (seamAt(side)) continue;
     const handle = document.createElement('div');
     handle.className = 'layer-clip__edge layer-clip__edge--' + side;
     handle.dataset.edge = side;
@@ -698,6 +715,7 @@ function buildLayerClip(track, layer) {
   // them. They bind their own drag and stop the event there, which is what
   // keeps bindClipDrag from reading the same press as a move.
   for (const which of ['in', 'out']) {
+    if (seamAt(which)) continue;
     const dot = document.createElement('div');
     dot.className = 'clip-fade-dot clip-fade-dot--' + which;
     dot.dataset.fade = which;
@@ -855,11 +873,12 @@ const CLIP_SNAP_PX = 5;
  * clip's own edge, which is offered already.
  */
 function snapLines(layer) {
-  const own = new Set(timelineModel.groupOf(layers, layer.id).map((l) => l.id));
+  // V4.3. Its join is its own too, every piece and its group.
+  const own = new Set(timelineModel.linkedOf(layers, layer.id).map((l) => l.id));
   // V3.8.2. Clips moving together with it are not neighbours to snap to.
   if (selectedLayerIds.has(layer.id)) {
     for (const id of selectedLayerIds) {
-      for (const m of timelineModel.groupOf(layers, id)) own.add(m.id);
+      for (const m of timelineModel.linkedOf(layers, id)) own.add(m.id);
     }
   }
   const lines = [{ at: compositeAt, layerId: null, part: 'playhead' }];
@@ -1082,7 +1101,10 @@ function bindClipDrag(clip, layerId) {
       drag.target = null;
       placeLaneGhost(drag, clip, null);
       if (drag.moved && target) {
-        layers = timelineModel.setLayer(layers, layerId, { lane: target.lane });
+        // V4.3. A joined clip goes to the row whole.
+        for (const piece of timelineModel.joinOf(layers, layerId)) {
+          layers = timelineModel.setLayer(layers, piece.id, { lane: target.lane });
+        }
       }
       // The commit point, and so Step 12's undo snapshot. A press that never
       // moved changed nothing and does not rebuild the rows, let alone take a

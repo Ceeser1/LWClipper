@@ -335,6 +335,9 @@ function applySettingsPayload(payload) {
   renderLayerRows();
   applyAdvancedEditing();
   translateDom(document.body, wasShowing);
+  if (typeof translatePopped === 'function') translatePopped(wasShowing);
+  // V4.2. The keys bound in Key Binds.
+  if (typeof applyKeyBinds === 'function') applyKeyBinds(appSettings.keyBinds);
   // The buttons this one is measured against have just been relabelled.
   sizeSettingsBtn();
   updateRenderResolution();
@@ -424,7 +427,14 @@ let lastStatus = null;
 // then the line that was there before comes back. They also take the Clear
 // button out of the frame while they show, which would otherwise push them off
 // centre.
-const TRANSIENT_STATUS = { 'Project saved.': 4000 };
+const TRANSIENT_STATUS = {
+  'Project saved.': 4000,
+  // V4.3. Why a join was refused: a hint, not a state to keep showing.
+  'Choose two or more tracks to join.': 5000,
+  'Only tracks on the same layer can be joined.': 5000,
+  'Texts, shapes and bars cannot be joined.': 5000,
+  'Only neighbouring tracks can be joined: another track is between them.': 5000,
+};
 let transientTimer = null;
 let transientBefore = null;
 
@@ -919,6 +929,7 @@ function setTrimEnabled(on) {
   updateRenderResolution();
   saveBtn.disabled = !(on && !busy && savable());
   quickSaveBtn.disabled = !(on && !busy && savable());
+  if (typeof refreshMenuBar === 'function') refreshMenuBar();
   updateCompressionState();
   playSelectionBtn.disabled = !on;
   updateCropBtn();
@@ -962,6 +973,8 @@ function setProgress(frac, text) {
     lastStatus = null;
     statusLabel.textContent = text;
   }
+  // V4.1. The Rendering modal shows the same bar and line over the window.
+  if (typeof noteRenderProgress === 'function') noteRenderProgress(frac, text);
 }
 
 async function refreshToolsLabel() {

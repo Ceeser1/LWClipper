@@ -195,13 +195,15 @@ function stepSeconds(dir) {
  */
 function splitSelected(at) {
   if (!timelineDriving() || busy || !selectedLayerId) return false;
-  const next = timelineModel.splitLayer(layers, selectedLayerId, at);
+  // V4.3. A joined clip is cut where `at` falls in it, whichever piece that
+  // is, and comes apart at a seam.
+  const next = timelineModel.splitJoinAt(layers, selectedLayerId, at);
   if (next === layers) return false;
   // V3.3. The track a crop window is open on asks first.
   const id = selectedLayerId;
   // V3.6.2. And so does the track a media window is open on.
   return confirmPopoutConflict([cropWindowOn(id) && cropWindowConflict(), genWindowConflict(id)], () => {
-    const now = timelineModel.splitLayer(layers, id, at);
+    const now = timelineModel.splitJoinAt(layers, id, at);
     if (now === layers) return false;
     setLayers(now);
     commitHistory();
@@ -281,6 +283,19 @@ function deleteSelected() {
   if (selectedKeyframe) return deleteSelectedKeyframe();
   const next = timelineModel.removeLayer(layers, selectedLayerId);
   if (next.length === layers.length) return false;
+  // V4.3. A joined clip goes whole, its pieces' groups asked about as one.
+  const chain = timelineModel.joinOf(layers, selectedLayerId);
+  if (chain.length > 1) {
+    const pieces = chain.map((l) => l.id);
+    const linked = timelineModel.linkedOf(layers, selectedLayerId);
+    if (linked.length > chain.length) {
+      const groups = [...new Set(chain.map((l) => l.groupId).filter(Boolean))];
+      return confirmGroupedDelete(t('This track is grouped.'),
+        () => deleteTracks(pieces, groups),
+        () => deleteTracks(linked.map((l) => l.id), null));
+    }
+    return deleteTracks(pieces, null);
+  }
   // V3.8.2. A grouped track asks first: its partner goes with it or is left.
   const group = timelineModel.groupOf(layers, selectedLayerId);
   if (group.length > 1) {
@@ -327,7 +342,8 @@ function deleteTracks(ids, disband) {
   return confirmPopoutConflict(conflicts, () => {
     let now = layers;
     for (const id of ids) now = timelineModel.removeLayer(now, id);
-    if (disband) now = timelineModel.ungroup(now, disband);
+    // V4.3. One group or, for a joined clip, every group its pieces were in.
+    for (const groupId of [].concat(disband || [])) now = timelineModel.ungroup(now, groupId);
     if (now.length === layers.length) return false;
     setLayers(now);
     commitHistory();
@@ -352,7 +368,8 @@ function pasteAtPlayhead() {
  */
 function cutSelected() {
   if (!timelineDriving() || busy || !selectedLayerId) return false;
-  const ids = timelineModel.groupOf(layers, selectedLayerId).map((l) => l.id);
+  // V4.3. What Copy takes: the group, and the join with its pieces' groups.
+  const ids = timelineModel.linkedOf(layers, selectedLayerId).map((l) => l.id);
   if (!copySelected()) return false;
   return deleteTracks(ids, null);
 }
@@ -386,6 +403,62 @@ function groupSelected() {
   commitHistory();
   // The selection is kept, so the group can be moved straight away.
   setLayerSelection(ids, selectedLayerId);
+  return true;
+}
+
+// ---- V4.3. Join and Un-join ----
+
+/** Whether the chosen clips are enough to try a join: two clips or joins. */
+function joinTryable() {
+  const ids = selectionIds();
+  if (ids.length < 2) return false;
+  const units = new Set(ids.map((id) => {
+    const l = timelineModel.layerById(layers, id);
+    return l ? (l.joinId || l.id) : id;
+  }));
+  return units.size > 1;
+}
+
+/**
+ * J, Edit, Join selected tracks: the chosen clips into one, end to end. The
+ * hint names why when they cannot be. One undo step.
+ */
+function joinSelected() {
+  if (!timelineDriving() || busy) return false;
+  const ids = selectionIds();
+  const check = timelineModel.joinCheck(layers, ids);
+  if (!check.ok) {
+    // A hint that goes again by itself (TRANSIENT_STATUS in shell.js). One
+    // literal each, so check-locales.js sees them.
+    if (check.reason === 'rows') setStatus('Only tracks on the same layer can be joined.');
+    else if (check.reason === 'kind') setStatus('Texts, shapes and bars cannot be joined.');
+    else if (check.reason === 'between') setStatus('Only neighbouring tracks can be joined: another track is between them.');
+    else setStatus('Choose two or more tracks to join.');
+    return false;
+  }
+  const moving = new Set(check.pieces.map((l) => l.id));
+  return confirmPopoutConflict(
+    [...moving].flatMap((id) => [cropWindowOn(id) && cropWindowConflict(), genWindowConflict(id)]),
+    () => {
+      const primary = moving.has(selectedLayerId) ? selectedLayerId : check.pieces[0].id;
+      setLayers(timelineModel.join(layers, ids));
+      commitHistory();
+      // The joined clip chosen as the one clip it now is, which lights every
+      // piece, so it can be carried to another row straight away (several
+      // chosen clips only move sideways).
+      selectedLayerIds = new Set();
+      selectedLayerId = null;
+      selectLayer(primary);
+      return true;
+    });
+}
+
+/** Right click, Un-join tracks: the pieces apart, where they are. */
+function unjoinLayer(id) {
+  const layer = timelineModel.layerById(layers, id);
+  if (!timelineDriving() || busy || !layer || !layer.joinId) return false;
+  setLayers(timelineModel.unjoin(layers, layer.joinId));
+  commitHistory();
   return true;
 }
 
@@ -538,10 +611,13 @@ let choiceCancelId = null;
  * around that, so the ticks arrive through `onCheck` instead and the caller
  * keeps its own copy of them.
  */
-function showChoice({ title, message, footer, entries, checks, single, onCheck, buttons, cancel, stacked }) {
+function showChoice({ title, message, footer, entries, checks, single, onCheck, buttons, cancel, stacked, over }) {
   // Nothing may stack: a second question while one is up would strand the
   // first one's promise forever.
   if (choiceSettle) settleChoice(choiceCancelId);
+  // V4.1. Asked from a window out of the main one (Preferences), it is shown
+  // over that window; carryOver does nothing for a modal that is not out.
+  if (over && typeof carryOver === 'function') carryOver(choiceModal, over);
 
   choiceTitle.textContent = title;
   // A paragraph each rather than one string: the two warnings Clear cache can
@@ -658,6 +734,7 @@ function showChoice({ title, message, footer, entries, checks, single, onCheck, 
 
 function settleChoice(id) {
   choiceModal.hidden = true;
+  if (typeof carryBack === 'function') carryBack(choiceModal);
   const settle = choiceSettle;
   choiceSettle = null;
   choiceCancelId = null;
@@ -717,6 +794,8 @@ function markProjectSaved(document) {
 }
 
 function updateProjectUi() {
+  // V4.1. The menu bar's Export button follows whether there is a project.
+  if (typeof refreshMenuBar === 'function') refreshMenuBar();
   if (!timelineDriving()) {
     projectNameLabel.hidden = true;
     return;
