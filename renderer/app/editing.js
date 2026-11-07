@@ -537,7 +537,7 @@ let choiceCancelId = null;
  * around that, so the ticks arrive through `onCheck` instead and the caller
  * keeps its own copy of them.
  */
-function showChoice({ title, message, footer, entries, checks, single, onCheck, buttons, cancel }) {
+function showChoice({ title, message, footer, entries, checks, single, onCheck, buttons, cancel, stacked }) {
   // Nothing may stack: a second question while one is up would strand the
   // first one's promise forever.
   if (choiceSettle) settleChoice(choiceCancelId);
@@ -627,6 +627,9 @@ function showChoice({ title, message, footer, entries, checks, single, onCheck, 
   if (onCheck) onCheck([...ticked]);
 
   choiceButtons.replaceChildren();
+  // V3.8.4. One above the other in the middle of the panel, for answers too
+  // long to stand side by side: the Different LWC Project question's.
+  choiceButtons.classList.toggle('choice-buttons--stacked', !!stacked);
   for (const button of buttons) {
     // Not named el: that is the id lookup every file of the window uses,
     // and shadowing it inside a loop is how someone later loses an afternoon.
@@ -790,6 +793,18 @@ function setProjectError(code) {
 
 async function openProjectFile() {
   if (!timelineDriving() || busy) return;
+  // V3.8.4. With a project open the file is named first and the question
+  // comes after, since merging it is one of the answers and needs the file.
+  if (projectIsOpen()) {
+    const picked = await window.lwclipper.projectOpenDialog();
+    if (!picked || picked.cancelled) return;
+    if (!picked.ok) {
+      setProjectError(picked.error);
+      return;
+    }
+    await openProjectPath(picked.path);
+    return;
+  }
   // Whatever is open now would be replaced, so ask before the file dialog
   // rather than after: being asked about unsaved work only once a new project
   // has been chosen is the wrong order.
@@ -801,6 +816,38 @@ async function openProjectFile() {
     return;
   }
   await adoptProject(result);
+}
+
+/**
+ * V3.8.4. Whether a project is open for another to be told apart from: one
+ * with a file, or anything on the timeline. An empty timeline that was never
+ * saved is not one, and a project simply opens into it as it always has.
+ */
+function projectIsOpen() {
+  return timelineDriving() && (!!projectPath || layers.length > 0);
+}
+
+/**
+ * V3.8.4. The user: a project file dragged into a layer, onto Add new Layer
+ * or opened with Open File "should not just replace the current project if
+ * saved and not only give a warning popup "Unsaved changes" if not saved".
+ * 'save', 'merge', 'discard' or 'cancel', and 'open' when no project is open
+ * to ask about. Save in green, Merge in yellow, Discard in red, Cancel plain.
+ */
+async function askDifferentProject() {
+  if (!projectIsOpen()) return 'open';
+  return showChoice({
+    title: t('Different LWC Project'),
+    message: t('You attempted to open another LWC Project while one is opened, what would you like to do?'),
+    buttons: [
+      { id: 'save', label: t('Save this project, then open the other'), primary: true },
+      { id: 'merge', label: t('Merge the other project with this as new layers'), tone: 'caution' },
+      { id: 'discard', label: t('Discard changes on this project, then open the other'), tone: 'danger' },
+      { id: 'cancel', label: t('Cancel') },
+    ],
+    cancel: 'cancel',
+    stacked: true,
+  });
 }
 
 /**
@@ -826,10 +873,19 @@ async function openProjectPath(filePath) {
   if (wasSimple) await setAdvancedEditing(true);
   // Anything that ends without a project open puts the switch back, because
   // nothing else about the window changed either.
-  if (!(await confirmDiscard())) {
+  // V3.8.4. With a project open, the Different LWC Project question instead:
+  // save this one and open that, merge that one in, throw this one's changes
+  // away and open that, or none of them. Each answer is the unsaved changes
+  // question already answered, so that is not asked as well.
+  const how = await askDifferentProject();
+  const ready = how === 'save' ? await saveProject(false)
+    : how === 'open' ? await confirmDiscard()
+      : how === 'merge' || how === 'discard';
+  if (!ready) {
     if (wasSimple) await setAdvancedEditing(false);
     return false;
   }
+  // Read after the save, not before: the file may be this very project's.
   const result = await window.lwclipper.openProject(filePath);
   if (!result || !result.ok) {
     if (wasSimple) await setAdvancedEditing(false);
@@ -837,9 +893,153 @@ async function openProjectPath(filePath) {
     return false;
   }
   // V3.6.1. Whether it opened, which the restore window needs to know.
-  const opened = await adoptProject(result);
+  const opened = how === 'merge' ? await mergeProject(result) : await adoptProject(result);
   if (!opened && wasSimple) await setAdvancedEditing(false);
   return opened;
+}
+
+/**
+ * V3.8.4. Merge: the other project's tracks under this one's as new layers,
+ * the user's "keeping all settings from the project file except for the
+ * Undo-stack of the other project, the current file only gets one undo added
+ * which removes the merged project again if used". This project stays what
+ * it was: its file, its frame, its trim and its undo stack. Tracks whose file
+ * has gone are asked about as on opening, and the editors' zoom and pan for
+ * the merged tracks come along.
+ *
+ * A project saved at another resolution is fitted into this one's frame the
+ * way Crop Render Frame fits a frame into another: scaled to fit, centred, and
+ * every placed picture, text box and shape carried with it, so the merged
+ * tracks look in this frame as they did in their own.
+ */
+async function mergeProject(result) {
+  const { layers: resolved, trouble } = projectFile.applyStatuses(result.doc, result.statuses);
+  if (trouble.length && !(await askAboutMissing(trouble))) return false;
+  const built = projectLayersOf(resolved, result.masksMissing);
+  const keep = trouble.length ? projectFile.pruneTrouble(built, trouble) : built;
+  if (!keep.length) {
+    setStatus('That project has no tracks to merge.');
+    return false;
+  }
+  const theirs = projectFrameOf(result.doc.project);
+  let incoming = keep;
+  if (!compositeFrame && theirs) {
+    // Nothing here has a frame yet, which a timeline of sound alone has not.
+    compositeFrame = theirs;
+    sizeCompositeCanvas();
+  } else if (compositeFrame && theirs
+    && (theirs.width !== compositeFrame.width || theirs.height !== compositeFrame.height)) {
+    incoming = keep.map((l) => fitMergedLayer(l, theirs, compositeFrame));
+  }
+  // Under the rows already shown, empty ones too, except a kind with nothing
+  // on it at all, whose one row is a placeholder and is filled from the top.
+  const rows = {};
+  for (const type of ['video', 'audio']) {
+    rows[type] = layers.some((l) => l.type === type) ? rowsOf(type) : 0;
+  }
+  const merged = timelineModel.mergeLayers(layers, incoming, rows);
+  mergeViews(result.views, merged.ids);
+  // As restoring, so the fades are put down exactly as saved rather than
+  // worked out again for the overlaps the merged tracks bring along.
+  setLayers(merged.layers, true);
+  commitHistory();
+  // Chosen together, so they can be moved as one straight away.
+  const added = [...merged.ids.values()];
+  setLayerSelection(added, added[0]);
+  const maskless = (result.masksMissing || []).length;
+  if (trouble.length) setStatus('Project merged without {n} track(s).', { n: trouble.length });
+  else if (maskless) setStatus('Project merged. {n} mask picture(s) could not be found, those tracks have no mask.', { n: maskless });
+  else setStatus('Project merged: {n} track(s) added.', { n: added.length });
+  return true;
+}
+
+/**
+ * V3.8.4. A merged layer moved from its own project's frame into this one's:
+ * scaled by `k` to fit and centred, Crop Render Frame's carry. A picture with
+ * no placement of its own keeps fitting the frame while the two frames are
+ * one shape, and is pinned where it stood in its own frame when they are not.
+ */
+function fitMergedLayer(layer, from, to) {
+  if (layer.type !== 'video') return layer;
+  const k = Math.min(to.width / from.width, to.height / from.height);
+  const dx = (to.width - from.width * k) / 2;
+  const dy = (to.height - from.height * k) / 2;
+  if (layer.kind === 'gen') return timelineModel.reframeKeyed(layer, from.height, to.height, k, dx, dy);
+  const sameShape = Math.abs(from.width * to.height - to.width * from.height) < 1e-6 * from.width * to.height;
+  const source = layerSource(layer);
+  const carry = (crop, render) => {
+    if (!render && (sameShape || !source)) return render;
+    const p = source
+      ? layerGeometry.placeLayer({ source, crop, render, project: from })
+      : { dest: render };
+    if (!p || !p.dest) return render;
+    return {
+      x: Math.round(dx + p.dest.x * k),
+      y: Math.round(dy + p.dest.y * k),
+      width: Math.round(p.dest.width * k),
+      height: Math.round(p.dest.height * k),
+    };
+  };
+  return {
+    ...layer,
+    render: carry(layer.crop, layer.render),
+    keyframes: timelineModel.keyframesFor(layer).map((kf) => ({ ...kf, render: carry(kf.crop, kf.render) })),
+  };
+}
+
+/** V3.8.4. The merged project's editor views, under its tracks' new ids. */
+function mergeViews(views, ids) {
+  for (const [key, view] of Object.entries(views || {})) {
+    const m = /^([^|]+)\|([^#@]+)(.*)$/.exec(key);
+    if (!m || !ids.has(m[2])) continue;
+    rememberedViews.set(m[1] + '|' + ids.get(m[2]) + m[3], { ...view });
+  }
+}
+
+/**
+ * The tracks whose files are not where they were, named before anything is
+ * decided. True to go on without them.
+ */
+async function askAboutMissing(trouble) {
+  const choice = await showChoice({
+    title: t('Unable to find source files'),
+    message: t('These files have moved or been deleted:'),
+    entries: trouble,
+    footer: t('You can continue opening the project, but the tracks using these files will be removed. Cancel instead to put the files back where they were, then open the project again.'),
+    buttons: [
+      { id: 'continue', label: t('Continue') },
+      { id: 'cancel', label: t('Cancel'), primary: true },
+    ],
+    cancel: 'cancel',
+  });
+  return choice === 'continue';
+}
+
+/**
+ * A file's layers through the model, which is what says what a layer is. A
+ * file carries a ref block and may carry fields this version has never heard
+ * of; createLayer takes what it knows and clamps it. V3.6. A track whose mask
+ * picture has gone opens without its mask.
+ */
+function projectLayersOf(resolved, masksMissing) {
+  const maskless = new Set(masksMissing || []);
+  return resolved.map((l) => {
+    const layer = timelineModel.createLayer(l);
+    return maskless.has(layer.id) ? timelineModel.removeMask([layer], layer.id)[0] : layer;
+  });
+}
+
+/** A file's project frame, or null for a project that had no picture. */
+function projectFrameOf(frame) {
+  return frame && frame.width > 1 && frame.height > 1
+    ? {
+      width: frame.width,
+      height: frame.height,
+      // A project written before Step 15 carries no rate at all, and the rate
+      // the app rendered at then was the composer's own default.
+      fps: frame.fps > 0 ? frame.fps : COMPOSITE_FALLBACK.fps,
+    }
+    : null;
 }
 
 /**
@@ -853,42 +1053,13 @@ async function openProjectPath(filePath) {
  */
 async function adoptProject(result) {
   const { layers: resolved, trouble } = projectFile.applyStatuses(result.doc, result.statuses);
-  if (trouble.length) {
-    const choice = await showChoice({
-      title: t('Unable to find source files'),
-      message: t('These files have moved or been deleted:'),
-      entries: trouble,
-      footer: t('You can continue opening the project, but the tracks using these files will be removed. Cancel instead to put the files back where they were, then open the project again.'),
-      buttons: [
-        { id: 'continue', label: t('Continue') },
-        { id: 'cancel', label: t('Cancel'), primary: true },
-      ],
-      cancel: 'cancel',
-    });
-    if (choice !== 'continue') return false;
-  }
+  if (trouble.length && !(await askAboutMissing(trouble))) return false;
 
-  // Through the model, which is what says what a layer is. A file carries a
-  // ref block and may carry fields this version has never heard of; createLayer
-  // takes what it knows and clamps it.
-  // V3.6. A track whose mask picture has gone opens without its mask.
   const maskless = new Set(result.masksMissing || []);
-  const built = resolved.map((l) => {
-    const layer = timelineModel.createLayer(l);
-    return maskless.has(layer.id) ? timelineModel.removeMask([layer], layer.id)[0] : layer;
-  });
+  const built = projectLayersOf(resolved, result.masksMissing);
   const keep = trouble.length ? projectFile.pruneTrouble(built, trouble) : built;
 
-  const frame = result.doc.project;
-  compositeFrame = (frame.width > 1 && frame.height > 1)
-    ? {
-      width: frame.width,
-      height: frame.height,
-      // A project written before Step 15 carries no rate at all, and the rate
-      // the app rendered at then was the composer's own default.
-      fps: frame.fps > 0 ? frame.fps : COMPOSITE_FALLBACK.fps,
-    }
-    : null;
+  compositeFrame = projectFrameOf(result.doc.project);
   sizeCompositeCanvas();
 
   resetLaneRows();

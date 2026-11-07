@@ -1180,6 +1180,20 @@ body.advanced .audio-section {
   background: #e58686;
 }
 
+/* V3.8.4. Yellow, between the two: an answer that changes the project but
+   loses nothing, Merge in the Different LWC Project question. The yellow of
+   the unsaved dot, lit the way the green and the red are. */
+.choice-buttons button[data-tone="caution"] {
+  background: #dcc878;
+  border-color: #e8d690;
+  color: #211d0f;
+  font-weight: bold;
+}
+
+.choice-buttons button[data-tone="caution"]:hover:not(:disabled) {
+  background: #e5d386;
+}
+
 body.advanced .timeline-section {
   display: block;
 }
@@ -4693,4 +4707,13 @@ button.dock-btn--close:hover:not(:disabled) {
    delete-grouped-tracks question, the others staying on the right. */
 .choice-buttons .choice-buttons__left {
   margin-right: auto;
+}
+
+/* V3.8.4. The answers one above the other, centred in the panel and all as
+   wide as the widest, for the Different LWC Project question. */
+.choice-buttons.choice-buttons--stacked {
+  display: grid;
+  grid-template-columns: max-content;
+  justify-content: center;
+  gap: 8px;
 }

@@ -2187,6 +2187,45 @@ const timelineModel = (() => {
     return layers.map((l) => ({ ...l, start: round(Math.max(0, l.start - by)) }));
   }
 
+  /**
+   * V3.8.4. Another project's layers put under this one's, the user's "adds
+   * the layers below the existing ones": each kind's rows go below the rows of
+   * that kind already there, `rows` ({ video, audio }, empty rows counted,
+   * 0 for a kind with none). Every layer and every group gets a new id, so a
+   * project merged into itself, or into a copy of itself, never shares one
+   * with what is open; a group stays a group, among its own. Everything else
+   * the clips were saved with is kept, keyframe ids included, which are the
+   * layer's own. Hands back the list and the old id to new id map.
+   */
+  function mergeLayers(layers, incoming, rows = {}) {
+    const theirs = arrangeLanes((incoming || []).slice());
+    const used = new Set(layers.map((l) => l.id));
+    const usedGroups = new Set(layers.map((l) => l.groupId).filter(Boolean));
+    const fresh = (make, taken) => {
+      let id = make();
+      while (taken.has(id)) id = make();
+      taken.add(id);
+      return id;
+    };
+    const ids = new Map();
+    const groups = new Map();
+    const below = {
+      video: Math.max(0, Math.floor(Number(rows.video) || 0)),
+      audio: Math.max(0, Math.floor(Number(rows.audio) || 0)),
+    };
+    const added = theirs.map((l) => {
+      const id = fresh(newId, used);
+      ids.set(l.id, id);
+      let groupId = null;
+      if (l.groupId) {
+        if (!groups.has(l.groupId)) groups.set(l.groupId, fresh(newGroupId, usedGroups));
+        groupId = groups.get(l.groupId);
+      }
+      return { ...l, id, groupId, lane: below[l.type === 'audio' ? 'audio' : 'video'] + l.lane };
+    });
+    return { layers: arrangeLanes([...layers, ...added]), ids };
+  }
+
   /** How far one layer's given edge may travel, as a low and high shift. */
   function trimRange(layer, edge) {
     if (edge === 'start') {
@@ -2279,6 +2318,7 @@ const timelineModel = (() => {
     addLayer,
     removeLayer,
     moveSet,
+    mergeLayers,
     shiftToZero,
     reorderLayer,
     arrangeLanes,
