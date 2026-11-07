@@ -236,7 +236,12 @@ window.addEventListener('blur', closeClipMenu);
 window.addEventListener('resize', closeClipMenu);
 timelineStage.addEventListener('wheel', closeClipMenu, { passive: true });
 
-playSelectionBtn.addEventListener('click', () => {
+// V4.0. A function of its own, since P and the Playback menu play the
+// selection as well as the button.
+playSelectionBtn.addEventListener('click', () => playSelection());
+
+function playSelection() {
+  if (playSelectionBtn.disabled) return;
   // Step 17. This did nothing at all in advanced editing, because it opened on
   // a guard for media that is null there and then drove transport, the preview
   // element, which is not what plays a composite. The selection itself is the
@@ -252,7 +257,7 @@ playSelectionBtn.addEventListener('click', () => {
   transport.currentTime = slider.start;
   transport.play();
   syncPreviewAudio(true);
-});
+}
 for (const elem of [previewVideo, previewSound]) {
   elem.addEventListener('timeupdate', () => {
     if (playUntil !== null && transport.currentTime >= playUntil) {

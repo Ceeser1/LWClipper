@@ -4717,3 +4717,125 @@ button.dock-btn--close:hover:not(:disabled) {
   justify-content: center;
   gap: 8px;
 }
+
+/* ---- V4.0. The menu bar ---- */
+
+/* Advanced editing's, in place of the row with Open File, the link box and the
+   cogwheel. It stands against the top of the window, so the body's top padding
+   goes and only its bottom corners are rounded. */
+.menu-bar {
+  display: none;
+}
+
+body.advanced {
+  padding-top: 0;
+}
+
+body.advanced .menu-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  margin-bottom: 10px;
+  background: #2a2a30;
+  border-radius: 0 0 6px 6px;
+}
+
+body.advanced .top-section {
+  display: none;
+}
+
+/* The app's own buttons, a little quieter while closed so the five read as one
+   bar rather than a row of separate controls. */
+.menu-bar__head {
+  padding: 4px 12px;
+  background: transparent;
+  border-color: transparent;
+}
+
+.menu-bar__head:hover:not(:disabled),
+.menu-bar__head--open,
+.menu-bar__head--open:hover:not(:disabled) {
+  background: #3c3c44;
+  border-color: #505058;
+}
+
+/* The dropdowns are the right click menu's, in three columns: a tick, the
+   entry, and its key. */
+.menu-drop {
+  min-width: 260px;
+}
+
+.menu-drop__item {
+  display: grid;
+  grid-template-columns: 14px 1fr auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.menu-drop__tick {
+  color: #8fe0a4;
+  text-align: center;
+}
+
+.menu-drop__key {
+  color: #8a8a94;
+  font-size: 12px;
+  white-space: nowrap;
+  padding-left: 14px;
+}
+
+.menu-drop__item:disabled .menu-drop__key {
+  color: #55555e;
+}
+
+.menu-drop__divider {
+  height: 1px;
+  margin: 4px 6px;
+  background: #45454e;
+}
+
+/* ---- V4.0. The Download window ---- */
+
+.modal__panel--download {
+  width: min(760px, 100%);
+  max-width: none;
+}
+
+.download-row {
+  margin-bottom: 10px;
+}
+
+/* The frame it borrows keeps the look it has in the main window, a frame of
+   its own, set darker than the panel it now stands on. */
+.download-body .section {
+  background: #232328;
+  border: 1px solid #3a3a44;
+}
+
+.download-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+/* ---- V4.0. Where playback last started ---- */
+
+/* The playhead's shape in grey, without its grab area: it is only a mark. */
+.playhead--start {
+  top: 25px;
+  bottom: 0;
+  background: #8a8a94;
+}
+
+.playhead--start::after {
+  content: "";
+  position: absolute;
+  left: -4px;
+  top: -4px;
+  width: 9px;
+  height: 7px;
+  background: #8a8a94;
+  border-radius: 0 0 2px 2px;
+}

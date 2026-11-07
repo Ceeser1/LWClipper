@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, screen, Menu } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
@@ -401,8 +401,22 @@ ipcMain.handle('app:allowClose', () => {
   return true;
 });
 
+// V4.0. File, Close LWClipper. A close like the window's own X, so it is held
+// for the unsaved work question exactly as that one is.
+ipcMain.handle('app:close', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+  return true;
+});
+
 app.whenReady().then(() => {
   if (!firstInstance) return;
+  // V4.0. No application menu at all. Electron installs a default one, and
+  // hiding its bar left its keys working behind the app's back: Ctrl+R
+  // reloaded the page and lost the session, Ctrl+W closed the window, Ctrl+M
+  // minimized it and Ctrl+Plus and Minus zoomed the whole interface. Every key
+  // the window answers to is its own now (renderer/app/actions.js), and text
+  // boxes keep copy, paste and undo without a menu on Windows.
+  Menu.setApplicationMenu(null);
   // First start only: open in the language Windows is set to display in, when
   // there is a translation for it. Writing it means every start after this one
   // reads a saved choice rather than guessing again, so switching the app to

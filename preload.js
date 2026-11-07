@@ -70,6 +70,8 @@ contextBridge.exposeInMainWorld('lwclipper', {
     ipcRenderer.on('app:closing', () => callback());
   },
   allowClose: () => ipcRenderer.invoke('app:allowClose'),
+  // V4.0. File, Close LWClipper: the window's own close, guard and all.
+  closeApp: () => ipcRenderer.invoke('app:close'),
   // Asked once at startup, because the events only fire on a change and the
   // window can be launched maximized by the system.
   windowMaximized: () => ipcRenderer.invoke('window:isMaximized'),

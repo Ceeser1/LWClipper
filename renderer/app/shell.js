@@ -402,6 +402,7 @@ const timelineBeyond = el('timelineBeyond');
 const timelineOutsideStart = el('timelineOutsideStart');
 const timelineOutsideEnd = el('timelineOutsideEnd');
 const timelinePlayhead = el('timelinePlayhead');
+const timelinePlayStart = el('timelinePlayStart');
 const timelineTrimIn = el('timelineTrimIn');
 const timelineTrimOut = el('timelineTrimOut');
 const timelineHint = el('timelineHint');
@@ -615,9 +616,15 @@ function mainFrameSpeaks() {
 
 function updateMainFrame() {
   const advanced = timelineDriving();
+  // V4.0. The Download window holds the frame while it is open (download.js),
+  // and there it is always up, with the quality list in it from the start so
+  // the window says what Load will fill in. The title column comes and goes
+  // with what there is to say, which the window's own title already covers
+  // while nothing is happening.
+  const inWindow = advanced && typeof downloadWindowOpen === 'function' && downloadWindowOpen();
   // Simple editing keeps both frames whatever is happening; the rule below is
   // only ever about the merged one.
-  const speaks = !advanced || mainFrameSpeaks();
+  const speaks = !advanced || inWindow || mainFrameSpeaks();
 
   // Relocation, guarded so this is free to call as often as anything changes.
   if (advanced) {
@@ -635,14 +642,17 @@ function updateMainFrame() {
   titleSection.hidden = advanced;
   // V3.8.2. No Clear button beside a line that only reports (Project saved.),
   // so the line is centred in the frame, not by the button's width off it.
-  mainActions.hidden = transientStatusShown() && !busy;
+  // V4.0. Nor in the Download window, where Clear has nothing to clear and
+  // only Cancel, during a job, is wanted there.
+  mainActions.hidden = (transientStatusShown() || inWindow) && !busy;
   // V2.6. The merged frame is up when it has something to say and gone when it
   // has not. The drop zone around it goes with it, gap and margin and all: it
   // is the "(drag and drop zone)" of the request, and an empty layer row is the
   // one that takes a file in this mode anyway.
   qualitySection.hidden = advanced ? !speaks : !qualityListWanted;
   mainDrop.hidden = advanced && !speaks;
-  qualityMain.hidden = advanced ? !qualitiesPending : false;
+  qualityMain.hidden = advanced ? !(qualitiesPending || inWindow) : false;
+  titleMain.hidden = inWindow && !mainFrameSpeaks();
   // In simple editing the progress row hides Cancel by hiding itself. In
   // advanced editing it lives outside that row and has to say so on its own.
   cancelBtn.hidden = advanced && !busy;
@@ -651,7 +661,7 @@ function updateMainFrame() {
   // goes, and the window is sized to its contents. Only on a real change,
   // because this runs on every busy transition.
   const now = [advanced, titleSection.hidden, qualitySection.hidden,
-    mainDrop.hidden, qualityMain.hidden, cancelBtn.hidden].join(',');
+    mainDrop.hidden, qualityMain.hidden, cancelBtn.hidden, inWindow, titleMain.hidden].join(',');
   if (now === mainFrameSignature) return;
   mainFrameSignature = now;
   fitWindow();

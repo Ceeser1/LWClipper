@@ -267,6 +267,16 @@ loadBtn.addEventListener('click', async () => {
   setTrimEnabled(false);
   titleLabel.textContent = '';
 
+  // V4.0. The Download window may be opened over this job, and only this one.
+  downloadJob = true;
+  try {
+    await readLink(url);
+  } finally {
+    downloadJob = false;
+  }
+});
+
+async function readLink(url) {
   await runJob(async () => {
     setStatus('Reading video info...');
     const result = await window.lwclipper.probe(url, cookieChoice());
@@ -290,7 +300,7 @@ loadBtn.addEventListener('click', async () => {
     // The quality row just went from one line of text to a row of buttons.
     fitWindow();
   });
-});
+}
 
 async function onFormatClicked(format, btn) {
   if (busy || !probed) return;
@@ -305,6 +315,15 @@ async function onFormatClicked(format, btn) {
   const sourceUrl = probed.sourceUrl;
   const title = probed.title;
 
+  downloadJob = true;
+  try {
+    await fetchFormat(videoId, sourceUrl, title, format);
+  } finally {
+    downloadJob = false;
+  }
+}
+
+async function fetchFormat(videoId, sourceUrl, title, format) {
   await runJob(async () => {
     const result = await window.lwclipper.download(videoId, sourceUrl, title, format, cookieChoice());
     if (!result.ok) {
@@ -319,6 +338,9 @@ async function onFormatClicked(format, btn) {
     if (timelineDriving()) {
       addLayerFromMedia(result.data.isAudio ? 'audio' : 'video', result.data);
       setProgress(1.0, t('Ready: {name}', { name: result.data.path.split(/[\\/]/).pop() }));
+      // V4.0. The Download window has done its job once the clip is on the
+      // timeline, so it gets out of the way of it.
+      closeDownloadWindow();
       return;
     }
     onMediaReady(result.data);

@@ -243,12 +243,15 @@ test('moveSet slides every chosen clip and their groups by one shift, held at ze
   assert.deepEqual(held.map((l) => l.start), [0, 5, 10, 10], 'the earliest stops at 0 and the rest keep their gaps');
 });
 
-test('Ctrl+A is taken only with the timeline clicked, Shift and a dragged range choose', () => {
+test('Ctrl+A chooses every clip, Shift and a dragged range choose', () => {
   const edit = read('renderer', 'app', 'editing.js');
   const tl = read('renderer', 'app', 'timeline.js');
   const clips = read('renderer', 'app', 'clips.js');
-  assert.ok(/key === 'a' && timelineClicked/.test(edit) && edit.includes('evt.preventDefault();\n    window.getSelection().removeAllRanges();'));
-  assert.ok(tl.includes("closest('.timeline-section')"));
+  // V4.0. Wherever it is pressed outside a text box, since the Edit menu shows
+  // it beside Select all tracks; the page's own select-all is always taken.
+  const actions = read('renderer', 'app', 'actions.js');
+  assert.ok(/keys: \['Ctrl\+A'\], guard: 'letters', take: true/.test(actions));
+  assert.ok(edit.includes('function selectAllClips() {\n  window.getSelection().removeAllRanges();'));
   assert.ok(clips.includes('if (evt.shiftKey && !edge)') && clips.includes('toggleLayerSelection(layerId)'));
   assert.ok(tl.includes('chooseInRange(') && tl.includes('timeline-marquee'));
   assert.ok(tl.includes('snapMarkerToTrackEdge(value, isStart)'), 'the markers snap to track edges');
@@ -275,7 +278,7 @@ test('the timeline has a sideways scroll bar, shown while a track lies out of vi
 test('Project saved. is a passing line: it takes the Clear button out and goes after a few seconds', () => {
   const shell = read('renderer', 'app', 'shell.js');
   assert.ok(/TRANSIENT_STATUS = \{ 'Project saved\.': \d+ \}/.test(shell));
-  assert.ok(shell.includes('mainActions.hidden = transientStatusShown() && !busy;'));
+  assert.ok(shell.includes('mainActions.hidden = (transientStatusShown() || inWindow) && !busy;'));
   assert.ok(/\.main-actions\[hidden\]\s*\{\s*display:\s*none/.test(CSS));
 });
 

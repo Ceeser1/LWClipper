@@ -398,13 +398,6 @@ function chooseInRange(box, laneRect, add) {
   setLayerSelection(ids, inside[inside.length - 1] || selectedLayerId);
 }
 
-// V3.8.2. Whether the timeline is what was clicked last, which is what Ctrl+A
-// belongs to. A click anywhere else hands the key back to the page.
-let timelineClicked = false;
-document.addEventListener('pointerdown', (evt) => {
-  timelineClicked = !!(evt.target.closest && evt.target.closest('.timeline-section'));
-}, true);
-
 // Wheel zooms about the cursor, Shift and wheel scrolls sideways. deltaX is
 // added to deltaY for the scroll because a trackpad already reports a
 // horizontal swipe that way, and some of them turn Shift and a vertical swipe
@@ -447,6 +440,76 @@ timelineStage.addEventListener('wheel', (evt) => {
   drawTimeline();
   updatePlayhead();
 }, { passive: false });
+
+// ---- V4.0. The View menu and its keys ----
+
+/**
+ * One zoom step in (`dir` 1) or out (-1), the + and - keys: three wheel notches,
+ * about the playhead while it is in view and about the middle when it is not.
+ */
+function zoomTimelineStep(dir) {
+  const duration = timelineDuration();
+  const width = timelineLane.clientWidth;
+  if (!timelineDriving() || !duration || !width) return;
+  const x = timelineView.timeToX(tlView, compositeAt);
+  const anchor = x >= 0 && x <= width ? x : width / 2;
+  tlView = timelineView.zoomAt(tlView, anchor, Math.pow(TIMELINE_ZOOM_STEP, 3 * dir), duration, width);
+  noteTimelineFit(width);
+  drawTimeline();
+  updatePlayhead();
+}
+
+/** Ctrl+T: "Zooms so much in/out that all tracks are visible at once". */
+function fitTimelineView() {
+  if (!timelineDriving()) return;
+  tlFitted = true;
+  drawTimeline();
+  updatePlayhead();
+}
+
+/**
+ * Slide the view, at the zoom it has, so that a second is in it. Nothing moves
+ * when it already is. `side` is where it lands when the view has to move: a
+ * tenth of the width in from the left, or from the right for the end.
+ */
+function revealTime(at, side = 'left') {
+  const duration = timelineDuration();
+  const width = timelineLane.clientWidth;
+  if (!timelineDriving() || !duration || !width || !(tlView.scale > 0)) return;
+  const span = width / tlView.scale;
+  if (at >= tlView.scroll && at <= tlView.scroll + span) return;
+  const want = side === 'right' ? at - span * 0.9 : at - span * 0.1;
+  tlView = { scale: tlView.scale, scroll: timelineView.clampScroll(want, tlView.scale, duration, width) };
+  noteTimelineFit(width);
+  drawTimeline();
+}
+
+/**
+ * Home and End: the playhead to 0:00 or to the end of the last track, and the
+ * view after it at the zoom it has. Home scrolls all the way left, since 0:00
+ * is the left edge of everything.
+ */
+function goTimelineEdge(toEnd) {
+  if (!timelineDriving()) return;
+  const at = toEnd ? timelineModel.totalDuration(layers) : 0;
+  seekComposite(at);
+  if (toEnd) {
+    revealTime(at, 'right');
+  } else if (tlView.scroll > 0) {
+    tlView = { scale: tlView.scale, scroll: 0 };
+    noteTimelineFit(timelineLane.clientWidth);
+    drawTimeline();
+  }
+  updatePlayhead();
+}
+
+/** Shift+Left: back to where playback last started, the grey line. */
+function backToPlayStart() {
+  if (!timelineDriving() || playStartAt === null) return;
+  seekComposite(playStartAt);
+  revealTime(playStartAt);
+  updatePlayhead();
+}
 
 /**
  * Whether a wheel belongs to the stack rather than to the view.

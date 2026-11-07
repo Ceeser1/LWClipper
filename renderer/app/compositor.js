@@ -69,6 +69,13 @@ let compositeAt = 0;          // where the playhead is, in timeline seconds
 let compositePlaying = false;
 let compositeRaf = null;
 let compositeLast = 0;
+// V4.0. Where the playhead was when playback last started, the grey line it
+// leaves behind on the timeline, and what Shift+Left goes back to. Null until
+// anything has played.
+let playStartAt = null;
+// V4.0. Loop selection (L): playback that reaches the out marker from inside
+// the selection carries on from the in marker instead of running past it.
+let loopSelection = false;
 
 const compositeCtx = compositeCanvas.getContext('2d', { alpha: false });
 
@@ -1137,8 +1144,22 @@ function compositeTick() {
   if (!compositePlaying) return;
   const now = performance.now();
   const total = compositeTotal();
+  const was = compositeAt;
   compositeAt = Math.min(total, compositeAt + (now - compositeLast) / 1000);
   compositeLast = now;
+  // V4.0. Loop selection, before Play selection's stop point below, which is
+  // the same out marker: with the loop on, reaching it starts the selection
+  // again rather than ending the run. Only for a run that was inside the
+  // selection, so playing up to it from earlier still enters it, and an out
+  // marker past the last track loops at the last track, where playback ends.
+  const loopEnd = Math.min(slider.end, total);
+  if (loopSelection && loopEnd - slider.start > 0.01
+    && was >= slider.start - 1e-3 && was < loopEnd && compositeAt >= loopEnd) {
+    seekComposite(slider.start);
+    updatePlayhead();
+    compositeRaf = requestAnimationFrame(compositeTick);
+    return;
+  }
   // With an audio output there is nothing to draw, so the video layers are left
   // where they are rather than decoded for a canvas that is hidden.
   if (compositing()) followDecoders();
@@ -1167,6 +1188,9 @@ function playComposite() {
   // Back to the top when the playhead is already sitting at the end, which is
   // where every run leaves it.
   if (compositeAt >= total) compositeAt = 0;
+  // V4.0. Every way of starting comes through here, Space, the Play button and
+  // Play selection alike, so this is where the line is left behind.
+  playStartAt = compositeAt;
   // A context made before any click starts suspended, and this is a click.
   if (gainCtx && gainCtx.state === 'suspended') gainCtx.resume();
   compositePlaying = true;

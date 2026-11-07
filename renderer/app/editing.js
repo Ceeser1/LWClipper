@@ -24,6 +24,11 @@ function updatePlayhead() {
   } else {
     timelinePlayhead.hidden = true;
   }
+  // V4.0. The grey line playback leaves where it started, placed the same way
+  // the playhead is.
+  const startShown = timelineDriving() && playStartAt !== null && !timelinePlayhead.hidden;
+  timelinePlayStart.hidden = !startShown;
+  if (startShown) timelinePlayStart.style.left = (timelineView.timeToX(tlView, playStartAt) - 0.5) + 'px';
 
   if (!duration) {
     audioPlayhead.hidden = true;
@@ -106,17 +111,9 @@ function togglePreview() {
   }
 }
 
-document.addEventListener('keydown', (evt) => {
-  if (evt.code !== 'Space' || evt.repeat) return;
-  if (modalOpen()) return;
-  const focused = document.activeElement;
-  if (focused && KEEPS_SPACE.includes(focused.tagName)) return;
-  if (!media && !timelineDriving()) return;
-  // Without this a focused button would be pressed as well, and the preview's
-  // own controls would toggle it a second time, cancelling this one out.
-  evt.preventDefault();
-  togglePreview();
-});
+// V4.0. Space, and every other key below, is read by the one listener in
+// actions.js, which asks the action table what a press means. What used to be
+// a listener here each is the function that table runs.
 
 // Typing keeps the arrows, and so does a focused slider, where left and right
 // are how it is set without a mouse. Its own list rather than KEEPS_SPACE's,
@@ -173,26 +170,22 @@ function stepFrame(dir) {
   transport.currentTime = Math.min(Math.max(0, want), total);
 }
 
-// Capture, and the event is stopped here rather than only prevented. The
-// preview carries the browser's own media controls, and those answer an arrow
-// key with a five second seek of their own before a listener on the document
-// would ever be reached.
-document.addEventListener('keydown', (evt) => {
-  const back = evt.key === 'ArrowLeft';
-  if (!back && evt.key !== 'ArrowRight') return;
-  if (evt.ctrlKey || evt.metaKey || evt.altKey) return;
-  if (modalOpen()) return;
-  const focused = document.activeElement;
-  if (focused && KEEPS_ARROWS.includes(focused.tagName)) return;
-  if (focused && focused.isContentEditable) return;
-  // V3.8. Nor an editor docked into Start Frame or End Frame, whose keys are
-  // its own, as they are in its window.
-  if (evt.target && evt.target.closest && evt.target.closest('.dock-host')) return;
-  if (!media && !timelineDriving()) return;
-  evt.preventDefault();
-  evt.stopPropagation();
-  stepFrame(back ? -1 : 1);
-}, true);
+/**
+ * V4.0. A second back or on, Down and Up. The transport keeps running if it
+ * was: unlike a frame step, this is a jump to watch from, not a frame to look
+ * at.
+ */
+function stepSeconds(dir) {
+  if (timelineDriving()) {
+    seekComposite(compositeAt + dir);
+    revealTime(compositeAt, dir > 0 ? 'right' : 'left');
+    updatePlayhead();
+    return;
+  }
+  if (!media) return;
+  const total = Math.max(0, media.duration || 0);
+  transport.currentTime = Math.min(Math.max(0, (transport.currentTime || 0) + dir), total);
+}
 
 /**
  * V2.9. The selected clip cut in two at a second of the timeline, and its group
@@ -230,16 +223,6 @@ function typingInto(node) {
   return node.tagName === 'INPUT' && !TAKES_NO_LETTERS.includes(node.type);
 }
 
-// S splits, not while something is being typed and not while a popup has the
-// window. No modifiers, because Ctrl+S is save and is handled on its own.
-document.addEventListener('keydown', (evt) => {
-  if (String(evt.key).toLowerCase() !== 's') return;
-  if (evt.ctrlKey || evt.metaKey || evt.altKey || evt.repeat) return;
-  if (modalOpen() || typingInto(document.activeElement)) return;
-  if (!timelineDriving()) return;
-  evt.preventDefault();
-  splitSelected(compositeAt);
-});
 
 // ---- the clipboard, Delete, and the right click menu ----
 //
@@ -352,41 +335,59 @@ function deleteTracks(ids, disband) {
   });
 }
 
-// Ctrl+C and Ctrl+V on the timeline, and Del and Backspace. Each leaves the key
-// alone while something is being typed, where copy, paste and delete already
-// mean something, and each only takes the key when it has something to do with
-// it, so the browser's own answer is not swallowed for nothing.
-document.addEventListener('keydown', (evt) => {
-  if (modalOpen() || typingInto(document.activeElement)) return;
-  const key = String(evt.key).toLowerCase();
-  const ctrl = evt.ctrlKey || evt.metaKey;
-  // V3.8.2. Ctrl+A with the timeline clicked chooses every clip and nothing of
-  // the page round it: the browser's select-all is always taken here, even
-  // when there are no clips to choose.
-  if (ctrl && !evt.altKey && !evt.shiftKey && key === 'a' && timelineClicked) {
-    evt.preventDefault();
-    window.getSelection().removeAllRanges();
-    if (timelineDriving() && layers.length) setLayerSelection(layers.map((l) => l.id), selectedLayerId);
-    return;
-  }
-  if (!timelineDriving()) return;
-  let done = false;
-  if (ctrl && !evt.altKey && !evt.shiftKey && key === 'c') {
-    done = copySelected();
-  } else if (ctrl && !evt.altKey && !evt.shiftKey && key === 'v') {
-    // At the playhead, on the selected clip's lane: "If there is no click
-    // behind it, Crtl+V pastes behind the playhead. If no layer got selected,
-    // paste the copied source into a newly created layer if needed."
-    const sel = selectedLayerId && timelineModel.layerById(layers, selectedLayerId);
-    done = pasteAt(compositeAt, sel ? sel.type : null, sel ? sel.lane : null);
-  } else if (!ctrl && !evt.altKey && (key === 'delete' || key === 'backspace')) {
-    done = deleteSelected();
-  }
-  if (done) {
-    evt.preventDefault();
-    closeClipMenu();
-  }
-});
+/**
+ * Ctrl+V: at the playhead, on the selected clip's lane. "If there is no click
+ * behind it, Crtl+V pastes behind the playhead. If no layer got selected,
+ * paste the copied source into a newly created layer if needed."
+ */
+function pasteAtPlayhead() {
+  const sel = selectedLayerId && timelineModel.layerById(layers, selectedLayerId);
+  return pasteAt(compositeAt, sel ? sel.type : null, sel ? sel.lane : null);
+}
+
+/**
+ * V4.0. Ctrl+X: copy, then take away what was copied. Copying a clip copies
+ * its group with it, so the whole group goes and nothing is asked: the
+ * clipboard is holding every one of them.
+ */
+function cutSelected() {
+  if (!timelineDriving() || busy || !selectedLayerId) return false;
+  const ids = timelineModel.groupOf(layers, selectedLayerId).map((l) => l.id);
+  if (!copySelected()) return false;
+  return deleteTracks(ids, null);
+}
+
+/**
+ * Ctrl+A chooses every clip and nothing of the page round it.
+ *
+ * V4.0. On any press that is not typing, where V3.8.2 asked for the timeline
+ * to have been clicked last: the Edit menu shows the key beside Select all
+ * tracks, so the key has to do what the entry says wherever it is pressed.
+ */
+function selectAllClips() {
+  window.getSelection().removeAllRanges();
+  if (!timelineDriving() || !layers.length) return false;
+  setLayerSelection(layers.map((l) => l.id), selectedLayerId);
+  return true;
+}
+
+/**
+ * V4.0. Ctrl+G: the chosen clips into one group. A chosen clip that is already
+ * grouped brings its whole group into the new one, so a video is never pulled
+ * away from its own sound by being grouped with something else.
+ */
+function groupSelected() {
+  if (!timelineDriving() || busy) return false;
+  const ids = selectionIds();
+  if (ids.length < 2) return false;
+  const all = new Set();
+  for (const id of ids) for (const member of timelineModel.groupOf(layers, id)) all.add(member.id);
+  setLayers(timelineModel.group(layers, [...all]));
+  commitHistory();
+  // The selection is kept, so the group can be moved straight away.
+  setLayerSelection(ids, selectedLayerId);
+  return true;
+}
 
 let clipMenu = null;
 
@@ -1085,6 +1086,8 @@ async function adoptProject(result) {
   setTrimEnabled(!busy && trimmable());
   refreshSelection(null);
   renderTrimFrames();
+  // V4.0. The last project's playback start means nothing in this one.
+  playStartAt = null;
   // Fitted to the opened project rather than left at the last one's zoom,
   // which would be a view of a timeline that is no longer there.
   tlFitted = true;
@@ -1177,17 +1180,50 @@ async function confirmDiscard() {
 
 openProjectBtn.addEventListener('click', openProjectFile);
 
-// Ctrl+S saves, Ctrl+Shift+S saves somewhere else, Ctrl+O opens. Nothing in the
-// app used any of the three.
-document.addEventListener('keydown', (evt) => {
-  if (!evt.ctrlKey && !evt.metaKey) return;
-  const key = String(evt.key).toLowerCase();
-  if (key !== 's' && key !== 'o') return;
-  if (!timelineDriving() || modalOpen()) return;
-  evt.preventDefault();
-  if (key === 'o') openProjectFile();
-  else saveProject(evt.shiftKey);
-});
+/**
+ * V4.0. File, New empty project, Ctrl+N: "Opens a new project / clears
+ * current layers, if something changed and unsaved, raise a warning popup".
+ *
+ * The unsaved changes question is the one opening a project asks. What is
+ * cleared is what opening would replace: the tracks, the file it came from,
+ * its frame, its trim, its undo stack and the editors' views. The clipboard
+ * stays, so a clip copied out of the last project can be pasted into the new
+ * one.
+ */
+async function newEmptyProject() {
+  if (!timelineDriving() || busy) return false;
+  if (!(await confirmDiscard())) return false;
+  if (compositePlaying) pauseComposite();
+  playUntil = null;
+  if (!cropModal.hidden) closeCrop();
+  if (!renderModal.hidden) closeRenderCrop();
+  closeGenWindow();
+  adoptViews(null);
+  compositeFrame = null;
+  sizeCompositeCanvas();
+  resetLaneRows();
+  setLayerSelection([], null);
+  setLayers([], true);
+  trimSpan = 0;
+  slider.reset();
+  setTrimEnabled(!busy && trimmable());
+  refreshSelection(null);
+  renderTrimFrames();
+  playStartAt = null;
+  seekComposite(0);
+  tlFitted = true;
+  syncTimelineView();
+  drawTimeline();
+  updatePlayhead();
+  projectPath = null;
+  projectTitle = '';
+  undoStack = projectHistory.create(projectState());
+  projectSaved = null;
+  updateProjectUi();
+  setStatus(IDLE_STATUS);
+  updateStatusScale();
+  return true;
+}
 
 // ---- undo ----
 //
@@ -1297,25 +1333,20 @@ function applyHistory(next) {
   renderTrimFrames();
 }
 
-// Ctrl+Z, Ctrl+Y, and Ctrl+Shift+Z, which is the other spelling of redo that
-// every editor also answers to.
-document.addEventListener('keydown', (evt) => {
-  if (!evt.ctrlKey && !evt.metaKey) return;
-  const key = String(evt.key).toLowerCase();
-  const redoing = key === 'y' || (key === 'z' && evt.shiftKey);
-  const undoing = key === 'z' && !evt.shiftKey;
-  if (!undoing && !redoing) return;
+/** V4.0. How many steps Undo and Redo each have, for the Edit menu's labels. */
+function undoCounts() {
+  return { undo: undoStack.past.length, redo: undoStack.future.length };
+}
+
+/**
+ * Ctrl+Z, and Ctrl+Y or Ctrl+Shift+Z, which is the other spelling of redo that
+ * every editor also answers to. The keys are the action table's (actions.js):
+ * a popup is its own gesture with its own Cancel, so none of this runs under
+ * one, and the URL box and the time and offset fields keep their own native
+ * undo, since taking Ctrl+Z off a text box is how someone loses a paste.
+ */
+function undoRedo(redoing) {
   if (!timelineDriving() || busy) return;
-  // A popup is its own gesture with its own Cancel. Undoing the document out
-  // from under an open crop would leave it editing a rectangle on a layer that
-  // may no longer be there.
-  if (modalOpen()) return;
-  // The URL box and the time and offset fields keep their own native undo.
-  // Taking Ctrl+Z off a text box is how someone loses a paste.
-  const focused = document.activeElement;
-  if (focused && KEEPS_UNDO.includes(focused.tagName)) return;
-  if (focused && focused.isContentEditable) return;
-  evt.preventDefault();
   const next = redoing ? projectHistory.redo(undoStack) : projectHistory.undo(undoStack);
   if (next === undoStack) return;
   // V3.3. A step that would change the track a crop window is open on, or the
@@ -1337,4 +1368,4 @@ document.addEventListener('keydown', (evt) => {
     if ((redoing ? projectHistory.redo(undoStack) : projectHistory.undo(undoStack)).present !== target) return;
     applyHistory(redoing ? projectHistory.redo(undoStack) : projectHistory.undo(undoStack));
   });
-});
+}

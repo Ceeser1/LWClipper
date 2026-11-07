@@ -86,8 +86,10 @@ document.addEventListener('click', (evt) => {
   // open, and something has to close it again. A click inside the frame is not
   // that gesture, or pressing a quality button would clear the line that says
   // which video the qualities belong to on the way in.
+  // V4.0. Nor is a click inside the Download window, which holds the frame and
+  // the URL row that fills it.
   if (!busy && timelineDriving() && statusSpeaks()
-    && !(evt.target && evt.target.closest && evt.target.closest('#mainDrop'))) {
+    && !(evt.target && evt.target.closest && evt.target.closest('#mainDrop, #downloadModal'))) {
     setStatus(IDLE_STATUS);
     updateStatusScale();
     updateMainFrame();
@@ -125,7 +127,10 @@ window.addEventListener('resize', () => {
 
 // The lists come from the main process rather than being retyped here, so they
 // cannot drift from what the open dialog actually accepts.
-settingsBtn.addEventListener('click', async () => {
+// V4.0. A function, since Settings, Preferences in the menu bar opens it too.
+settingsBtn.addEventListener('click', () => openSettings());
+
+async function openSettings() {
   refreshSettingsPanel();
   const types = await window.lwclipper.supportedTypes();
   const list = (xs) => xs.map((e) => e.toUpperCase()).join(', ');
@@ -134,7 +139,7 @@ settingsBtn.addEventListener('click', async () => {
   el('supportedVideoOut').textContent = list((types.videoOut || []).map((f) => f.label));
   el('supportedAudioOut').textContent = list((types.audioOut || []).map((f) => f.label));
   settingsModal.hidden = false;
-});
+}
 
 function closeSettings() {
   settingsModal.hidden = true;
@@ -157,7 +162,10 @@ openCachedBtn.addEventListener('click', () => {
   window.lwclipper.openCacheFolder(media ? media.path : null);
 });
 
-loadCachedBtn.addEventListener('click', async () => {
+// V4.0. File, Open/Import local file (Ctrl+I) is this button.
+loadCachedBtn.addEventListener('click', () => importLocalFile());
+
+async function importLocalFile() {
   if (busy) return;
   const result = await window.lwclipper.loadLocalMedia();
   if (result.cancelled) return;
@@ -180,7 +188,7 @@ loadCachedBtn.addEventListener('click', async () => {
     return;
   }
   adoptLocalMedia(result.data);
-});
+}
 
 languageSelect.addEventListener('change', async () => {
   applySettingsPayload(await window.lwclipper.setSettings({
