@@ -1866,13 +1866,26 @@ body.layer-trimming .playhead--timeline {
   box-sizing: border-box;
 }
 
-/* The header's readout of the chosen keyframe, centred on the row the way the
-   preview's resolution is. */
-.keyframe-readout {
+/* The header's readouts, the chosen keyframe and V4.5's Loop selection,
+   centred on the row together the way the preview's resolution is. */
+.timeline-readouts {
   position: absolute;
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+}
+
+/* The bar between the two, only while both show. */
+.keyframe-readout:not([hidden]) + .loop-readout:not([hidden])::before {
+  content: '|';
+  margin: 0 10px;
+  color: #6e6e78;
+}
+
+.keyframe-readout {
   color: #c8c8d2;
   font-size: 12px;
   font-weight: bold;

@@ -275,8 +275,13 @@
         <div id="projectName" class="project-name" hidden></div>
         <div id="timelineHint" class="hint-label">Wheel to zoom, Shift and wheel to scroll, drag the markers to trim</div>
         <!-- V3.3. Which keyframe is chosen, centred on the row like the
-             preview's resolution readout. Written by keyframes.js. -->
-        <div id="keyframeReadout" class="keyframe-readout" data-no-translate hidden></div>
+             preview's resolution readout. Written by keyframes.js. V4.5
+             puts Loop selection's state beside it, the pair centred together
+             and parted by a bar when both show. Written by actions.js. -->
+        <div class="timeline-readouts">
+          <div id="keyframeReadout" class="keyframe-readout" data-no-translate hidden></div>
+          <div id="loopReadout" class="keyframe-readout loop-readout" data-no-translate hidden></div>
+        </div>
       </div>
       <div id="timelineStage" class="timeline-stage">
         <div class="timeline-ruler-row">

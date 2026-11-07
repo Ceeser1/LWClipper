@@ -324,6 +324,8 @@
   "Group selected tracks": "Group selected tracks",
   "Play/Pause playback": "Play/Pause playback",
   "Loop selection": "Loop selection",
+  "Selection Looping ({key} to toggle)": "Selection Looping ({key} to toggle)",
+  "Selection Looping": "Selection Looping",
   "To playback start": "To playback start",
   "Frame left": "Frame left",
   "Frame right": "Frame right",

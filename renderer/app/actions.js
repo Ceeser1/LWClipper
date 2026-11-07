@@ -142,7 +142,7 @@ const ACTIONS = [
   {
     id: 'play.loop', menu: 'playback', label: () => t('Loop selection'), keys: ['L'], guard: 'letters',
     checked: () => loopSelection,
-    enabled: () => true, run: () => { loopSelection = !loopSelection; },
+    enabled: () => true, run: () => { loopSelection = !loopSelection; updateLoopReadout(); },
   },
   { divider: 'playback' },
   {
@@ -239,6 +239,25 @@ function indexActionKeys() {
       if (!actionByKey.has(combo)) actionByKey.set(combo, action);
     }
   }
+  // V4.5. The loop readout names the key, so a rebound key renames it. A
+  // language change runs through here too (applyKeyBinds).
+  updateLoopReadout();
+}
+
+/**
+ * V4.5. "Selection Looping (L to toggle)" in the timeline header while Loop
+ * selection is on, beside the keyframe readout, the key the one bound in Key
+ * Binds. Without a key there is nothing to press, so the bracket goes.
+ */
+function updateLoopReadout() {
+  const readout = el('loopReadout');
+  readout.hidden = !loopSelection;
+  if (!loopSelection) return;
+  const action = ACTIONS.find((a) => a.id === 'play.loop');
+  const key = action && (action.keys || [])[0] ? actionKeyText(action) : '';
+  readout.textContent = key
+    ? t('Selection Looping ({key} to toggle)', { key })
+    : t('Selection Looping');
 }
 indexActionKeys();
 
@@ -602,3 +621,52 @@ if (typeof ResizeObserver === 'function') {
   menuBar.querySelectorAll('.menu-bar__head').forEach((h) => watch.observe(h));
 }
 placeMenuResolution();
+
+// ---- V4.5. The timeline header's readouts ----
+//
+// The keyframe and loop readouts sit centred on the header, and the hint is
+// right-aligned on it. With both readouts up in a narrow window (or with the
+// longer German hint) the centre runs into the hint, so the pair slides left
+// to end before it, the way the menu bar's resolution gives way to the
+// headings. If it cannot clear the title and the button on the left either,
+// the hint steps aside: what is on now matters more than how to zoom.
+
+const timelineReadouts = document.querySelector('.timeline-readouts');
+
+function placeTimelineReadouts() {
+  const head = timelineReadouts.parentElement;
+  const hint = el('timelineHint');
+  timelineReadouts.style.left = '';
+  timelineReadouts.style.transform = '';
+  hint.style.visibility = '';
+  const box = timelineReadouts.getBoundingClientRect();
+  if (!box.width) return;
+  const hintBox = hint.getBoundingClientRect();
+  if (!hintBox.width || box.right + MENU_RESOLUTION_GAP <= hintBox.left) return;
+  // The right edge of whatever shows on the left: the title, Open Project,
+  // the project's name.
+  let leftEdge = head.getBoundingClientRect().left;
+  for (const kid of head.children) {
+    if (kid === hint || kid === timelineReadouts) continue;
+    const r = kid.getBoundingClientRect();
+    if (r.width) leftEdge = Math.max(leftEdge, r.right);
+  }
+  const headLeft = head.getBoundingClientRect().left + head.clientLeft;
+  const slid = hintBox.left - MENU_RESOLUTION_GAP - box.width;
+  if (slid >= leftEdge + MENU_RESOLUTION_GAP) {
+    timelineReadouts.style.left = `${slid - headLeft}px`;
+  } else {
+    hint.style.visibility = 'hidden';
+    timelineReadouts.style.left = `${Math.max(box.left, leftEdge + MENU_RESOLUTION_GAP) - headLeft}px`;
+  }
+  timelineReadouts.style.transform = 'translateY(-50%)';
+}
+
+// Either readout appearing, going or changing its text, the hint's own text
+// (a fine drag, Catching up...), the window, a language switch.
+if (typeof ResizeObserver === 'function') {
+  const watch = new ResizeObserver(() => placeTimelineReadouts());
+  watch.observe(timelineReadouts);
+  watch.observe(el('timelineHint'));
+  watch.observe(timelineReadouts.parentElement);
+}
