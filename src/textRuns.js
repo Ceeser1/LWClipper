@@ -23,8 +23,16 @@ const textRuns = (() => {
     return list.map((r) => ({ text: String(r.text || ''), style: layout.styleOf(base, r.style) }));
   }
 
+  // V4.6. Two values of one field. A gradient is the one field that is an
+  // object, and two of them are the same when they say the same.
+  function sameValue(a, b) {
+    if (a === b) return true;
+    if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false;
+    return model.gradientKey(a) === model.gradientKey(b);
+  }
+
   function sameStyle(a, b) {
-    return FIELDS.every((k) => a[k] === b[k]);
+    return FIELDS.every((k) => sameValue(a[k], b[k]));
   }
 
   /**
@@ -43,13 +51,13 @@ const textRuns = (() => {
     const style = { ...base };
     for (const k of FIELDS) {
       const v = list[0].style[k];
-      if (list.every((r) => r.style[k] === v)) style[k] = v;
+      if (list.every((r) => sameValue(r.style[k], v))) style[k] = v;
     }
     const runs = [];
     for (const r of list) {
       const own = {};
       for (const k of FIELDS) {
-        if (r.style[k] !== style[k]) own[k] = r.style[k];
+        if (!sameValue(r.style[k], style[k])) own[k] = r.style[k];
       }
       const last = runs[runs.length - 1];
       // Both hold only what differs, so a field neither has compares equal.
@@ -185,8 +193,34 @@ const textRuns = (() => {
     if (a === b) return { style: styleAt(full, a), mixed: [] };
     const part = slice(full, a, b);
     const style = { ...part[0].style };
-    const mixed = FIELDS.filter((k) => part.some((r) => r.style[k] !== style[k]));
+    const mixed = FIELDS.filter((k) => part.some((r) => !sameValue(r.style[k], style[k])));
     return { style, mixed };
+  }
+
+  /**
+   * V4.6. The stretches a gradient fills: neighbouring runs that carry one
+   * and the same gradient, each as `{ from, to, gradient }` in offsets. The
+   * drawing fills each across the box round its own letters (genDraw's
+   * textStretches, which goes by the same rule).
+   */
+  function stretches(full) {
+    const out = [];
+    let at = 0;
+    let open = null;
+    for (const r of full) {
+      const g = r.style.gradient || null;
+      const end = at + r.text.length;
+      if (g && open && sameValue(open.gradient, g)) {
+        open.to = end;
+      } else if (g) {
+        open = { from: at, to: end, gradient: g };
+        out.push(open);
+      } else if (r.text) {
+        open = null;
+      }
+      at = end;
+    }
+    return out.filter((s) => s.to > s.from);
   }
 
   /**
@@ -226,6 +260,9 @@ const textRuns = (() => {
     slice,
     applyStyle,
     selectionStyle,
+    // V4.6.
+    sameValue,
+    stretches,
     textChange,
   };
 })();

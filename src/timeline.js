@@ -167,7 +167,8 @@ const timelineModel = (() => {
 
   // What a run of a text may change from the text's own style. Outline and
   // shadow are left out on purpose: they are set for the whole text.
-  const RUN_FIELDS = ['font', 'size', 'color', 'bold', 'italic', 'underline', 'strike'];
+  // V4.6. The gradient is one too, the only one that is not a plain value.
+  const RUN_FIELDS = ['font', 'size', 'color', 'bold', 'italic', 'underline', 'strike', 'gradient'];
 
   const TEXT_H = ['left', 'center', 'right'];
   const TEXT_V = ['top', 'middle', 'bottom'];
@@ -258,6 +259,8 @@ const timelineModel = (() => {
     field('strike', bool);
     field('outline', outlineOf);
     field('shadow', shadowOf);
+    // V4.6. Null is no gradient, which is every text from before.
+    field('gradient', textGradientOf);
     return out;
   }
 
@@ -362,6 +365,39 @@ const timelineModel = (() => {
       end: within(src.end, -100000, 100000, 100),
       angle: rotationOf(src.angle),
     };
+  }
+
+  /**
+   * V4.6. A text's gradient, the user's "A (by drag) selected text should have
+   * the option to have a gradient applied": null for none, the letters then
+   * filled with their colour, or a shape's stops and angle. It belongs to a
+   * stretch of letters, neighbours that all carry the same one, and runs
+   * across the box round those letters, so it stays on them as the text is
+   * typed on, wrapped or moved. `start` and `end` are therefore shares of that
+   * box's reach along the direction, from its middle: -0.5 its near edge and
+   * 0.5 its far one, which is edge to edge at any length. The angle is
+   * measured from the text, so the gradient turns with it.
+   */
+  function textGradientOf(v) {
+    if (!v || typeof v !== 'object') return null;
+    const g = gradientOf(v);
+    return {
+      stops: g.stops,
+      start: within(v.start, -100, 100, -0.5),
+      end: within(v.end, -100, 100, 0.5),
+      angle: g.angle,
+    };
+  }
+
+  /**
+   * V4.6. A gradient as one string, the same for two that are the same, since
+   * a run's fields are compared and a gradient is the one that is an object.
+   * Empty for none.
+   */
+  function gradientKey(g) {
+    if (!g || typeof g !== 'object') return '';
+    const stops = Array.isArray(g.stops) ? g.stops.map((s) => s.at + ':' + s.color).join(',') : '';
+    return stops + '|' + g.start + '|' + g.end + '|' + g.angle;
   }
 
   /**
@@ -2554,6 +2590,9 @@ const timelineModel = (() => {
     GRADIENT_STOPS_MAX,
     maskGradientOf,
     gradientOf,
+    // V4.6.
+    textGradientOf,
+    gradientKey,
     DEFAULT_FONT,
     colourOf,
     genOf,

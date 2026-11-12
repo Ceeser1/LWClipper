@@ -231,6 +231,10 @@ const textLayout = (() => {
           x += m.width;
         }
         p.width = m.width;
+        // V4.6. Its own font's reach above and below the baseline, which is
+        // the box a gradient across these letters is measured in.
+        p.ascent = m.ascent;
+        p.descent = m.descent;
         ascent = Math.max(ascent, m.ascent);
         descent = Math.max(descent, m.descent);
       }

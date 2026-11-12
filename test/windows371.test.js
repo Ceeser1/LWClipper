@@ -142,7 +142,8 @@ function actionRows() {
 
 test('every window\'s row is Remove on the left, Cancel in the middle and Accept on the right', () => {
   const rows = actionRows();
-  assert.equal(rows.length, 8);
+  // V4.6. Nine with the text's Gradient modal.
+  assert.equal(rows.length, 9);
   for (const row of rows) {
     const order = ['remove', 'cancel', 'accept'].filter((k) => row.includes(k));
     assert.deepEqual(row, order);

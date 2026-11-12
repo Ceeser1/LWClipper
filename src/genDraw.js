@@ -613,13 +613,13 @@ const genDraw = (() => {
    * One pass over the pieces: 'outline' strokes the outlined ones, 'fill' fills
    * every one in its colour. `ink`, when given, is the colour both are drawn in
    * instead, which is how the shadow's mask is made out of the same strokes and
-   * fills as the letters.
+   * fills as the letters. `paints`, V4.6, is textPaints' gradients by run.
    *
    * The outline's stroke is twice its thickness wide, because a stroke is
    * centred on the letter's edge and the fill covers the inner half. The
    * thickness the user set is what shows outside the letter.
    */
-  function inkPass(ctx, pieces, box, scale, pass, ink) {
+  function inkPass(ctx, pieces, box, scale, pass, ink, paints) {
     for (const { piece, line } of pieces) {
       ctx.font = layout.fontString(piece.style, scale);
       if (pass === 'outline') {
@@ -634,7 +634,9 @@ const genDraw = (() => {
           ctx.fillRect(d.x - w, d.y - w, d.w + w * 2, d.h + w * 2);
         }
       } else {
-        ctx.fillStyle = ink || piece.style.color;
+        // V4.6. Its stretch's gradient when it has one, underline and
+        // strike with it.
+        ctx.fillStyle = ink || (paints && paints.get(piece.run)) || piece.style.color;
         if (piece.text.trim()) ctx.fillText(piece.text, box.x + piece.x, box.y + line.baseline);
         for (const d of decorations(piece, line, box.x, box.y, scale)) {
           ctx.fillRect(d.x, d.y, d.w, d.h);
@@ -848,18 +850,8 @@ const genDraw = (() => {
    * one by one, but never these two), so all of it goes into the one mask.
    */
   function drawText(ctx, gen, width, height, surface) {
-    const text = gen.text;
-    const scale = scaleOf(gen, height);
-    const box = boxOf(text, scale, width, height);
-    const result = layout.layoutText({
-      runs: text.runs,
-      style: text.style,
-      align: text.align,
-      width: box.w,
-      height: box.h,
-      measure: measurer(ctx),
-      scale,
-    });
+    const laid = layoutOfText(ctx, gen, width, height);
+    const { text, scale, box, result } = laid;
     const pieces = [];
     for (const line of result.lines) {
       for (const piece of line.pieces) pieces.push({ piece, line });
@@ -873,9 +865,151 @@ const genDraw = (() => {
     turn(ctx, text, box);
     inkSetup(ctx);
     inkPass(ctx, pieces, box, scale, 'outline', null);
-    inkPass(ctx, pieces, box, scale, 'fill', null);
+    // V4.6. The gradients are made here, inside the turn, so they turn with
+    // the text they are measured from.
+    inkPass(ctx, pieces, box, scale, 'fill', null, textPaints(ctx, laid));
     ctx.restore();
     return result;
+  }
+
+  // ---- V4.6. A text's gradients ----
+  //
+  // The user: "A (by drag) selected text should have the option to have a
+  // gradient applied". A gradient belongs to a stretch of letters, neighbouring
+  // runs that all carry the same one, and runs across the box round those
+  // letters wherever they have been laid: one word, or three lines. Each
+  // letter's box is its own font's, the ascent above the baseline and the
+  // descent below, so a small word on a tall line has it across its own height.
+
+  /** A text laid out in a frame: `{ text, scale, box, result }`, as drawText draws it. */
+  function layoutOfText(ctx, gen, width, height) {
+    const text = gen.text;
+    const scale = scaleOf(gen, height);
+    const box = boxOf(text, scale, width, height);
+    const result = layout.layoutText({
+      runs: text.runs,
+      style: text.style,
+      align: text.align,
+      width: box.w,
+      height: box.h,
+      measure: measurer(ctx),
+      scale,
+    });
+    return { text, scale, box, result };
+  }
+
+  /**
+   * The box round the pieces `pick(piece)` says yes to, in the frame's pixels
+   * with the text not turned, or null when there is none of them.
+   */
+  function piecesBox(laid, pick) {
+    let x0 = Infinity;
+    let y0 = Infinity;
+    let x1 = -Infinity;
+    let y1 = -Infinity;
+    for (const line of laid.result.lines) {
+      for (const piece of line.pieces) {
+        if (!piece.text || !pick(piece)) continue;
+        x0 = Math.min(x0, piece.x);
+        x1 = Math.max(x1, piece.x + piece.width);
+        y0 = Math.min(y0, line.baseline - piece.ascent);
+        y1 = Math.max(y1, line.baseline + piece.descent);
+      }
+    }
+    if (!(x1 >= x0) || !(y1 >= y0)) return null;
+    return { x: laid.box.x + x0, y: laid.box.y + y0, w: x1 - x0, h: y1 - y0 };
+  }
+
+  /**
+   * The stretches a laid out text's gradients fill, textRuns.stretches' rule
+   * on the file's runs: `list`, each `{ gradient, box }`, the box null for one
+   * with no letter drawn, and `ids`, each run's place in the list or -1.
+   */
+  function textStretches(laid) {
+    const { text } = laid;
+    const list = [];
+    const ids = [];
+    let open = -1;
+    text.runs.forEach((run, i) => {
+      const g = layout.styleOf(text.style, run.style).gradient || null;
+      if (g && open >= 0 && model.gradientKey(list[open].gradient) === model.gradientKey(g)) {
+        ids[i] = open;
+      } else if (g) {
+        list.push({ gradient: g, box: null });
+        open = list.length - 1;
+        ids[i] = open;
+      } else {
+        ids[i] = -1;
+        if (run.text) open = -1;
+      }
+    });
+    list.forEach((stretch, n) => {
+      stretch.box = piecesBox(laid, (piece) => ids[piece.run] === n);
+    });
+    return { list, ids };
+  }
+
+  /** How far a box reaches along a direction, the length a gradient's shares are of. */
+  function gradientReach(angle, w, h) {
+    const a = (Number(angle) || 0) * Math.PI / 180;
+    return Math.abs(w * Math.cos(a)) + Math.abs(h * Math.sin(a));
+  }
+
+  /**
+   * The line a text's gradient runs along in a box `b`: `{ x0, y0, x1, y1 }`
+   * from its start to its end, through the box's middle. A line of no length
+   * paints nothing in canvas, so it is given half a pixel, as a shape's is.
+   */
+  function gradientLine(g, b) {
+    const a = (Number(g.angle) || 0) * Math.PI / 180;
+    const cos = Math.cos(a);
+    const sin = Math.sin(a);
+    const reach = gradientReach(g.angle, b.w, b.h);
+    const cx = b.x + b.w / 2;
+    const cy = b.y + b.h / 2;
+    const from = g.start * reach;
+    let to = g.end * reach;
+    if (Math.abs(to - from) < 0.5) to = from + 0.5;
+    return { x0: cx + cos * from, y0: cy + sin * from, x1: cx + cos * to, y1: cy + sin * to };
+  }
+
+  /**
+   * A gradient measured in box `a`, as the same line measured in box `b`:
+   * what a stretch cut in two gives each part, so the letters nobody touched
+   * keep their look. Shares to four places, held to the model's range.
+   */
+  function rebaseGradient(g, a, b) {
+    const rad = (Number(g.angle) || 0) * Math.PI / 180;
+    const ra = gradientReach(g.angle, a.w, a.h);
+    const rb = gradientReach(g.angle, b.w, b.h);
+    if (!(rb > 0)) return g;
+    const shift = (a.x + a.w / 2 - b.x - b.w / 2) * Math.cos(rad)
+      + (a.y + a.h / 2 - b.y - b.h / 2) * Math.sin(rad);
+    const share = (v) => Math.min(100, Math.max(-100, Math.round((shift + v * ra) / rb * 1e4) / 1e4));
+    return { stops: g.stops, start: share(g.start), end: share(g.end), angle: g.angle };
+  }
+
+  /**
+   * What each run of a laid out text is filled with when it is not its
+   * colour: its stretch's gradient on `ctx`, by the run's index. Null with no
+   * gradient in the text, or on a context that cannot make one.
+   */
+  function textPaints(ctx, laid) {
+    if (typeof ctx.createLinearGradient !== 'function') return null;
+    const { list, ids } = textStretches(laid);
+    if (!list.length) return null;
+    const made = list.map((stretch) => {
+      if (!stretch.box) return null;
+      const l = gradientLine(stretch.gradient, stretch.box);
+      const lin = ctx.createLinearGradient(l.x0, l.y0, l.x1, l.y1);
+      for (const stop of stretch.gradient.stops) lin.addColorStop(Math.min(1, Math.max(0, stop.at)), stop.color);
+      return lin;
+    });
+    const paints = new Map();
+    ids.forEach((n, i) => {
+      if (n >= 0 && made[n]) paints.set(i, made[n]);
+    });
+    return paints;
   }
 
   // How each form is drawn. A new form, a shape say, adds its drawing here,
@@ -1065,6 +1199,13 @@ const genDraw = (() => {
     maskStrengthPaint,
     maskPixels,
     hasTransparency,
+    // V4.6. A text's gradients.
+    layoutOfText,
+    piecesBox,
+    textStretches,
+    gradientReach,
+    gradientLine,
+    rebaseGradient,
     drawGen,
     genAt,
     genMotion,

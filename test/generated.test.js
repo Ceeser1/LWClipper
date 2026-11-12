@@ -49,6 +49,8 @@ test('a text with nothing set comes out whole, with one empty run', () => {
         font: 'Arial', size: 96, color: '#ffffffff',
         bold: false, italic: false, underline: false, strike: false,
         outline: null, shadow: null,
+        // V4.6. No gradient, which is every text from before.
+        gradient: null,
       },
       align: { h: 'center', v: 'middle' },
       box: null,

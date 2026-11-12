@@ -4166,6 +4166,17 @@ button.color-swatch:hover:not(:disabled) {
   height: 28px;
 }
 
+/* V4.6. The Gradient tool: a strip running from light to dark, drawn by the
+   stylesheet like the letters above. */
+.text-tool--gradient::before {
+  content: '';
+  width: 18px;
+  height: 12px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, #ffffff, #e8c860 50%, #30303a);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+}
+
 /* A box with an arrow, and the list the arrow opens under it. */
 .combo {
   position: relative;
@@ -4178,8 +4189,9 @@ button.color-swatch:hover:not(:disabled) {
   border-bottom-right-radius: 0;
 }
 
+/* V4.6. 190 until the Gradient tool needed the room to stay on the row. */
 .combo--font .combo__box {
-  width: 190px;
+  width: 160px;
 }
 
 .combo--size .combo__box {
@@ -4294,6 +4306,47 @@ button.color-swatch:hover:not(:disabled) {
   paint-order: stroke fill;
   -webkit-text-stroke: 0 transparent;
   text-align: center;
+}
+
+/* V4.6. The box and, over it, the copy of its words that shows the
+   gradients. The copy is laid out by the same rules at the same width, so
+   every letter of it stands on its twin, and it takes no press: the box
+   under it is what is typed in and selected. Its letters are see-through and
+   its gradients are backgrounds cut to them, one for each line a stretch is
+   on, placed by the script. */
+.text-edit-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.text-edit-ghost {
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+  pointer-events: none;
+  user-select: none;
+  -webkit-text-fill-color: transparent;
+  -webkit-background-clip: text;
+  background-clip: text;
+  background-repeat: no-repeat;
+  text-shadow: none;
+}
+
+.text-edit-ghost span {
+  text-decoration-color: transparent;
+}
+
+/* Selected, Chromium would paint the box's gradient letters in the
+   selection's own colour, a rim of it showing round the copy's. They stay
+   see-through; the highlight behind them says they are selected. */
+.text-edit span[data-grad]:not([data-grad=""])::selection {
+  -webkit-text-fill-color: transparent;
+}
+
+/* The gradient's bar has no preview above it to be as wide as until the
+   script says, and the stage in this modal is clipped like Edit Text's. */
+#textGradStage {
+  overflow: hidden;
 }
 
 /* ---- V3, 31a: the text box ---- */

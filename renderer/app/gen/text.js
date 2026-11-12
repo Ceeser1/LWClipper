@@ -23,6 +23,10 @@ const textFontBox = el('textFontBox');
 const textSizeCombo = el('textSizeCombo');
 const textSizeBox = el('textSizeBox');
 const textColorBtn = el('textColorBtn');
+// V4.6. The gradient on the selected letters, and the edit box's copy that
+// shows it.
+const textGradientBtn = el('textGradientBtn');
+const textEditGhost = el('textEditGhost');
 const textFlags = el('textFlags');
 const textAlignH = el('textAlignH');
 const textAlignV = el('textAlignV');
@@ -371,8 +375,11 @@ function editRuns() {
   return textFull.filter((r) => r.text);
 }
 
+// V4.6. A gradient by what it says, since it is an object.
 function styleKey(style) {
-  return timelineModel.RUN_FIELDS.map((f) => style[f]).join('|');
+  return timelineModel.RUN_FIELDS
+    .map((f) => (style[f] && typeof style[f] === 'object' ? timelineModel.gradientKey(style[f]) : style[f]))
+    .join('|');
 }
 
 // The spans, one per run, the last one carrying the placeholder newline when
@@ -550,6 +557,9 @@ function dressSpan(span, style, k) {
   s.font = textLayout.fontString(style, k);
   s.lineHeight = String(lineRatio(style));
   s.color = style.color;
+  // V4.6. Letters with a gradient are see-through here and filled by the copy
+  // over the box, paintEditGradients. The colour stays, for the caret.
+  s.webkitTextFillColor = style.gradient ? 'transparent' : '';
   const lines = [style.underline && 'underline', style.strike && 'line-through'].filter(Boolean);
   s.textDecorationLine = lines.length ? lines.join(' ') : 'none';
   s.textDecorationThickness = textLayout.DECORATION_WIDTH + 'em';
@@ -605,9 +615,125 @@ function styleTextEdit() {
     e.textShadow = 'none';
   }
   const runs = editRuns();
+  // V4.6. Which stretch of gradient each span is part of, for the copy.
+  const stretchOf = editStretchIds(runs);
   textEditBox.childNodes.forEach((node, i) => {
-    if (node.nodeName === 'SPAN' && runs[i]) dressSpan(node, runs[i].style, k);
+    if (node.nodeName !== 'SPAN' || !runs[i]) return;
+    dressSpan(node, runs[i].style, k);
+    node.dataset.grad = stretchOf[i] >= 0 ? String(stretchOf[i]) : '';
   });
+  paintEditGradients();
+}
+
+// ---- V4.6. The gradients in the edit box ----
+//
+// CSS fills letters with a gradient only as a background cut to the text, and
+// the outline, a stroke painted with the letters, would then lie across it
+// rather than under it. So the gradients are shown by a copy of the box's
+// spans laid over it: same styles, same width, so the same lines, its letters
+// see-through and a background behind them, with only the gradient's letters
+// in it at all. The box's own gradient letters are see-through too, leaving
+// their outline and shadow, and the copy's gradient lands on top, the way
+// genDraw fills over what it stroked.
+//
+// One background for each line a stretch stands on, since a span broken over
+// two lines has no one box to place a background in. Each is the stretch's
+// own gradient as that line sees it, so they join without a seam.
+
+// The gradients of the stretches in the box, by the number its spans carry.
+let editGradients = [];
+
+/** Each run's stretch, textRuns.stretches' rule, noting the gradients. */
+function editStretchIds(runs) {
+  editGradients = [];
+  let open = -1;
+  return runs.map((r) => {
+    const g = r.style.gradient || null;
+    if (g && open >= 0 && textRuns.sameValue(editGradients[open], g)) return open;
+    if (g) {
+      editGradients.push(g);
+      open = editGradients.length - 1;
+      return open;
+    }
+    open = -1;
+    return -1;
+  });
+}
+
+/**
+ * A stretch's gradient as a CSS one for the rectangle `r`, a line of it or a
+ * part of one, `box` being the box round the whole stretch: the same line
+ * genDraw.gradientLine gives, said from `r`'s own middle in pixels, which is
+ * where a CSS gradient is measured from. CSS wants its stops rising, so a
+ * gradient that runs backwards is turned half round.
+ */
+function editGradientImage(g, box, r) {
+  const a = g.angle * Math.PI / 180;
+  const reach = genDraw.gradientReach(g.angle, box.w, box.h);
+  const from = g.start * reach;
+  let to = g.end * reach;
+  if (Math.abs(to - from) < 0.5) to = from + 0.5;
+  const flip = to < from;
+  const off = (r.x + r.w / 2 - box.x - box.w / 2) * Math.cos(a)
+    + (r.y + r.h / 2 - box.y - box.h / 2) * Math.sin(a);
+  const half = genDraw.gradientReach(g.angle, r.w, r.h) / 2;
+  const stops = g.stops.map((stop) => {
+    const u = from + stop.at * (to - from);
+    return stop.color + ' ' + ((flip ? off - u : u - off) + half).toFixed(2) + 'px';
+  });
+  return 'linear-gradient(' + (g.angle + 90 + (flip ? 180 : 0)) + 'deg, ' + stops.join(', ') + ')';
+}
+
+/** The copy over the box: its spans, and a background for every line of every stretch. */
+function paintEditGradients() {
+  const ghost = textEditGhost;
+  if (!textDraft || !editGradients.length) {
+    if (ghost.firstChild) ghost.replaceChildren();
+    ghost.style.backgroundImage = '';
+    return;
+  }
+  ghost.style.font = textEditBox.style.font;
+  ghost.style.lineHeight = textEditBox.style.lineHeight;
+  ghost.style.textAlign = textEditBox.style.textAlign;
+  ghost.replaceChildren(...[...textEditBox.childNodes].map((node) => node.cloneNode(true)));
+  const groups = new Map();
+  for (const span of ghost.children) {
+    const id = span.dataset.grad;
+    // Letters with no gradient keep their place and are left out of the cut.
+    span.style.visibility = id ? '' : 'hidden';
+    if (!id) continue;
+    if (!groups.has(id)) groups.set(id, []);
+    for (const r of span.getClientRects()) {
+      if (r.width > 0 && r.height > 0) groups.get(id).push(r);
+    }
+  }
+  const base = ghost.getBoundingClientRect();
+  const images = [];
+  const sizes = [];
+  const places = [];
+  for (const [id, rects] of groups) {
+    const g = editGradients[Number(id)];
+    if (!g || !rects.length) continue;
+    const x0 = Math.min(...rects.map((r) => r.left));
+    const y0 = Math.min(...rects.map((r) => r.top));
+    const box = {
+      x: x0,
+      y: y0,
+      w: Math.max(...rects.map((r) => r.right)) - x0,
+      h: Math.max(...rects.map((r) => r.bottom)) - y0,
+    };
+    for (const r of rects) {
+      // A little past the line's own box, for a slanted letter's overhang.
+      const pad = r.height * 0.3;
+      const part = { x: r.left - pad, y: r.top - pad / 2, w: r.width + pad * 2, h: r.height + pad };
+      images.push(editGradientImage(g, box, part));
+      sizes.push(part.w.toFixed(2) + 'px ' + part.h.toFixed(2) + 'px');
+      places.push((part.x - base.left).toFixed(2) + 'px ' + (part.y - base.top).toFixed(2) + 'px');
+    }
+  }
+  ghost.style.backgroundImage = images.join(', ');
+  ghost.style.backgroundSize = sizes.join(', ');
+  ghost.style.backgroundPosition = places.join(', ');
 }
 
 // ---- the modal ----
@@ -633,6 +759,8 @@ function titleTextTools() {
   for (const b of textAlignV.querySelectorAll('button')) b.title = titles[b.dataset.v];
   textFontBox.title = t('Font');
   textSizeBox.title = t('Size');
+  // V4.6.
+  textGradientBtn.title = t('Gradient');
 }
 
 function openTextSettings(layer, first) {
@@ -663,6 +791,8 @@ function openTextSettings(layer, first) {
         sizeGenStage(FX[fxKind].stage, FX[fxKind].canvas);
         paintFx(false);
       }
+      // V4.6.
+      relayoutTextGradient();
     },
     draftGen: () => (textDraft ? textGenOf(textDraft) : null),
     // V3.7. The keyframe editor's side of it.
@@ -689,6 +819,8 @@ function closeTextSettings() {
   // V3.3. Kept before the modal lets the layer go, Accept or Cancel.
   if (textLayerId) rememberStageView(textStage, textLayerId, genKeyframeOf(textLayerId));
   closeFx(false);
+  // V4.6.
+  closeTextGradient(false);
   settlePick(false);
   fontCombo.close();
   sizeCombo.close();
@@ -707,6 +839,10 @@ function closeTextSettings() {
   textRedo = [];
   textTyping = null;
   textEditBox.textContent = '';
+  // V4.6.
+  editGradients = [];
+  textEditGhost.replaceChildren();
+  textEditGhost.style.backgroundImage = '';
 }
 
 // The toolbar from what it acts on: the selection's style, a field that is
@@ -718,7 +854,17 @@ function showTextTools(except) {
   textFontShown = mixed.includes('font') ? '' : style.font;
   if (except !== textFontBox) textFontBox.value = textFontShown;
   if (except !== textSizeBox) textSizeBox.value = mixed.includes('size') ? '' : String(textSizeShown(style));
-  paintSwatch(textColorBtn, style.color);
+  // V4.6. The swatch shows a gradient's colours, and its button is lit, when
+  // all of the selection is filled with the one gradient.
+  const grad = !mixed.includes('gradient') && style.gradient;
+  if (grad) {
+    textColorBtn.querySelector('.color-swatch__fill').style.background = 'linear-gradient(90deg, '
+      + grad.stops.map((stop) => stop.color + ' ' + (stop.at * 100).toFixed(1) + '%').join(', ') + ')';
+    textColorBtn.title = t('Gradient');
+  } else {
+    paintSwatch(textColorBtn, style.color);
+  }
+  textGradientBtn.classList.toggle('btn--active', !!grad);
   for (const b of textFlags.querySelectorAll('button')) {
     b.classList.toggle('btn--active', !!style[b.dataset.flag] && !mixed.includes(b.dataset.flag));
   }
@@ -1043,8 +1189,10 @@ function formatText(props, except, start) {
     return;
   }
   if (!start) recordTextUndo(null);
+  // V4.6. Through applyTextProps, which sees to what a change of gradient
+  // leaves of the stretches it cuts into.
   setTextRuns(len
-    ? textRuns.applyStyle(base, from, to, props)
+    ? applyTextProps(base, from, to, props)
     : [{ text: '', style: { ...base[0].style, ...props } }]);
   refreshEditBox();
   showTextDraft(except);
@@ -1074,6 +1222,11 @@ textEditBox.addEventListener('input', (evt) => {
   if (!evt.isComposing) readEditBox();
 });
 textEditBox.addEventListener('compositionend', () => readEditBox());
+// V4.6. The copy that shows the gradients follows the box through a letter
+// still being composed as well, or it would stay unseen until it was done.
+textEditBox.addEventListener('input', (evt) => {
+  if (evt.isComposing) paintEditGradients();
+});
 
 // The box's own undo, from the menu Chromium would otherwise answer from its
 // own stack, which a rerender has made meaningless.
@@ -1234,7 +1387,8 @@ textColorBtn.addEventListener('click', async () => {
     textSel = { ...sel };
     textPending = pending;
     textPendingAt = pendingAt;
-    formatText({ color }, null, start);
+    // V4.6. A colour picked is the letters' fill, so their gradient goes.
+    formatText({ color, gradient: null }, null, start);
   };
   const picked = await pickColor(textShown().style.color, (color) => {
     if (textLayerId === id) put(color);
@@ -1245,7 +1399,7 @@ textColorBtn.addEventListener('click', async () => {
   textPendingAt = pendingAt;
   setTextRuns(start);
   refreshEditBox();
-  if (picked) formatText({ color: picked }, null);
+  if (picked) formatText({ color: picked, gradient: null }, null);
   else {
     showTextDraft(null);
     paintTextPreview();
