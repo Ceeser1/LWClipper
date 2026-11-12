@@ -397,5 +397,13 @@
   "This media is in use, do you really want to delete it? Every occurrence of it in the timeline will be deleted.": "This media is in use, do you really want to delete it? Every occurrence of it in the timeline will be deleted.",
   "Only one project can be opened at a time; {n} more were left out.": "Only one project can be opened at a time; {n} more were left out.",
   "Paste a Video/Audio URL": "Paste a Video/Audio URL",
-  "Toggle Fullscreen": "Toggle Fullscreen"
+  "Toggle Fullscreen": "Toggle Fullscreen",
+  "Obscure": "Obscure",
+  "Pixelate": "Pixelate",
+  "Add Area": "Add Area",
+  "Remove Area": "Remove Area",
+  "Strength:": "Strength:",
+  "Invert Areas": "Invert Areas",
+  "Click an area to select it, drag its sides to size it, a corner to size two sides together, inside it to move it and the dot above it to turn it, hold Shift to move opposite sides together": "Click an area to select it, drag its sides to size it, a corner to size two sides together, inside it to move it and the dot above it to turn it, hold Shift to move opposite sides together",
+  "The Obscure or Pixelate window is open. Going on closes it and discards what it has not accepted.": "The Obscure or Pixelate window is open. Going on closes it and discards what it has not accepted."
 }

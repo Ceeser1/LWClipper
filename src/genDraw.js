@@ -472,6 +472,78 @@ const genDraw = (() => {
     ctx.restore();
   }
 
+  // ---- V4.7. Obscure and Pixelate ----
+
+  /**
+   * Where an Obscure or a Pixelate acts on a picture `width` by `height`,
+   * onto its cleared canvas: white where it does, clear where it does not.
+   * Every area is drawn as a white shape is, turned and with the soft edge,
+   * one over the other, and inverted the whole is turned round, the soft
+   * edges with it. The preview, the window and the export all cut the effect
+   * with this one drawing.
+   */
+  function drawCoverMask(ctx, cover, width, height, surface) {
+    ctx.clearRect(0, 0, width, height);
+    const soft = Math.max(0, (cover.soft || 0) * height);
+    const on = surface === undefined ? defaultShapeSurface : surface;
+    for (const a of cover.areas) {
+      paintShape(ctx, { kind: a.kind, rotation: a.rotation, color: '#ffffffff' },
+        maskBox(a, width, height), soft, 0, width, height, on);
+    }
+    if (!cover.invert) return;
+    // source-out: white wherever nothing is yet, and what is there taken away
+    // by as much as it covers, which is the same picture the other way round.
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-out';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, width, height);
+    ctx.restore();
+  }
+
+  /**
+   * The part of a picture `W` by `H` an Obscure or a Pixelate touches, so the
+   * export filters that much and not the whole frame: round every area as it
+   * is turned, with room for the soft edge and `margin` more (a blur needs
+   * the pixels beside what it blurs), all of the picture when inverted. Whole
+   * pixels on a grid of `grid`, which is 2 for 4:2:0 video and the block for
+   * Pixelate, whose blocks are counted from the picture's corner; never past
+   * the last even pixel. Null when it touches none of the picture.
+   */
+  function coverRegion(cover, W, H, { margin = 0, grid = 2 } = {}) {
+    let x0 = 0;
+    let y0 = 0;
+    let x1 = W;
+    let y1 = H;
+    if (!cover.invert) {
+      x0 = Infinity;
+      y0 = Infinity;
+      x1 = -Infinity;
+      y1 = -Infinity;
+      const room = (cover.soft || 0) * H * 1.5 + 2 + margin;
+      for (const a of cover.areas) {
+        const b = maskBox(a, W, H);
+        const cx = b.x + b.w / 2;
+        const cy = b.y + b.h / 2;
+        const rad = (Number(a.rotation) || 0) * Math.PI / 180;
+        const hw = (Math.abs(b.w * Math.cos(rad)) + Math.abs(b.h * Math.sin(rad))) / 2;
+        const hh = (Math.abs(b.w * Math.sin(rad)) + Math.abs(b.h * Math.cos(rad))) / 2;
+        x0 = Math.min(x0, cx - hw - room);
+        x1 = Math.max(x1, cx + hw + room);
+        y0 = Math.min(y0, cy - hh - room);
+        y1 = Math.max(y1, cy + hh + room);
+      }
+    }
+    const g = Math.max(2, Math.round(grid / 2) * 2);
+    const down = (v) => Math.floor(v / g) * g;
+    const up = (v, most) => Math.min(Math.floor(most / 2) * 2, Math.ceil(v / g) * g);
+    const x = Math.max(0, down(x0));
+    const y = Math.max(0, down(y0));
+    const width = up(x1, W) - x;
+    const height = up(y1, H) - y;
+    if (!(width >= 2) || !(height >= 2)) return null;
+    return { x, y, width, height };
+  }
+
   /**
    * V3.7.1. How much a colour lets a mask show, 0 to 1: its brightness by the
    * rule a custom mask picture has (maskPixels' luma), times its alpha. The
@@ -1194,6 +1266,9 @@ const genDraw = (() => {
     maskBox,
     maskStartBox,
     drawMask,
+    // V4.7.
+    drawCoverMask,
+    coverRegion,
     // V3.7.1.
     maskStrength,
     maskStrengthPaint,

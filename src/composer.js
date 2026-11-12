@@ -196,6 +196,80 @@ function ownAlpha(l) {
   return l.kind === 'image' && timeline.seeThrough(l);
 }
 
+// ---- V4.7. Obscure and Pixelate ----
+//
+// Both are done to the layer's picture as the file has it, before it is
+// cropped, scaled, placed or turned, so nothing after this point has to know
+// about them, the moving layers included. The window hands over, for each, the
+// part of the source it touches and a PNG of where it acts in that part
+// (export.js exportCovers). That part is cut out, filtered, given the PNG as
+// its alpha and laid back where it came from.
+//
+// A picture with an alpha of its own, a PNG, cannot be done that way: the
+// filtered part laid over the picture would add its see-through to the
+// picture's, and come out more solid than either (measured: 90 over 90 gave
+// 148). There the whole picture is filtered and the two are blended by the
+// PNG, maskedmerge, alpha and all, at 4:4:4 where one grey plane can stand
+// for all four. A PNG is a still, so the whole frame costs nothing to speak of.
+//
+// Measured with the bundled ffmpeg on 2026-11-12: gblur on 4:2:0 blurs the
+// colour twice as far as the brightness, since it takes one sigma for planes
+// of two sizes, so the blur is made at 4:4:4; and at its default one step it
+// is not a Gaussian, the ramp of an edge coming out a fifth narrower than
+// the sigma says. Six steps is within three percent, which is what the
+// preview's blur is. pixelize takes an odd block one smaller on 4:2:0, so
+// the block always arrives even (timeline.js pixelateBlock).
+
+/**
+ * What a layer's chain starts from: its input as it is, or with covers the
+ * label of the picture with them laid on, at the project's rate. `inputs` is
+ * each cover's PNG input, in their order.
+ */
+function coverHead(graph, l, n, input, fps, inputs, source) {
+  const plain = '[' + input + ':v]';
+  const files = (Array.isArray(l.coverFiles) && l.type === 'video' ? l.coverFiles : [])
+    .map((f, i) => ({ ...f, input: inputs && inputs[i] }))
+    .filter((f) => {
+      const r = f.region;
+      if (f.input === undefined || !r) return false;
+      const whole = [r.x, r.y, r.width, r.height].every((v) => Number.isInteger(v) && v >= 0);
+      if (!whole || r.width < 2 || r.height < 2) return false;
+      // Never past a source this module knows the size of.
+      return !source || !(source.width > 0)
+        || (r.x + r.width <= source.width && r.y + r.height <= source.height);
+    });
+  if (!files.length) return plain;
+  const alpha = ownAlpha(l);
+  let cur = 'cv' + n + 's';
+  graph.push(plain + chain(['fps=' + fps, 'format=' + (alpha ? 'yuva420p' : 'yuv420p')]) + '[' + cur + ']');
+  const blended = alpha && source && source.width > 0 && source.height > 0;
+  files.forEach((f, i) => {
+    const r = f.region;
+    const t = 'cv' + n + 'x' + i;
+    const blur = 'gblur=sigma=' + fixed(Math.min(1024, Math.max(0.1, Number(f.sigma) || 0.1))) + ':steps=6';
+    const block = Math.max(2, Math.round(Number(f.block) || 2));
+    const blocks = 'pixelize=w=' + block + ':h=' + block;
+    const where = '[' + f.input + ':v]fps=' + fps + ',format=gray,scale=' + r.width + ':' + r.height;
+    if (blended) {
+      graph.push('[' + cur + ']format=yuva444p,split[' + t + 'a][' + t + 'b]');
+      graph.push('[' + t + 'b]' + (f.kind === 'obscure' ? blur : blocks) + '[' + t + 'c]');
+      graph.push(where + ',pad=' + Math.round(source.width) + ':' + Math.round(source.height) + ':' + r.x + ':' + r.y
+        + ':black,mergeplanes=0x00000000:yuva444p[' + t + 'm]');
+      graph.push('[' + t + 'a][' + t + 'c][' + t + 'm]maskedmerge,format=yuva420p[' + t + 'o]');
+      cur = t + 'o';
+      return;
+    }
+    graph.push('[' + cur + ']split[' + t + 'a][' + t + 'b]');
+    graph.push('[' + t + 'b]crop=' + r.width + ':' + r.height + ':' + r.x + ':' + r.y + ','
+      + (f.kind === 'obscure' ? 'format=yuv444p,' + blur : blocks) + '[' + t + 'c]');
+    graph.push(where + '[' + t + 'm]');
+    graph.push('[' + t + 'c][' + t + 'm]alphamerge[' + t + 'h]');
+    graph.push('[' + t + 'a][' + t + 'h]overlay=x=' + r.x + ':y=' + r.y + ':format=yuv420[' + t + 'o]');
+    cur = t + 'o';
+  });
+  return '[' + cur + ']';
+}
+
 const evenDown = (v) => Math.floor(v / 2) * 2;
 const evenUp = (v) => Math.ceil(v / 2) * 2;
 
@@ -211,7 +285,7 @@ function unionOf(rects) {
  * The filters for one moving layer, composited onto `prev`. Hands back the
  * label of what it made, the next layer's `prev`.
  */
-function movingLayer(graph, l, n, motion, prev, { input, fps, source, projW, projH, mask }) {
+function movingLayer(graph, l, n, motion, prev, { input, fps, source, projW, projH, mask, head }) {
   const times = motion.map((k) => l.start + k.t);
   const at = (pick) => piecewise(times, motion.map(pick));
   // 1. The fixed cut. Every crop is even and inside the source already, so
@@ -246,7 +320,7 @@ function movingLayer(graph, l, n, motion, prev, { input, fps, source, projW, pro
   const tag = (s) => s + n;
 
   // 2 and 3. The picture, scaled for the moment and laid where its crop goes.
-  graph.push('[' + input + ':v]' + chain([
+  graph.push((head || '[' + input + ':v]') + chain([
     'fps=' + fps,
     whole ? null : 'crop=' + cut.width + ':' + cut.height + ':' + cut.x + ':' + cut.y,
     shift,
@@ -303,7 +377,7 @@ function movingLayer(graph, l, n, motion, prev, { input, fps, source, projW, pro
  * the move, with what it uncovers left clear, and laid on the frame with its
  * middle on the moment's middle.
  */
-function movingTurnedLayer(graph, l, n, motion, prev, { input, fps, source, mask }) {
+function movingTurnedLayer(graph, l, n, motion, prev, { input, fps, source, mask, head }) {
   const times = motion.map((k) => l.start + k.t);
   const at = (pick) => piecewise(times, motion.map(pick));
   const cut = unionOf(motion.map((k) => k.src));
@@ -331,7 +405,7 @@ function movingTurnedLayer(graph, l, n, motion, prev, { input, fps, source, mask
     + ':r=' + fps + ':d=' + fixed(l.duration) + ',' + shift + ',format=' + format;
   const tag = (s) => s + n;
 
-  graph.push('[' + input + ':v]' + chain([
+  graph.push((head || '[' + input + ':v]') + chain([
     'fps=' + fps,
     whole ? null : 'crop=' + cut.width + ':' + cut.height + ':' + cut.x + ':' + cut.y,
     shift,
@@ -443,6 +517,17 @@ function buildComposeArgs({
       args.push('-loop', '1', '-framerate', String(fps), '-t', fixed(l.duration), '-i', l.maskFile.src);
     }
   };
+  // V4.7. And each Obscure or Pixelate's picture of where it acts, after those.
+  const coverInputsOf = new Map();
+  const addCovers = (l) => {
+    if (!Array.isArray(l.coverFiles) || l.type !== 'video') return;
+    coverInputsOf.set(l.id, l.coverFiles.map((f) => {
+      if (!f || !f.src) return undefined;
+      inputs.push(null);
+      args.push('-loop', '1', '-framerate', String(fps), '-t', fixed(l.duration), '-i', f.src);
+      return inputs.length - 1;
+    }));
+  };
   for (const l of live) {
     indexOf.set(l.id, inputs.length);
     inputs.push(l);
@@ -466,6 +551,7 @@ function buildComposeArgs({
       args.push('-ss', fixed(l.sourceIn), '-t', fixed(l.duration), '-i', l.src);
     }
     addMask(l);
+    addCovers(l);
   }
 
   const graph = [];
@@ -489,11 +575,14 @@ function buildComposeArgs({
       // own below. One that does not is placed once, as it always was, from
       // its keyframe when it has a single one.
       const motion = geometry.motionOf(l, sources[l.src] || null, project);
+      // V4.7. What the layer's chain starts from, its covers laid on.
+      const from = coverHead(graph, l, n, indexOf.get(l.id), fps, coverInputsOf.get(l.id), sources[l.src] || null);
       if (motion) {
         // V3.4. One that also turns takes the square road above.
         const mover = motion.some((k) => k.turn) ? movingTurnedLayer : movingLayer;
         prev = mover(graph, l, n, motion, prev, {
           input: indexOf.get(l.id), fps, source: sources[l.src] || null, projW, projH, mask: maskIndexOf.get(l.id),
+          head: from,
         });
         return;
       }
@@ -548,7 +637,7 @@ function buildComposeArgs({
       // V3.6. A mask is a third.
       const maskInput = placement ? maskIndexOf.get(l.id) : undefined;
       const needsAlpha = fades.in > 0 || fades.out > 0 || alpha < 1 || !!rotate || maskInput !== undefined;
-      const picture = '[' + indexOf.get(l.id) + ':v]'
+      const picture = from
         + chain([
           l.frames ? holdFrames(l.frames) : null,
           'fps=' + fps,

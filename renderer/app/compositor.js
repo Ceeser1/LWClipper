@@ -458,8 +458,11 @@ function drawLayerInto(ctx, canvas, layer, crop = layer.crop, render = layer.ren
   // V3.6. A masked picture is cut out first, at the size it is drawn, and the
   // cut-out is what is placed and turned, so the mask goes wherever the
   // picture goes. At the moment drawn, or the playhead's for a draft.
+  // V4.7. And its Obscure and Pixelate before that, which need to know what
+  // part of the source the rectangle is.
   const pic = maskedPicture(layer, entry.el, [d.sx * kx, d.sy * ky, d.sw * kx, d.sh * ky], d,
-    at === null ? compositeAt : at);
+    at === null ? compositeAt : at,
+    { x: d.sx, y: d.sy, w: d.sw, h: d.sh, W: source.width, H: source.height, ex: kx, ey: ky });
   if (!turn) {
     ctx.drawImage(pic.el, ...pic.from, d.dx, d.dy, d.dw, d.dh);
     return;
@@ -475,7 +478,9 @@ function drawLayerInto(ctx, canvas, layer, crop = layer.crop, render = layer.ren
 
 // Two surfaces, kept: the picture, and its mask. Every masked layer is cut out
 // on them in turn, and each is drawn out before the next is cut.
-const maskedSurfaces = [null, null];
+// V4.7. Three more for Obscure and Pixelate: the effect, and two that the
+// blur's copy and Pixelate's halvings are made on.
+const maskedSurfaces = [null, null, null, null, null];
 function maskedSurface(i, w, h) {
   if (!maskedSurfaces[i]) maskedSurfaces[i] = new OffscreenCanvas(w, h).getContext('2d');
   const c = maskedSurfaces[i].canvas;
@@ -489,23 +494,189 @@ function maskedSurface(i, w, h) {
  * are, or with a mask the picture cut out at the size `d` draws it, the mask
  * as it is at `at` on the timeline. drawMask is the export's drawing too.
  */
-function maskedPicture(layer, el, from, d, at) {
+// V4.7. `src`, when given, says what part of the source picture `from` is,
+// and with it the layer's Obscure and Pixelate are laid on first, see layCover.
+function maskedPicture(layer, el, from, d, at, src = null) {
   const mask = layer.kind !== 'gen' ? timelineModel.maskAt(layer, at - layer.start) : null;
   // A custom mask whose picture cannot be read, gone from the disk since, is
   // shown as no mask rather than as a picture with nothing left of it.
-  if (!mask || maskPictureFailed(mask)) return { el, from };
+  const cut = !!mask && !maskPictureFailed(mask);
+  const covers = src ? timelineModel.coverList(layer) : [];
+  if (!cut && !covers.length) return { el, from };
   const w = Math.max(1, Math.round(d.dw));
   const h = Math.max(1, Math.round(d.dh));
   const p = maskedSurface(0, w, h);
   p.globalCompositeOperation = 'source-over';
   p.clearRect(0, 0, w, h);
   p.drawImage(el, ...from, 0, 0, w, h);
+  for (const c of covers) layCover(p, c, el, src, w, h);
+  if (!cut) return { el: p.canvas, from: [0, 0, w, h] };
   const m = maskedSurface(1, w, h);
+  m.setTransform(1, 0, 0, 1, 0, 0);
   genDraw.drawMask(m, mask, w, h, maskPicture(mask));
   p.globalCompositeOperation = 'destination-in';
   p.drawImage(m.canvas, 0, 0);
   p.globalCompositeOperation = 'source-over';
   return { el: p.canvas, from: [0, 0, w, h] };
+}
+
+// ---- V4.7. Obscure and Pixelate ----
+//
+// The export does both to the source picture, before it is cropped, placed
+// or turned (composer.js coverHead). Here the picture is already cut out at
+// the size it is drawn, `w` by `h`, so the same is worked out at that size:
+// `src` is the part of the source that is, { x, y, w, h } in the source's
+// pixels, { W, H } its whole size, and { ex, ey } the element's pixels for
+// one of the source's.
+//
+// Obscure is a Gaussian of the sigma the export uses, scaled to the drawing.
+// Pixelate is the source drawn small, one pixel to a block, and back up
+// without smoothing; the blocks are counted from the source's corner as the
+// encoder counts them, so a crop does not shift the grid. Either is then
+// blended into the picture where it acts, genDraw.drawCoverMask laid the way
+// the source is: the picture taken out there and the effect put in, not the
+// one over the other, which on a PNG with see-through parts would add the
+// two up.
+function layCover(p, { kind, cover }, el, src, w, h) {
+  const kx = w / src.w;
+  const ky = h / src.h;
+  const e = maskedSurface(2, w, h);
+  e.setTransform(1, 0, 0, 1, 0, 0);
+  e.globalCompositeOperation = 'source-over';
+  e.filter = 'none';
+  e.clearRect(0, 0, w, h);
+  if (kind === 'obscure') coverBlur(e, p, el, src, w, h, timelineModel.obscureSigma(cover.strength, src.H) * ky);
+  else coverBlocks(e, el, src, kx, ky, timelineModel.pixelateBlock(cover.strength, src.H));
+  const m = maskedSurface(1, w, h);
+  m.setTransform(1, 0, 0, 1, 0, 0);
+  m.clearRect(0, 0, w, h);
+  m.setTransform(kx, 0, 0, ky, -src.x * kx, -src.y * ky);
+  genDraw.drawCoverMask(m, cover, src.W, src.H);
+  m.setTransform(1, 0, 0, 1, 0, 0);
+  e.globalCompositeOperation = 'destination-in';
+  e.drawImage(m.canvas, 0, 0);
+  e.globalCompositeOperation = 'source-over';
+  p.globalCompositeOperation = 'destination-out';
+  p.drawImage(m.canvas, 0, 0);
+  p.globalCompositeOperation = 'lighter';
+  p.drawImage(e.canvas, 0, 0);
+  p.globalCompositeOperation = 'source-over';
+}
+
+/**
+ * The picture blurred, onto `e`. A blur reaches past what it is given, and
+ * past the edge of a canvas there is nothing, which would fade the picture's
+ * own edge out. So it is blurred from a copy with room round it: the source
+ * beyond the crop where there is some, which is what the export blurs with,
+ * and the edge's own pixels drawn out where there is not.
+ */
+function coverBlur(e, p, el, src, w, h, sigma) {
+  if (!(sigma > 0.2)) {
+    e.drawImage(p.canvas, 0, 0);
+    return;
+  }
+  const pad = Math.ceil(sigma * 3);
+  const x = maskedSurface(3, w + pad * 2, h + pad * 2);
+  x.setTransform(1, 0, 0, 1, 0, 0);
+  x.imageSmoothingEnabled = true;
+  x.clearRect(0, 0, w + pad * 2, h + pad * 2);
+  const c = p.canvas;
+  x.drawImage(c, 0, 0, 1, h, 0, pad, pad, h);
+  x.drawImage(c, w - 1, 0, 1, h, pad + w, pad, pad, h);
+  x.drawImage(c, 0, 0, w, 1, pad, 0, w, pad);
+  x.drawImage(c, 0, h - 1, w, 1, pad, pad + h, w, pad);
+  x.drawImage(c, 0, 0, 1, 1, 0, 0, pad, pad);
+  x.drawImage(c, w - 1, 0, 1, 1, pad + w, 0, pad, pad);
+  x.drawImage(c, 0, h - 1, 1, 1, 0, pad + h, pad, pad);
+  x.drawImage(c, w - 1, h - 1, 1, 1, pad + w, pad + h, pad, pad);
+  // What the source has beyond the crop, held to the source: drawImage is not
+  // asked for anything outside the element.
+  const sx = pad * src.w / w;
+  const sy = pad * src.h / h;
+  const x0 = Math.max(0, src.x - sx);
+  const y0 = Math.max(0, src.y - sy);
+  const x1 = Math.min(src.W, src.x + src.w + sx);
+  const y1 = Math.min(src.H, src.y + src.h + sy);
+  x.drawImage(el, x0 * src.ex, y0 * src.ey, (x1 - x0) * src.ex, (y1 - y0) * src.ey,
+    pad + (x0 - src.x) * w / src.w, pad + (y0 - src.y) * h / src.h, (x1 - x0) * w / src.w, (y1 - y0) * h / src.h);
+  e.filter = 'blur(' + sigma.toFixed(2) + 'px)';
+  e.drawImage(x.canvas, -pad, -pad);
+  e.filter = 'none';
+}
+
+/**
+ * The picture in blocks of `B` source pixels, onto `e`, each block the
+ * average of what it covers, which is what the encoder's pixelize makes it.
+ *
+ * Drawn straight down to a pixel a block, the browser takes a sample or two
+ * of each block rather than its average (measured on a checkerboard: the
+ * blocks came out a pattern of their own where the file had one even grey).
+ * So the source is first drawn at `f` pixels a block, a power of two near its
+ * own size, and then halved until it is one: a halving is the average of four
+ * pixels, exactly.
+ *
+ * A last column or row cut short by the source's edge is a block of its own,
+ * as the encoder has it, so it is drawn by itself rather than as part of a
+ * whole one.
+ */
+function coverBlocks(e, el, src, kx, ky, B) {
+  const spans = (from, to, most) => {
+    const a = Math.floor(from / B) * B;
+    const b = Math.min(most, Math.ceil(to / B) * B);
+    const whole = Math.floor((b - a) / B);
+    const out = [];
+    if (whole > 0) out.push({ at: a, len: whole * B, n: whole });
+    if (b - a - whole * B > 0) out.push({ at: a + whole * B, len: b - a - whole * B, n: 1 });
+    return out;
+  };
+  const cols = spans(src.x, src.x + src.w, src.W);
+  const rows = spans(src.y, src.y + src.h, src.H);
+  const nx = cols.reduce((sum, c) => sum + c.n, 0);
+  const ny = rows.reduce((sum, r) => sum + r.n, 0);
+  if (!nx || !ny) return;
+  // Pixels a block to start from: the block's own size in the element, down
+  // to a power of two, and no more than keeps the surface a sane size.
+  let f = 1;
+  const own = B * Math.min(src.ex, src.ey);
+  while (f * 2 <= own && Math.max(nx, ny) * f * 2 <= 4096) f *= 2;
+  let from = maskedSurface(3, nx * f, ny * f);
+  from.setTransform(1, 0, 0, 1, 0, 0);
+  from.clearRect(0, 0, nx * f, ny * f);
+  from.imageSmoothingEnabled = true;
+  from.imageSmoothingQuality = 'low';
+  let ty = 0;
+  for (const r of rows) {
+    let tx = 0;
+    for (const c of cols) {
+      from.drawImage(el, c.at * src.ex, r.at * src.ey, c.len * src.ex, r.len * src.ey,
+        tx * f, ty * f, c.n * f, r.n * f);
+      tx += c.n;
+    }
+    ty += r.n;
+  }
+  let side = 4;
+  for (let g = f; g > 1; g /= 2) {
+    const to = maskedSurface(side, nx * g / 2, ny * g / 2);
+    to.setTransform(1, 0, 0, 1, 0, 0);
+    to.clearRect(0, 0, nx * g / 2, ny * g / 2);
+    to.imageSmoothingEnabled = true;
+    to.imageSmoothingQuality = 'low';
+    to.drawImage(from.canvas, 0, 0, nx * g, ny * g, 0, 0, nx * g / 2, ny * g / 2);
+    from = to;
+    side = side === 4 ? 3 : 4;
+  }
+  e.imageSmoothingEnabled = false;
+  ty = 0;
+  for (const r of rows) {
+    let tx = 0;
+    for (const c of cols) {
+      e.drawImage(from.canvas, tx, ty, c.n, r.n,
+        (c.at - src.x) * kx, (r.at - src.y) * ky, c.len * kx, r.len * ky);
+      tx += c.n;
+    }
+    ty += r.n;
+  }
+  e.imageSmoothingEnabled = true;
 }
 
 // A custom mask's picture is at most this big on its longer side. A mask is

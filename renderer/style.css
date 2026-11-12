@@ -4349,6 +4349,36 @@ button.color-swatch:hover:not(:disabled) {
   overflow: hidden;
 }
 
+/* ---- V4.7. Obscure and Pixelate ---- */
+
+/* The shapes, and under them Add Area and Remove Area, over the settings. */
+.cover-areas-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.cover-areas-row .shape-kinds {
+  margin-bottom: 0;
+}
+
+/* Clipped like the other stages a box can be dragged off. */
+#coverStage {
+  overflow: hidden;
+}
+
+/* An area that is not the selected one: its box as a line, to click. */
+.cover-area {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px dashed rgba(235, 235, 240, 0.8);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+}
+
 /* ---- V3, 31a: the text box ---- */
 
 /* V3.3. Clipped to the stage now that a box can be anywhere off the frame:

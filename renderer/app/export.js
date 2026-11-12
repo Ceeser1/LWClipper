@@ -254,15 +254,71 @@ async function exportMask(l, frame) {
   };
 }
 
+/**
+ * V4.7. A layer's Obscure and Pixelate for the encoder, in the order they are
+ * laid on: for each, the part of the source picture it touches, where it acts
+ * in that part as a PNG, white on black, and the figure its filter takes.
+ * Only that part is filtered, so a face in a 4K frame costs a face's worth.
+ * Cached by what it shows, like a mask.
+ */
+async function exportCovers(l) {
+  const source = layerSource(l);
+  const files = [];
+  if (!source) return { ok: true, files };
+  const W = Math.round(source.width);
+  const H = Math.round(source.height);
+  for (const { kind, cover } of timelineModel.coverList(l)) {
+    const sigma = timelineModel.obscureSigma(cover.strength, H);
+    const block = timelineModel.pixelateBlock(cover.strength, H);
+    const region = genDraw.coverRegion(cover, W, H, kind === 'obscure'
+      ? { margin: Math.ceil(sigma * 3), grid: 2 }
+      : { margin: 0, grid: block });
+    if (!region) continue;
+    // A picture held to the size every drawn surface is; the encoder scales
+    // it back to the region.
+    const k = Math.min(1, GEN_SURFACE_MAX / Math.max(region.width, region.height));
+    const w = Math.max(2, Math.round(region.width * k));
+    const h = Math.max(2, Math.round(region.height * k));
+    const key = JSON.stringify(['cover', cover.areas, cover.soft, cover.invert, W, H, region, w, h]);
+    let saved = await window.lwclipper.genImage(key, null);
+    if (saved.ok && !saved.path) {
+      const ink = new OffscreenCanvas(w, h).getContext('2d');
+      ink.setTransform(k, 0, 0, k, -region.x * k, -region.y * k);
+      genDraw.drawCoverMask(ink, cover, W, H);
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(ink.canvas, 0, 0);
+      const blob = await new Promise((done) => canvas.toBlob(done, 'image/png'));
+      if (!blob) return { ok: false, error: 'canvas toBlob gave no PNG' };
+      saved = await window.lwclipper.genImage(key, new Uint8Array(await blob.arrayBuffer()));
+    }
+    if (!saved.ok || !saved.path) return { ok: false, error: saved.error || 'no PNG path' };
+    files.push({ kind, src: saved.path, region, sigma, block });
+  }
+  return { ok: true, files };
+}
+
 async function exportLayers() {
   const frame = projectFrame();
   const out = [];
   for (const l of layers) {
     // V3.6. A masked picture goes with its mask.
-    if (l.kind !== 'gen' && l.enabled && l.type === 'video' && l.mask) {
-      const m = await exportMask(l, frame);
-      if (!m.ok) return m;
-      out.push(m.file ? { ...l, maskFile: m.file } : l);
+    // V4.7. And one with an Obscure or a Pixelate with where each acts.
+    if (l.kind !== 'gen' && l.enabled && l.type === 'video' && (l.mask || timelineModel.coverList(l).length)) {
+      let next = l;
+      if (l.mask) {
+        const m = await exportMask(l, frame);
+        if (!m.ok) return m;
+        if (m.file) next = { ...next, maskFile: m.file };
+      }
+      const c = await exportCovers(l);
+      if (!c.ok) return c;
+      if (c.files.length) next = { ...next, coverFiles: c.files };
+      out.push(next);
       continue;
     }
     if (l.kind !== 'gen' || !l.enabled) {

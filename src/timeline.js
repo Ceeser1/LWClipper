@@ -491,6 +491,76 @@ const timelineModel = (() => {
     return within(v, 0, 1, 0);
   }
 
+  // ---- V4.7. Obscure and Pixelate ----
+  //
+  // The user: "You can right click on a track to have Obscure or Pixelate in
+  // its menu. Both get a setting in a new modal, what they want to
+  // obscure/pixelate." Each is done to a video or image layer's own picture:
+  // inside its areas the picture is blurred, or broken into blocks. An area
+  // is a shape in a box, turned or not, and there may be several, two faces
+  // or a name and a number.
+  //
+  // The areas belong to the picture as the file has it, not as it is cropped
+  // or placed: fractions of the whole source picture, so a crop changed later
+  // leaves an area on what it covered, and nothing the keyframes do to the
+  // picture has to know about them. `strength`, 1 to 100, is how far the
+  // effect goes (obscureSigma and pixelateBlock say what that is in pixels),
+  // `soft` how far the areas' edges fade, a fraction of the picture's height
+  // like a mask's, and `invert` makes it everything but the areas. Both are
+  // the whole clip's. In the code the pair is called a layer's covers, since
+  // "fx" was Outline and Shadow's word already.
+
+  const COVER_KINDS = ['obscure', 'pixelate'];
+  const COVER_AREAS_MAX = 24;
+  const COVER_STRENGTH = { obscure: 30, pixelate: 25 };
+
+  function coverAreaOf(v) {
+    const src = v && typeof v === 'object' ? v : {};
+    return {
+      kind: oneOf(src.kind, SHAPE_KINDS, 'square'),
+      box: maskBoxOf(src.box),
+      rotation: rotationOf(src.rotation),
+    };
+  }
+
+  /** An Obscure or a Pixelate, or null for none: one with no area is none. */
+  function coverOf(v, kind) {
+    if (!v || typeof v !== 'object' || !Array.isArray(v.areas)) return null;
+    const areas = v.areas.filter((a) => a && typeof a === 'object').slice(0, COVER_AREAS_MAX).map(coverAreaOf);
+    if (!areas.length) return null;
+    return {
+      strength: Math.round(within(v.strength, 1, 100, COVER_STRENGTH[kind] || 30)),
+      soft: maskSoftOf(v.soft),
+      invert: bool(v.invert),
+      areas,
+    };
+  }
+
+  /** What a layer has of the two, in the order they are laid on: `{ kind, cover }`. */
+  function coverList(layer) {
+    if (!layer || layer.kind === 'gen' || layer.type !== 'video') return [];
+    return COVER_KINDS.filter((kind) => layer[kind]).map((kind) => ({ kind, cover: layer[kind] }));
+  }
+
+  /**
+   * Obscure's blur for a source picture `height` high: the sigma of the
+   * Gaussian in that picture's pixels. Strength 30 is 1.5% of the height, 16
+   * pixels at 1080p, which leaves a face a smudge.
+   */
+  function obscureSigma(strength, height) {
+    return Math.max(0.5, height * strength * 0.0005);
+  }
+
+  /**
+   * Pixelate's block for a source picture `height` high, in its pixels.
+   * Strength 25 is 2.5% of the height, 26 pixels at 1080p. Always even: on
+   * 4:2:0 video the encoder's pixelize takes an odd block one smaller
+   * (measured, 27 came out 26), and the preview has to draw the same grid.
+   */
+  function pixelateBlock(strength, height) {
+    return Math.max(2, 2 * Math.round(height * strength * 0.0005));
+  }
+
   /**
    * A mask, or null for none. `src` is the user's own picture for a custom
    * one, `by` whether its transparency or its brightness is what shows
@@ -649,6 +719,12 @@ const timelineModel = (() => {
       // before masks is. Only a picture of a file has one: a generated layer
       // is a shape or a text already, and a sound has nothing to mask.
       mask: kind !== 'gen' && props.type !== 'audio' ? maskOf(props.mask) : null,
+      // V4.7. Obscure and Pixelate, each null for none, which every layer
+      // written before them is. Like the mask, only a picture of a file has
+      // them. Declared here for the reason render is: a field createLayer
+      // does not name is a field the project open path drops.
+      obscure: kind !== 'gen' && props.type !== 'audio' ? coverOf(props.obscure, 'obscure') : null,
+      pixelate: kind !== 'gen' && props.type !== 'audio' ? coverOf(props.pixelate, 'pixelate') : null,
       // V3.3. The crop, placement and ring at moments of the clip, and empty on
       // everything written before them. See "Keyframes" below. Declared here
       // for the reason render is: a field createLayer does not name is a field
@@ -2655,6 +2731,14 @@ const timelineModel = (() => {
     MASK_KINDS,
     maskOf,
     maskAt,
+    // V4.7.
+    COVER_KINDS,
+    COVER_AREAS_MAX,
+    COVER_STRENGTH,
+    coverOf,
+    coverList,
+    obscureSigma,
+    pixelateBlock,
     maskMotion,
     setMask,
     removeMask,

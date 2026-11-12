@@ -202,6 +202,13 @@ function openClipMenu(evt, track) {
       item(t('Remove Mask'), true, () => removeMaskFrom(layer.id));
     }
   }
+  // V4.7. The user: "You can right click on a track to have Obscure or
+  // Pixelate in its menu". On the tracks a mask can be on, a picture of a
+  // file; each opens its window, where it is also taken off again.
+  if (layer && layer.kind !== 'gen' && layer.type === 'video') {
+    item(t('Obscure'), true, () => openCover(layer.id, 'obscure', at));
+    item(t('Pixelate'), true, () => openCover(layer.id, 'pixelate', at));
+  }
   // V3.3. Keyframes, on a clip that can have them and within it. On anything
   // else they are there and greyed, so the menu keeps its shape.
   const keyable = !!layer && timelineModel.keyframable(layer) && timelineModel.covers(layer, at);
