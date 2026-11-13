@@ -24,6 +24,16 @@
 // which is also what Remove leaves; an Accept that changed nothing writes
 // nothing. The main preview shows the draft meanwhile, as it does for every
 // editor window. In the code the pair is the layer's covers.
+//
+// V4.8. An area can move, to follow a face: each carries keyframes of its
+// own (timeline.js "Areas that move"), and the window has the editors'
+// keyframe strip under its picture, showing the selected area's. A double
+// click on the strip gives that area a keyframe there, and from then on
+// moving, sizing or turning it is done at the playhead: to the keyframe
+// there, or to a new one made there, the user's rule for every keyframe. The
+// boxes over the picture are the areas as they are at the playhead, and go
+// with it. An area without keyframes is the one 4.7 had, the same the whole
+// clip long.
 
 const coverModal = el('coverModal');
 const coverTitle = el('coverTitle');
@@ -43,6 +53,9 @@ const coverRotor = el('coverRotor');
 const coverAngle = el('coverAngle');
 const coverGuideX = el('coverGuideX');
 const coverGuideY = el('coverGuideY');
+const coverKeys = el('coverKeys');
+const coverKeysReadout = el('coverKeysReadout');
+const coverKeysCanvas = el('coverKeysCanvas');
 const coverRemoveBtn = el('coverRemoveBtn');
 const coverCancelBtn = el('coverCancelBtn');
 const coverAcceptBtn = el('coverAcceptBtn');
@@ -57,9 +70,12 @@ let coverLayerId = null;
 let coverKind = null;      // 'obscure' or 'pixelate'
 let coverPic = null;       // the source picture's size, { width, height }
 // { strength, soft in the picture's whole pixels, invert, areas: [{ kind, box
-// in the picture's whole pixels, rotation in whole degrees }] }
+// in the picture's whole pixels, rotation in whole degrees, and V4.8 with
+// keyframes `keys: [{ id, t, box, rotation }]` in the same units }] }
 let coverDraft = null;
-let coverOpened = null;    // what the layer had when the window opened, as JSON
+// V4.8. Where the clip started and ended when last looked at, so a trim of
+// its start in the main window can be carried into the draft's keyframes.
+let coverClip = null;
 let coverSel = -1;         // the selected area's place in the draft, or -1
 let coverLastKind = 'square';
 let coverPreviewKey = '';
@@ -71,15 +87,17 @@ let coverSettleUntil = 0;
 function coverDraftOf(cover) {
   const W = coverPic.width;
   const H = coverPic.height;
+  const px = (b) => ({ x: Math.round(b.x * W), y: Math.round(b.y * H), w: Math.round(b.w * W), h: Math.round(b.h * H) });
   return {
     strength: cover.strength,
     soft: Math.round(cover.soft * H),
     invert: cover.invert,
-    areas: cover.areas.map((a) => ({
-      kind: a.kind,
-      box: { x: Math.round(a.box.x * W), y: Math.round(a.box.y * H), w: Math.round(a.box.w * W), h: Math.round(a.box.h * H) },
-      rotation: Math.round(a.rotation),
-    })),
+    areas: cover.areas.map((a) => {
+      const area = { kind: a.kind, box: px(a.box), rotation: Math.round(a.rotation) };
+      const keys = timelineModel.coverKeysFor(a);
+      if (!keys.length) return area;
+      return { ...area, keys: keys.map((k) => ({ id: k.id, t: k.t, box: px(k.box), rotation: Math.round(k.rotation) })) };
+    }),
   };
 }
 
@@ -87,16 +105,58 @@ function coverDraftOf(cover) {
 function coverOfDraft(d) {
   const W = Math.max(1, coverPic.width);
   const H = Math.max(1, coverPic.height);
+  const part = (b) => ({ x: b.x / W, y: b.y / H, w: b.w / W, h: b.h / H });
   return timelineModel.coverOf({
     strength: d.strength,
     soft: d.soft / H,
     invert: d.invert,
     areas: d.areas.map((a) => ({
       kind: a.kind,
-      box: { x: a.box.x / W, y: a.box.y / H, w: a.box.w / W, h: a.box.h / H },
+      box: part(a.box),
       rotation: a.rotation,
+      keys: a.keys ? a.keys.map((k) => ({ id: k.id, t: k.t, box: part(k.box), rotation: k.rotation })) : null,
     })),
   }, coverKind);
+}
+
+// ---- V4.8. An area at the playhead ----
+
+/** The playhead's moment on the clip, in the clip's own seconds, held to it. */
+function coverLocalT() {
+  const live = timelineModel.layerById(layers, coverLayerId);
+  if (!live) return 0;
+  return Math.min(Math.max(compositeAt - live.start, 0), live.duration);
+}
+
+/**
+ * A draft area as it is at the playhead: itself without keyframes, and with
+ * them where they put it then. `whole` holds it to whole pixels and degrees,
+ * which is what an edit starts from; the boxes drawn over the picture are not
+ * held, so they glide with it.
+ */
+function coverShown(area, whole = true) {
+  if (!area.keys) return area;
+  const now = timelineModel.coverAreaAt(area, coverLocalT());
+  if (!whole) return now;
+  const b = now.box;
+  return {
+    kind: now.kind,
+    box: { x: Math.round(b.x), y: Math.round(b.y), w: Math.max(1, Math.round(b.w)), h: Math.max(1, Math.round(b.h)) },
+    rotation: Math.round(now.rotation) || 0,
+  };
+}
+
+/**
+ * The keyframe of the selected area an edit now goes to, as the strip marks
+ * it: the one at the playhead, within half a frame, or `{ id: null, t }` for
+ * the new one an edit would make there. Null for an area without keyframes.
+ */
+function coverEditing() {
+  const area = coverArea();
+  if (!area || !area.keys) return null;
+  const t = coverLocalT();
+  const near = timelineModel.coverKeyNear(area, t, keyframeReach());
+  return near ? { id: near.id, t: near.t } : { id: null, t };
 }
 
 // The soft edge reaches half the picture's height, as a mask's does.
@@ -114,7 +174,10 @@ function coverNewArea(kind) {
   const w = Math.max(16, Math.round(h * genDraw.shapeAspect({ kind })));
   const box = { x: Math.round((coverPic.width - w) / 2), y: Math.round((coverPic.height - h) / 2), w, h };
   const step = Math.max(8, Math.round(coverPic.height / 30));
-  const taken = (b) => coverDraft && coverDraft.areas.some((a) => a.box.x === b.x && a.box.y === b.y);
+  const taken = (b) => coverDraft && coverDraft.areas.some((a) => {
+    const at = coverShown(a).box;
+    return at.x === b.x && at.y === b.y;
+  });
   while (taken(box)) {
     box.x += step;
     box.y += step;
@@ -124,6 +187,12 @@ function coverNewArea(kind) {
 
 function coverArea() {
   return coverDraft && coverSel >= 0 ? coverDraft.areas[coverSel] || null : null;
+}
+
+/** The selected area as it is at the playhead, in whole pixels, or null. */
+function coverAreaNow() {
+  const area = coverArea();
+  return area ? coverShown(area) : null;
 }
 
 /** The window open on this layer as a conflict confirmPopoutConflict can name. */
@@ -165,7 +234,7 @@ function openCover(layerId, kind, at) {
   coverKind = kind;
   coverPic = { width: Math.max(1, Math.round(source.width)), height: Math.max(1, Math.round(source.height)) };
   const has = layer[kind];
-  coverOpened = JSON.stringify(has || null);
+  coverClip = { start: layer.start, end: timelineModel.endOf(layer) };
   coverDraft = has
     ? coverDraftOf(has)
     : { strength: timelineModel.COVER_STRENGTH[kind], soft: 0, invert: false, areas: [] };
@@ -210,7 +279,7 @@ function closeCover() {
   coverKind = null;
   coverPic = null;
   coverDraft = null;
-  coverOpened = null;
+  coverClip = null;
   coverSel = -1;
 }
 
@@ -223,9 +292,12 @@ function acceptCover() {
   const id = coverLayerId;
   const kind = coverKind;
   const cover = coverOfDraft(coverDraft);
-  const changed = JSON.stringify(cover) !== coverOpened;
+  // Against the track as it is now, not as it was when the window opened: a
+  // trim of its start meanwhile moved its keyframes and the draft's alike.
+  const live = timelineModel.layerById(layers, id);
+  const changed = !!live && JSON.stringify(cover) !== JSON.stringify(live[kind] || null);
   closeCover();
-  if (!changed || !timelineModel.layerById(layers, id)) return;
+  if (!changed) return;
   setLayers(timelineModel.setLayer(layers, id, { [kind]: cover }));
   commitHistory();
 }
@@ -242,10 +314,14 @@ function previewCoverDraft() {
     cancelCover();
     return;
   }
+  rebaseCoverDraft(live);
   const now = performance.now();
   if (compositeAt !== coverSeenAt) {
     coverSeenAt = compositeAt;
     coverSettleUntil = now + COVER_SETTLE_MS;
+    // V4.8. The areas are where their keyframes have them at the new moment,
+    // and the strip's playhead is there.
+    placeCoverBoxes();
   }
   if (compositePlaying || now < coverSettleUntil) paintCoverStage();
   const cover = coverOfDraft(coverDraft);
@@ -262,6 +338,29 @@ function previewCoverDraft() {
     },
   });
   if (!compositePlaying) drawComposite();
+}
+
+/**
+ * V4.8. A trim of the clip's start made in the main window while this one is
+ * open moved the track's keyframes back by as much, so they stay where they
+ * are on the timeline; the draft's go with them. Told from a move by the
+ * clip's end, which a trim of the start leaves where it was.
+ */
+function rebaseCoverDraft(live) {
+  const end = timelineModel.endOf(live);
+  const was = coverClip;
+  coverClip = { start: live.start, end };
+  if (!was || !coverDraft) return;
+  const shift = live.start - was.start;
+  if (Math.abs(shift) < 1e-9 || Math.abs(end - was.end) > 1e-6) return;
+  if (!coverDraft.areas.some((a) => a.keys)) return;
+  coverDraft = {
+    ...coverDraft,
+    areas: coverDraft.areas.map((a) => (a.keys
+      ? { ...a, keys: a.keys.map((k) => ({ ...k, t: Math.round((k.t - shift) * 1e6) / 1e6 })) }
+      : a)),
+  };
+  placeCoverBoxes();
 }
 
 // ---- the settings ----
@@ -295,15 +394,39 @@ function changeCover(props, except) {
   paintCoverStage();
 }
 
-/** The selected area changed. */
-function changeCoverArea(props) {
-  const area = coverArea();
-  if (!area) return;
-  const areas = coverDraft.areas.map((a, i) => (i === coverSel ? { ...a, ...props } : a));
-  coverDraft = { ...coverDraft, areas };
+/** The selected area put back into the draft, changed. */
+function setCoverArea(area) {
+  if (!coverDraft || coverSel < 0) return;
+  coverDraft = { ...coverDraft, areas: coverDraft.areas.map((a, i) => (i === coverSel ? area : a)) };
   showCoverDraft(null);
   placeCoverBoxes();
   paintCoverStage();
+}
+
+/**
+ * The selected area changed. Its shape is the area's, the same at every
+ * moment. V4.8: its box and its turn are too while it has no keyframes; once
+ * it has, they are changed at the playhead, in the keyframe there or in a
+ * new one made there, which starts as the area is at that moment.
+ */
+function changeCoverArea(props) {
+  const area = coverArea();
+  if (!area) return;
+  const placed = props.box !== undefined || props.rotation !== undefined;
+  if (!area.keys || !placed) {
+    setCoverArea({ ...area, ...props });
+    return;
+  }
+  const t = coverLocalT();
+  const near = timelineModel.coverKeyNear(area, t, keyframeReach());
+  const now = coverShown(area);
+  const { box, rotation, ...rest } = props;
+  setCoverArea(timelineModel.putCoverKey({ ...area, ...rest }, {
+    id: near ? near.id : newKeyframeId(),
+    t: near ? near.t : t,
+    box: box || now.box,
+    rotation: rotation !== undefined ? rotation : now.rotation,
+  }));
 }
 
 function selectCoverArea(index) {
@@ -422,8 +545,9 @@ function paintCoverStage() {
     const H = coverPic.height;
     const k = Math.min(1, COVER_STAGE_MAX / Math.max(fw, fh));
     const shown = { ...live, mask: null, keyframes: [], [coverKind]: coverOfDraft(coverDraft) };
+    // V4.8. At the playhead's moment of the clip, where the areas are then.
     const pic = maskedPicture(shown, entry.el, [0, 0, entry.width, entry.height],
-      { dw: fw * k, dh: fh * k }, live.start,
+      { dw: fw * k, dh: fh * k }, live.start + coverLocalT(),
       { x: 0, y: 0, w: W, h: H, W, H, ex: entry.width / W, ey: entry.height / H });
     ctx.drawImage(pic.el, ...pic.from, fx, fy, fw, fh);
   }
@@ -446,16 +570,19 @@ function placeCoverBoxes() {
   const r = stageFrameRect(coverStage);
   const area = coverArea();
   coverBoxEl.hidden = !area;
-  if (area) placeCoverNode(coverBoxEl, area, r);
+  // V4.8. Each where it is at the playhead.
+  if (area) placeCoverNode(coverBoxEl, coverShown(area, false), r);
   const doc = coverOthers.ownerDocument;
   coverOthers.replaceChildren(...coverDraft.areas.map((a, i) => {
     if (i === coverSel) return null;
     const node = doc.createElement('div');
     node.className = 'cover-area';
     node.dataset.index = String(i);
-    placeCoverNode(node, a, r);
+    placeCoverNode(node, coverShown(a, false), r);
     return node;
   }).filter(Boolean));
+  // And the strip, which shows the selected one's keyframes and the playhead.
+  coverStrip.draw();
 }
 
 function showCoverGuides(x, y) {
@@ -486,6 +613,112 @@ bindStageView(coverStage, {
   size: () => coverPic,
 });
 
+// V4.8. A press on an area while the project plays stops it first: an area
+// with keyframes is changed at the playhead, and a playhead on its way would
+// leave a keyframe at every moment the drag passed through. Captured, so the
+// press's own handler starts from the picture as it stopped.
+coverStage.addEventListener('pointerdown', (evt) => {
+  if (evt.button !== 0 || !compositePlaying || !coverDraft) return;
+  if (evt.target === coverStage || evt.target === coverCanvas) return;
+  pauseComposite();
+  followCoverPlayhead();
+}, true);
+
+// ---- V4.8. The keyframe strip: the selected area's keyframes ----
+//
+// The strip the other editor windows have (keystrip.js), under the picture.
+// What it shows and changes is the selected area's own keyframes, in the
+// draft; the playhead on it is the timeline's.
+
+/** The window brought up to the playhead as it now is. */
+function followCoverPlayhead() {
+  coverSeenAt = compositeAt;
+  coverSettleUntil = performance.now() + COVER_SETTLE_MS;
+  placeCoverBoxes();
+  paintCoverStage();
+}
+
+/** The playhead put on `t` of the clip, and the window with it. */
+function seekCoverClip(t) {
+  const live = timelineModel.layerById(layers, coverLayerId);
+  if (!live) return;
+  seekComposite(live.start + t);
+  updatePlayhead();
+  followCoverPlayhead();
+}
+
+const coverStrip = makeKeyStrip(coverKeys, coverKeysReadout, coverKeysCanvas, {
+  state: () => {
+    if (coverModal.hidden || !coverDraft) return null;
+    const live = timelineModel.layerById(layers, coverLayerId);
+    if (!live) return null;
+    const area = coverArea();
+    return {
+      layer: live,
+      keys: area && area.keys ? area.keys : [],
+      editing: coverEditing(),
+      width: coverStage.clientWidth || parseFloat(coverStage.style.width) || 1,
+      lower: !timelineModel.isStill(live),
+    };
+  },
+  // A keyframe pressed: the playhead goes to it, which makes it the one edited.
+  pick: (id) => {
+    const area = coverArea();
+    const k = area && area.keys ? area.keys.find((o) => o.id === id) : null;
+    if (k) seekCoverClip(k.t);
+  },
+  // Dragged along the clip, the playhead and the picture with it.
+  move: (id, t) => {
+    const area = coverArea();
+    const live = timelineModel.layerById(layers, coverLayerId);
+    if (!area || !area.keys || !live) return;
+    const next = timelineModel.moveCoverKey(area, id, t, live.duration);
+    const k = next.keys.find((o) => o.id === id);
+    setCoverArea(next);
+    if (k) seekCoverClip(k.t);
+  },
+  moved: () => {},
+  scrub: (t) => seekCoverClip(t),
+  scrubbed: () => {},
+  /**
+   * A double click on the bar: a keyframe there for the selected area, as
+   * the area is at that moment, so it changes nothing until it is edited.
+   * The first one an area gets puts one at the clip's very start as well,
+   * the user's rule for a clip's first keyframe.
+   */
+  add: (t) => {
+    const area = coverArea();
+    if (!area) return;
+    const reach = keyframeReach();
+    const near = timelineModel.coverKeyNear(area, t, reach);
+    if (near) {
+      seekCoverClip(near.t);
+      return;
+    }
+    let next = area;
+    if (!area.keys && t > reach) {
+      next = timelineModel.putCoverKey(next, { id: newKeyframeId(), t: 0, box: area.box, rotation: area.rotation });
+    }
+    const there = timelineModel.coverAreaAt(next, t);
+    const b = there.box;
+    next = timelineModel.putCoverKey(next, {
+      id: newKeyframeId(),
+      t,
+      box: { x: Math.round(b.x), y: Math.round(b.y), w: Math.max(1, Math.round(b.w)), h: Math.max(1, Math.round(b.h)) },
+      rotation: Math.round(there.rotation) || 0,
+    });
+    setCoverArea(next);
+    seekCoverClip(t);
+  },
+  // A right click on a keyframe deletes it, by the model's rules: the last
+  // pair leaves the area holding still as its first keyframe had it.
+  remove: (id) => {
+    const area = coverArea();
+    if (!area || !area.keys) return;
+    setCoverArea(timelineModel.removeCoverKey(area, id));
+  },
+});
+
 // ---- the selected area's box: a shape's grips, in the picture's pixels ----
 
 function setCoverBox(box) {
@@ -498,7 +731,7 @@ for (const grip of coverBoxEl.querySelectorAll('.crop-grip')) {
   const edge = grip.dataset.edge;
   const vertical = edge === 'top' || edge === 'bottom';
   grip.addEventListener('pointerdown', (evt) => {
-    const area = coverArea();
+    const area = coverAreaNow();
     if (evt.button !== 0 || !area) return;
     // Or the box underneath would take it as a move as well.
     evt.stopPropagation();
@@ -531,7 +764,7 @@ for (const corner of coverBoxEl.querySelectorAll('.crop-corner')) {
   const sideH = name.includes('l') ? 'left' : 'right';
   const sideV = name.includes('t') ? 'top' : 'bottom';
   corner.addEventListener('pointerdown', (evt) => {
-    const area = coverArea();
+    const area = coverAreaNow();
     if (evt.button !== 0 || !area) return;
     evt.stopPropagation();
     const start = { ...area.box };
@@ -561,7 +794,7 @@ for (const corner of coverBoxEl.querySelectorAll('.crop-corner')) {
 
 /** The selected area moved by a drag that began at `evt`. */
 function dragCoverArea(evt) {
-  const area = coverArea();
+  const area = coverAreaNow();
   if (!area) return;
   const start = { ...area.box };
   const s = stageFrameRect(coverStage).s;
@@ -594,7 +827,7 @@ coverOthers.addEventListener('pointerdown', (evt) => {
 // goes round it, in whole degrees, landing on a quarter turn within two of
 // one; the angle shows by the centre meanwhile.
 coverRotor.addEventListener('pointerdown', (evt) => {
-  const area = coverArea();
+  const area = coverAreaNow();
   if (evt.button !== 0 || !area) return;
   evt.stopPropagation();
   const b = area.box;
@@ -611,7 +844,7 @@ coverRotor.addEventListener('pointerdown', (evt) => {
   beginDrag(coverRotor, evt, (ev) => {
     const deg = layerGeometry.textTurnDrag(start, from, [ev.clientX - cx, ev.clientY - cy]);
     coverAngle.textContent = deg + '\u00B0';
-    const now = coverArea();
+    const now = coverAreaNow();
     if (now && deg !== now.rotation) changeCoverArea({ rotation: deg });
   }, () => {
     coverAngle.hidden = true;

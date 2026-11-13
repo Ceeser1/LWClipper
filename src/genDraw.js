@@ -545,6 +545,23 @@ const genDraw = (() => {
   }
 
   /**
+   * V4.8. Two such parts as one, for an effect whose areas move: the
+   * rectangle round both, either alone when the other is null. Both lie on
+   * the same grid, or end at the picture's last even pixel, and so does this.
+   */
+  function coverRegionUnion(a, b) {
+    if (!a || !b) return a || b || null;
+    const x = Math.min(a.x, b.x);
+    const y = Math.min(a.y, b.y);
+    return {
+      x,
+      y,
+      width: Math.max(a.x + a.width, b.x + b.width) - x,
+      height: Math.max(a.y + a.height, b.y + b.height) - y,
+    };
+  }
+
+  /**
    * V3.7.1. How much a colour lets a mask show, 0 to 1: its brightness by the
    * rule a custom mask picture has (maskPixels' luma), times its alpha. The
    * hue says nothing.
@@ -1269,6 +1286,7 @@ const genDraw = (() => {
     // V4.7.
     drawCoverMask,
     coverRegion,
+    coverRegionUnion,
     // V3.7.1.
     maskStrength,
     maskStrengthPaint,

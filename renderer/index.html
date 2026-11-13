@@ -1327,6 +1327,8 @@
         <div class="info-tip__pop">
           <div id="coverHint" class="hint-label">Click an area to select it, drag its sides to size it, a corner to size two sides together, inside it to move it and the dot above it to turn it, hold Shift to move opposite sides together</div>
           <div class="hint-label">Scroll to zoom, drag empty space or with the middle button to pan, double-click empty space to fit the frame</div>
+          <div class="hint-label">Keyframes: click one to edit it, drag one to move it, press or drag the bar to move the playhead, double-click the bar to add one, right-click one to delete it</div>
+          <div id="coverKeysHint" class="hint-label">Each area has its own keyframes. Once the selected area has one, changing it sets the keyframe at the playhead or adds one there</div>
         </div>
       </div>
       <div class="cover-areas-row">
@@ -1381,6 +1383,12 @@
           <div id="coverRotor" class="shape-rotor text-rotor"></div>
         </div>
         <div id="coverAngle" class="text-angle" data-no-translate hidden></div>
+      </div>
+      <!-- V4.8. The selected area's own keyframes, so an area can follow
+           what it hides: the editors' strip, keystrip.js. -->
+      <div id="coverKeys" class="crop-keys gen-keys">
+        <div id="coverKeysReadout" class="crop-keys__readout"></div>
+        <canvas id="coverKeysCanvas" class="crop-keys__canvas"></canvas>
       </div>
       <div class="crop-actions">
         <button id="coverRemoveBtn" class="crop-remove-btn">Remove</button>

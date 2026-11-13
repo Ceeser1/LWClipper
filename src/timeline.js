@@ -514,13 +514,212 @@ const timelineModel = (() => {
   const COVER_AREAS_MAX = 24;
   const COVER_STRENGTH = { obscure: 30, pixelate: 25 };
 
+  // V4.8. An area may carry keyframes of its own, `keys`, see "Areas that
+  // move" below. One without any has no `keys` at all, and is the area 4.7
+  // wrote.
   function coverAreaOf(v) {
     const src = v && typeof v === 'object' ? v : {};
-    return {
+    const area = {
       kind: oneOf(src.kind, SHAPE_KINDS, 'square'),
       box: maskBoxOf(src.box),
       rotation: rotationOf(src.rotation),
     };
+    const keys = coverKeysOf(src.keys);
+    return keys.length ? { ...area, keys } : area;
+  }
+
+  // ---- V4.8. Areas that move ----
+  //
+  // So an area can follow a face: each area carries keyframes of its own,
+  // `keys: [{ id, t, box, rotation }]`, and between two of them its box and
+  // its turn go smoothly from the one to the other, the user's rule for every
+  // keyframe: no hold, two close together make a jump. They are the area's and
+  // not the layer's, since the layer's keyframes are where the picture is put
+  // (the Crop and Mask window's) and an area is on the picture itself, and
+  // two areas on one picture follow two different things.
+  //
+  // `t` is the clip's own seconds like a layer keyframe's, so the same rules
+  // hold: moving the clip takes them along, a trim of its start shifts them
+  // back so they stay where they are on the timeline, a split gives both
+  // halves all of them, and one trimmed out of view is kept and still steers.
+  // Before the first the area is the first's, after the last the last's.
+  // While an area has keys they are the whole of where it is; its own box and
+  // turn are what it had before the first one.
+  //
+  // The functions below take an area in any unit, the layer's fractions or
+  // the window's pixels: they only blend and compare its numbers.
+
+  /** One of an area's keyframes as a file may hand it over, or null. */
+  function coverKeyOf(v) {
+    if (!v || typeof v !== 'object') return null;
+    const t = Number(v.t);
+    if (!Number.isFinite(t)) return null;
+    return {
+      id: typeof v.id === 'string' && v.id ? v.id : newKeyframeId(),
+      t: round(t),
+      box: maskBoxOf(v.box),
+      rotation: rotationOf(v.rotation),
+    };
+  }
+
+  /** An area's keyframes in time order, one to a moment and one to an id. */
+  function coverKeysOf(list) {
+    if (!Array.isArray(list)) return [];
+    const byTime = new Map();
+    const ids = new Set();
+    for (const raw of list) {
+      const k = coverKeyOf(raw);
+      if (!k) continue;
+      if (ids.has(k.id)) k.id = newKeyframeId();
+      ids.add(k.id);
+      byTime.set(k.t, k);
+    }
+    return [...byTime.values()].sort((a, b) => a.t - b.t);
+  }
+
+  function coverKeysFor(area) {
+    return area && Array.isArray(area.keys) ? area.keys : [];
+  }
+
+  /** From turn a to turn b the short way round, in signed degrees. */
+  function turnBetween(a, b) {
+    const d = ((((Number(b) || 0) - (Number(a) || 0)) % 360 + 540) % 360) - 180;
+    return d === -180 ? 180 : d;
+  }
+
+  /**
+   * An area as it is at `t`, the clip's own seconds: `{ kind, box, rotation }`
+   * with no keys, which is what the drawing takes. Its box and turn blended
+   * between the keyframes either side, the turn the short way round.
+   */
+  function coverAreaAt(area, t) {
+    const list = coverKeysFor(area);
+    const put = (box, rotation) => ({ kind: area.kind, box: { ...box }, rotation });
+    if (!list.length) return put(area.box, area.rotation || 0);
+    const at = Number.isFinite(Number(t)) ? Number(t) : 0;
+    if (at <= list[0].t) return put(list[0].box, list[0].rotation || 0);
+    const last = list[list.length - 1];
+    if (at >= last.t) return put(last.box, last.rotation || 0);
+    let i = 0;
+    while (list[i + 1].t <= at) i += 1;
+    const a = list[i];
+    const b = list[i + 1];
+    const u = (at - a.t) / (b.t - a.t);
+    const lerp = (p, q) => p + (q - p) * u;
+    return put(
+      { x: lerp(a.box.x, b.box.x), y: lerp(a.box.y, b.box.y), w: lerp(a.box.w, b.box.w), h: lerp(a.box.h, b.box.h) },
+      rotationOf((a.rotation || 0) + turnBetween(a.rotation, b.rotation) * u),
+    );
+  }
+
+  /**
+   * An Obscure or a Pixelate as it is at `t` of the clip, every area where its
+   * keyframes put it then. The very same object when no area has any.
+   */
+  function coverAt(cover, t) {
+    if (!cover || !cover.areas.some((a) => coverKeysFor(a).length)) return cover;
+    return { ...cover, areas: cover.areas.map((a) => coverAreaAt(a, t)) };
+  }
+
+  /**
+   * The stretch of the clip over which an Obscure or a Pixelate changes, in
+   * its own seconds, or null when it never does: no keyframes, or ones that
+   * all say the same. From the first keyframe that shows to the last, over
+   * every area that moves.
+   */
+  function coverMotion(layer, cover) {
+    if (!layer || !cover) return null;
+    let from = Infinity;
+    let to = -Infinity;
+    for (const a of cover.areas) {
+      const list = coverKeysFor(a);
+      if (list.length < 2) continue;
+      const first = JSON.stringify([list[0].box, list[0].rotation]);
+      if (list.every((k) => JSON.stringify([k.box, k.rotation]) === first)) continue;
+      from = Math.min(from, list[0].t);
+      to = Math.max(to, list[list.length - 1].t);
+    }
+    from = Math.max(0, from);
+    to = Math.min(layer.duration, to);
+    return to > from ? { from, to } : null;
+  }
+
+  /** The keyframe of an area at `t`, within `reach` either side, or null. */
+  function coverKeyNear(area, t, reach = 0) {
+    let best = null;
+    for (const k of coverKeysFor(area)) {
+      const d = Math.abs(k.t - t);
+      if (d <= reach && (!best || d < Math.abs(best.t - t))) best = k;
+    }
+    return best;
+  }
+
+  /**
+   * A keyframe put on an area, a new one or a changed one by its id. One that
+   * was at the same moment already gives way to it.
+   */
+  function putCoverKey(area, key) {
+    const k = { id: key.id || newKeyframeId(), t: round(Number(key.t) || 0), box: { ...key.box }, rotation: key.rotation || 0 };
+    const rest = coverKeysFor(area).filter((o) => o.id !== k.id && o.t !== k.t);
+    return { ...area, keys: [...rest, k].sort((a, b) => a.t - b.t) };
+  }
+
+  /**
+   * A keyframe taken off an area, by the rules a layer's go by: the first
+   * deleted with two or more after it takes the second's settings and stays,
+   * and when a delete leaves one alone that goes too, the area holding still
+   * from then on as the first had it.
+   */
+  function removeCoverKey(area, id) {
+    const list = coverKeysFor(area);
+    const gone = list.find((k) => k.id === id);
+    if (!gone) return area;
+    if (gone === list[0] && list.length > 2) {
+      const second = list[1];
+      return { ...area, keys: list.map((k) => (k === gone ? { ...k, box: { ...second.box }, rotation: second.rotation } : k)) };
+    }
+    const keys = list.filter((k) => k !== gone);
+    if (keys.length > 1) return { ...area, keys };
+    const { keys: _keys, ...still } = area;
+    return { ...still, box: { ...list[0].box }, rotation: list[0].rotation || 0 };
+  }
+
+  /**
+   * A keyframe of an area dragged along a clip `duration` long. It stays on
+   * the part that shows and never lands on another's moment, stopping a
+   * millisecond short instead.
+   */
+  function moveCoverKey(area, id, t, duration) {
+    const list = coverKeysFor(area);
+    const k = list.find((o) => o.id === id);
+    if (!k) return area;
+    let at = clamp(round(Number(t)), 0, round(duration));
+    const taken = (v) => list.some((o) => o !== k && Math.abs(o.t - v) < 0.0005);
+    if (taken(at)) at = round(at + (at >= k.t ? -0.001 : 0.001));
+    if (taken(at)) return area;
+    return { ...area, keys: list.map((o) => (o === k ? { ...o, t: at } : o)).sort((a, b) => a.t - b.t) };
+  }
+
+  /** An area with every keyframe moved by `dt` seconds. */
+  function shiftAreaKeys(area, dt) {
+    const list = coverKeysFor(area);
+    if (!list.length || !dt) return area;
+    return { ...area, keys: list.map((k) => ({ ...k, t: round(k.t + dt) })) };
+  }
+
+  /**
+   * A layer's Obscure and Pixelate with every area's keyframes moved by `dt`
+   * of the clip's seconds, as `{ obscure, pixelate }` to spread onto it: what
+   * a trim of the start and a split do to them, as they do to the layer's own.
+   */
+  function shiftCoverKeys(layer, dt) {
+    const out = {};
+    for (const kind of COVER_KINDS) {
+      const cover = layer[kind];
+      if (!cover || !dt || !cover.areas.some((a) => coverKeysFor(a).length)) continue;
+      out[kind] = { ...cover, areas: cover.areas.map((a) => shiftAreaKeys(a, dt)) };
+    }
+    return out;
   }
 
   /** An Obscure or a Pixelate, or null for none: one with no area is none. */
@@ -1520,6 +1719,8 @@ const timelineModel = (() => {
           // V3.3. Held where they are on the timeline while the start moves
           // under them, which on the clip's own clock is back by the shift.
           keyframes: shiftKeyframes(l, -shift),
+          // V4.8. And the ones its Obscure and Pixelate areas carry.
+          ...shiftCoverKeys(l, -shift),
         };
       }
       const latest = round(l.start + sourceRemaining(l));
@@ -2136,6 +2337,8 @@ const timelineModel = (() => {
       // half cannot show are out of view and still steer it, the same as after
       // a trim.
       keyframes: shiftKeyframes(layer, -kept),
+      // V4.8. The same for the keyframes of its Obscure and Pixelate areas.
+      ...shiftCoverKeys(layer, -kept),
     };
     return [left, right];
   }
@@ -2737,6 +2940,15 @@ const timelineModel = (() => {
     COVER_STRENGTH,
     coverOf,
     coverList,
+    coverKeysFor,
+    coverAreaAt,
+    coverAt,
+    coverMotion,
+    coverKeyNear,
+    putCoverKey,
+    removeCoverKey,
+    moveCoverKey,
+    shiftCoverKeys,
     obscureSigma,
     pixelateBlock,
     maskMotion,

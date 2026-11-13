@@ -260,44 +260,93 @@ async function exportMask(l, frame) {
  * in that part as a PNG, white on black, and the figure its filter takes.
  * Only that part is filtered, so a face in a 4K frame costs a face's worth.
  * Cached by what it shows, like a mask.
+ *
+ * V4.8. One whose areas move between keyframes of their own goes as the
+ * frames of the stretch where they do, at the project's rate, each the moment
+ * at its start as the preview shows it, the way a moving mask goes. The part
+ * filtered is then every part it touches over that stretch, one rectangle for
+ * the whole clip, since the encoder's crop is fixed.
  */
-async function exportCovers(l) {
+async function exportCovers(l, frame) {
   const source = layerSource(l);
   const files = [];
   if (!source) return { ok: true, files };
   const W = Math.round(source.width);
   const H = Math.round(source.height);
-  for (const { kind, cover } of timelineModel.coverList(l)) {
-    const sigma = timelineModel.obscureSigma(cover.strength, H);
-    const block = timelineModel.pixelateBlock(cover.strength, H);
-    const region = genDraw.coverRegion(cover, W, H, kind === 'obscure'
-      ? { margin: Math.ceil(sigma * 3), grid: 2 }
-      : { margin: 0, grid: block });
+  const fps = Number(frame && frame.fps) || 30;
+  for (const { kind, cover: whole } of timelineModel.coverList(l)) {
+    const sigma = timelineModel.obscureSigma(whole.strength, H);
+    const block = timelineModel.pixelateBlock(whole.strength, H);
+    const room = kind === 'obscure' ? { margin: Math.ceil(sigma * 3), grid: 2 } : { margin: 0, grid: block };
+    // The frames it changes over, or the one it is the whole clip long.
+    const moving = timelineModel.coverMotion(l, whole);
+    const total = Math.max(1, Math.round(l.duration * fps));
+    const first = moving ? Math.min(total - 1, Math.max(0, Math.floor(moving.from * fps))) : 0;
+    const last = moving ? Math.min(total - 1, Math.max(first, Math.ceil(moving.to * fps))) : 0;
+    const at = (i) => timelineModel.coverAt(whole, i / fps);
+    let region = null;
+    for (let i = first; i <= last; i += 1) {
+      region = genDraw.coverRegionUnion(region, genDraw.coverRegion(at(i), W, H, room));
+    }
     if (!region) continue;
     // A picture held to the size every drawn surface is; the encoder scales
     // it back to the region.
     const k = Math.min(1, GEN_SURFACE_MAX / Math.max(region.width, region.height));
     const w = Math.max(2, Math.round(region.width * k));
     const h = Math.max(2, Math.round(region.height * k));
-    const key = JSON.stringify(['cover', cover.areas, cover.soft, cover.invert, W, H, region, w, h]);
-    let saved = await window.lwclipper.genImage(key, null);
-    if (saved.ok && !saved.path) {
-      const ink = new OffscreenCanvas(w, h).getContext('2d');
-      ink.setTransform(k, 0, 0, k, -region.x * k, -region.y * k);
+    const ink = new OffscreenCanvas(w, h).getContext('2d');
+    ink.setTransform(k, 0, 0, k, -region.x * k, -region.y * k);
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    // Where `cover` acts in the region, white on black, as a PNG's bytes.
+    const png = async (cover) => {
       genDraw.drawCoverMask(ink, cover, W, H);
-      const canvas = document.createElement('canvas');
-      canvas.width = w;
-      canvas.height = h;
-      const ctx = canvas.getContext('2d');
       ctx.fillStyle = '#000';
       ctx.fillRect(0, 0, w, h);
       ctx.drawImage(ink.canvas, 0, 0);
       const blob = await new Promise((done) => canvas.toBlob(done, 'image/png'));
-      if (!blob) return { ok: false, error: 'canvas toBlob gave no PNG' };
-      saved = await window.lwclipper.genImage(key, new Uint8Array(await blob.arrayBuffer()));
+      return blob ? new Uint8Array(await blob.arrayBuffer()) : null;
+    };
+    if (!moving) {
+      const cover = at(0);
+      const key = JSON.stringify(['cover', cover.areas, cover.soft, cover.invert, W, H, region, w, h]);
+      let saved = await window.lwclipper.genImage(key, null);
+      if (saved.ok && !saved.path) {
+        const bytes = await png(cover);
+        if (!bytes) return { ok: false, error: 'canvas toBlob gave no PNG' };
+        saved = await window.lwclipper.genImage(key, bytes);
+      }
+      if (!saved.ok || !saved.path) return { ok: false, error: saved.error || 'no PNG path' };
+      files.push({ kind, src: saved.path, region, sigma, block });
+      continue;
     }
-    if (!saved.ok || !saved.path) return { ok: false, error: saved.error || 'no PNG path' };
-    files.push({ kind, src: saved.path, region, sigma, block });
+    const key = JSON.stringify(['coverframes', whole.areas, whole.soft, whole.invert, W, H, region, w, h,
+      l.duration, fps, first, last]);
+    const begun = await window.lwclipper.genFrames(key, { start: true });
+    if (!begun.ok) return { ok: false, error: begun.error || 'no folder for the frames' };
+    if (!begun.have) {
+      for (let i = first; i <= last; i += 1) {
+        const bytes = await png(at(i));
+        if (!bytes) return { ok: false, error: 'canvas toBlob gave no PNG' };
+        const wrote = await window.lwclipper.genFrame(key, i - first, bytes);
+        if (!wrote.ok) return { ok: false, error: wrote.error };
+      }
+      const done = await window.lwclipper.genFrames(key, { finish: true });
+      if (!done.ok) return { ok: false, error: done.error };
+    }
+    files.push({
+      kind,
+      region,
+      sigma,
+      block,
+      frames: {
+        pattern: begun.dir.replace(/\\/g, '/') + '/%05d.png',
+        lead: first / fps,
+        tail: Math.max(0, l.duration - (last + 1) / fps),
+      },
+    });
   }
   return { ok: true, files };
 }
@@ -315,7 +364,7 @@ async function exportLayers() {
         if (!m.ok) return m;
         if (m.file) next = { ...next, maskFile: m.file };
       }
-      const c = await exportCovers(l);
+      const c = await exportCovers(l, frame);
       if (!c.ok) return c;
       if (c.files.length) next = { ...next, coverFiles: c.files };
       out.push(next);

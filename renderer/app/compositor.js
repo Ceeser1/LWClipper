@@ -480,7 +480,8 @@ function drawLayerInto(ctx, canvas, layer, crop = layer.crop, render = layer.ren
 // on them in turn, and each is drawn out before the next is cut.
 // V4.7. Three more for Obscure and Pixelate: the effect, and two that the
 // blur's copy and Pixelate's halvings are made on.
-const maskedSurfaces = [null, null, null, null, null];
+// V4.8. And one for the whole picture with Obscure on it, see coverUnderlay.
+const maskedSurfaces = [null, null, null, null, null, null];
 function maskedSurface(i, w, h) {
   if (!maskedSurfaces[i]) maskedSurfaces[i] = new OffscreenCanvas(w, h).getContext('2d');
   const c = maskedSurfaces[i].canvas;
@@ -501,15 +502,22 @@ function maskedPicture(layer, el, from, d, at, src = null) {
   // A custom mask whose picture cannot be read, gone from the disk since, is
   // shown as no mask rather than as a picture with nothing left of it.
   const cut = !!mask && !maskPictureFailed(mask);
-  const covers = src ? timelineModel.coverList(layer) : [];
+  // V4.8. Each with its areas where their own keyframes put them at `at`.
+  const covers = (src ? timelineModel.coverList(layer) : [])
+    .map((c) => ({ kind: c.kind, cover: timelineModel.coverAt(c.cover, at - layer.start) }));
   if (!cut && !covers.length) return { el, from };
   const w = Math.max(1, Math.round(d.dw));
   const h = Math.max(1, Math.round(d.dh));
+  // Before the picture is drawn: it is made on the surfaces the covers use.
+  const under = coverUnderlay(covers, el, src, w, h);
   const p = maskedSurface(0, w, h);
   p.globalCompositeOperation = 'source-over';
   p.clearRect(0, 0, w, h);
   p.drawImage(el, ...from, 0, 0, w, h);
-  for (const c of covers) layCover(p, c, el, src, w, h);
+  for (const c of covers) {
+    if (c.kind === 'pixelate' && under) layCover(p, c, under.el, under.src, w, h);
+    else layCover(p, c, el, src, w, h);
+  }
   if (!cut) return { el: p.canvas, from: [0, 0, w, h] };
   const m = maskedSurface(1, w, h);
   m.setTransform(1, 0, 0, 1, 0, 0);
@@ -536,7 +544,8 @@ function maskedPicture(layer, el, from, d, at, src = null) {
 // blended into the picture where it acts, genDraw.drawCoverMask laid the way
 // the source is: the picture taken out there and the effect put in, not the
 // one over the other, which on a PNG with see-through parts would add the
-// two up.
+// two up. `cover` is the effect at the moment drawn, its areas already where
+// their keyframes have them then (V4.8, timeline.js coverAt).
 function layCover(p, { kind, cover }, el, src, w, h) {
   const kx = w / src.w;
   const ky = h / src.h;
@@ -561,6 +570,43 @@ function layCover(p, { kind, cover }, el, src, w, h) {
   p.globalCompositeOperation = 'lighter';
   p.drawImage(e.canvas, 0, 0);
   p.globalCompositeOperation = 'source-over';
+}
+
+/**
+ * V4.8. What Pixelate takes its blocks from when the layer has an Obscure
+ * that meets it: the whole source picture with Obscure already on it, since
+ * the export lays the one on and then the other, and a block is the average
+ * of what is there by then. Found with areas that move, which cross each
+ * other where still ones seldom did: the preview had taken the blocks from
+ * the picture as the file has it, and a blurred edge inside a pixelated part
+ * came out sharper than in the file.
+ *
+ * Null when there is nothing to it, the two not touching at this moment or
+ * the layer having only one of them, and the blocks come from the element as
+ * they always did. Made no finer than the picture is drawn, so a small
+ * preview of a large source costs a small surface. Uses the covers' other
+ * surfaces, so it is made before the picture is drawn on its own.
+ */
+function coverUnderlay(covers, el, src, w, h) {
+  const obscure = covers.find((c) => c.kind === 'obscure');
+  const pixelate = covers.find((c) => c.kind === 'pixelate');
+  if (!src || !obscure || !pixelate) return null;
+  const sigma = timelineModel.obscureSigma(obscure.cover.strength, src.H);
+  const a = genDraw.coverRegion(obscure.cover, src.W, src.H, { margin: Math.ceil(sigma * 3) });
+  const b = genDraw.coverRegion(pixelate.cover, src.W, src.H,
+    { grid: timelineModel.pixelateBlock(pixelate.cover.strength, src.H) });
+  if (!a || !b) return null;
+  if (a.x >= b.x + b.width || b.x >= a.x + a.width || a.y >= b.y + b.height || b.y >= a.y + a.height) return null;
+  const k = Math.min(1, Math.max(w / src.w, h / src.h));
+  const uw = Math.max(1, Math.round(src.W * Math.min(src.ex, k)));
+  const uh = Math.max(1, Math.round(src.H * Math.min(src.ey, k)));
+  const u = maskedSurface(5, uw, uh);
+  u.setTransform(1, 0, 0, 1, 0, 0);
+  u.globalCompositeOperation = 'source-over';
+  u.clearRect(0, 0, uw, uh);
+  u.drawImage(el, 0, 0, src.W * src.ex, src.H * src.ey, 0, 0, uw, uh);
+  layCover(u, obscure, el, { x: 0, y: 0, w: src.W, h: src.H, W: src.W, H: src.H, ex: src.ex, ey: src.ey }, uw, uh);
+  return { el: u.canvas, src: { ...src, ex: uw / src.W, ey: uh / src.H } };
 }
 
 /**

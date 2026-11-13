@@ -405,5 +405,6 @@
   "Strength:": "Stärke:",
   "Invert Areas": "Bereiche umkehren",
   "Click an area to select it, drag its sides to size it, a corner to size two sides together, inside it to move it and the dot above it to turn it, hold Shift to move opposite sides together": "Einen Bereich anklicken, um ihn auszuwählen, seine Seiten ziehen, um ihn zu skalieren, eine Ecke ziehen, um zwei Seiten gemeinsam zu skalieren, innen ziehen, um ihn zu verschieben, den Punkt darüber ziehen, um ihn zu drehen, Umschalt gedrückt halten, um gegenüberliegende Seiten gemeinsam zu bewegen",
-  "The Obscure or Pixelate window is open. Going on closes it and discards what it has not accepted.": "Das Fenster für Unkenntlich machen oder Verpixeln ist geöffnet. Wenn du fortfährst, wird es geschlossen und alles nicht Übernommene verworfen."
+  "The Obscure or Pixelate window is open. Going on closes it and discards what it has not accepted.": "Das Fenster für Unkenntlich machen oder Verpixeln ist geöffnet. Wenn du fortfährst, wird es geschlossen und alles nicht Übernommene verworfen.",
+  "Each area has its own keyframes. Once the selected area has one, changing it sets the keyframe at the playhead or adds one there": "Jeder Bereich hat eigene Keyframes. Sobald der ausgewählte Bereich einen hat, setzt eine Änderung den Keyframe an der Abspielposition oder fügt dort einen hinzu"
 }

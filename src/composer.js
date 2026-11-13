@@ -249,10 +249,27 @@ function coverHead(graph, l, n, input, fps, inputs, source) {
     const blur = 'gblur=sigma=' + fixed(Math.min(1024, Math.max(0.1, Number(f.sigma) || 0.1))) + ':steps=6';
     const block = Math.max(2, Math.round(Number(f.block) || 2));
     const blocks = 'pixelize=w=' + block + ':h=' + block;
-    const where = '[' + f.input + ':v]fps=' + fps + ',format=gray,scale=' + r.width + ':' + r.height;
+    // V4.8. Where it acts as one PNG, or with areas that move as the frames
+    // of the stretch where they do, held at either end like a moving mask's.
+    // Both this and the picture count from the clip's first frame here, the
+    // layer's place on the timeline being given to it further down.
+    const where = '[' + f.input + ':v]' + chain([
+      f.frames && f.frames.pattern ? holdFrames(f.frames) : null,
+      'fps=' + fps,
+      'format=gray',
+      'scale=' + r.width + ':' + r.height,
+    ]);
     if (blended) {
       graph.push('[' + cur + ']format=yuva444p,split[' + t + 'a][' + t + 'b]');
-      graph.push('[' + t + 'b]' + (f.kind === 'obscure' ? blur : blocks) + '[' + t + 'c]');
+      // V4.8. Premultiplied round the filter, as the preview's canvas is: a
+      // blur or a block that takes in both solid and see-through pixels must
+      // weigh each colour by how much of it shows. Filtered plane by plane,
+      // colour apart from alpha, the colour under a see-through part came
+      // through at full weight (measured on a PNG half solid and half at 35%:
+      // a blurred edge up to 44 of 255 off the preview, 12 this way; a block
+      // across that edge 23 off, 6 this way).
+      graph.push('[' + t + 'b]premultiply=inplace=1,' + (f.kind === 'obscure' ? blur : blocks)
+        + ',unpremultiply=inplace=1[' + t + 'c]');
       graph.push(where + ',pad=' + Math.round(source.width) + ':' + Math.round(source.height) + ':' + r.x + ':' + r.y
         + ':black,mergeplanes=0x00000000:yuva444p[' + t + 'm]');
       graph.push('[' + t + 'a][' + t + 'c][' + t + 'm]maskedmerge,format=yuva420p[' + t + 'o]');
@@ -522,9 +539,12 @@ function buildComposeArgs({
   const addCovers = (l) => {
     if (!Array.isArray(l.coverFiles) || l.type !== 'video') return;
     coverInputsOf.set(l.id, l.coverFiles.map((f) => {
-      if (!f || !f.src) return undefined;
+      // V4.8. One whose areas move comes as numbered frames, like a moving mask.
+      const frames = f && f.frames && f.frames.pattern ? f.frames : null;
+      if (!f || (!f.src && !frames)) return undefined;
       inputs.push(null);
-      args.push('-loop', '1', '-framerate', String(fps), '-t', fixed(l.duration), '-i', f.src);
+      if (frames) args.push('-framerate', String(fps), '-start_number', '0', '-i', frames.pattern);
+      else args.push('-loop', '1', '-framerate', String(fps), '-t', fixed(l.duration), '-i', f.src);
       return inputs.length - 1;
     }));
   };

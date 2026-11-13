@@ -241,7 +241,8 @@ test('a PNG with see-through parts is blended whole, its own alpha kept', () => 
   const parts = g.split(';');
   assert.ok(parts.includes('[0:v]fps=30,format=yuva420p[cv0s]'));
   assert.ok(parts.includes('[cv0s]format=yuva444p,split[cv0x0a][cv0x0b]'));
-  assert.ok(parts.includes('[cv0x0b]gblur=sigma=16.2:steps=6[cv0x0c]'), 'the whole picture');
+  // V4.8. Premultiplied round the filter, so see-through colour weighs what it shows.
+  assert.ok(parts.includes('[cv0x0b]premultiply=inplace=1,gblur=sigma=16.2:steps=6,unpremultiply=inplace=1[cv0x0c]'), 'the whole picture');
   assert.ok(parts.includes('[1:v]fps=30,format=gray,scale=300:200,pad=640:360:200:80:black,mergeplanes=0x00000000:yuva444p[cv0x0m]'));
   assert.ok(parts.includes('[cv0x0a][cv0x0c][cv0x0m]maskedmerge,format=yuva420p[cv0x0o]'));
   assert.equal(g.includes('alphamerge'), false, 'not laid over itself, which would add the two alphas up');
