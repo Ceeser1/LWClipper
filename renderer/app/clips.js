@@ -1283,7 +1283,10 @@ function fadeCurveLabels() {
 
 // A picture of one curve, in the shape it has on this end of the clip: the
 // same traceFadeRamp the clip itself is drawn with.
-function drawFadeCurveIcon(canvas, curve, out, on) {
+// V4.9. `doubled` is the fade of a transition between two overlapping clips:
+// the curve and the same one the other way up, the crossing pair the clip is
+// drawn with, since choosing it sets both.
+function drawFadeCurveIcon(canvas, curve, out, on, doubled = false) {
   const ratio = window.devicePixelRatio || 1;
   const w = 40;
   const h = 24;
@@ -1299,7 +1302,8 @@ function drawFadeCurveIcon(canvas, curve, out, on) {
   ctx.strokeStyle = on ? '#8fe0a4' : '#d2d2d8';
   ctx.lineWidth = 1.6;
   ctx.beginPath();
-  traceFadeRamp(ctx, curve, out, 4, w - 4, 4, h - 4);
+  traceFadeRamp(ctx, curve, doubled ? false : out, 4, w - 4, 4, h - 4);
+  if (doubled) traceFadeRamp(ctx, curve, true, 4, w - 4, 4, h - 4);
   ctx.stroke();
 }
 
@@ -1322,7 +1326,11 @@ function openFadeMenu(evt, layerId, which) {
   selectLayer(layerId);
   closeClipMenu();
 
-  const current = timelineModel.fadeCurvesOf(layer)[which];
+  // V4.9. Where this end is part of a transition between two overlapping
+  // clips, the curve is the transition's: each choice is drawn as the pair of
+  // ramps it gives, and choosing it sets it on both clips.
+  const cross = timelineModel.overlapOf(layers, layerId, which);
+  const current = cross ? cross.curve : timelineModel.fadeCurvesOf(layer)[which];
   const labels = fadeCurveLabels();
   const menu = document.createElement('div');
   menu.className = 'clip-menu clip-menu--fade';
@@ -1334,14 +1342,18 @@ function openFadeMenu(evt, layerId, which) {
     b.setAttribute('aria-checked', id === current ? 'true' : 'false');
     b.title = labels[id];
     const icon = document.createElement('canvas');
-    drawFadeCurveIcon(icon, id, which === 'out', id === current);
+    drawFadeCurveIcon(icon, id, which === 'out', id === current, !!cross);
     const name = document.createElement('span');
     name.textContent = labels[id];
     b.append(icon, name);
     b.addEventListener('click', () => {
-      // The ticked one again is not a change, so it is not an undo step.
-      if (id === current) return;
-      setLayers(timelineModel.fadeCurveGroup(layers, layerId, which, id));
+      // fadeCurveAcross hands back the list it was given when both ends
+      // already have this curve, which is not a change and so not an undo
+      // step. The ticked one can still be one: the other clip's end may not
+      // have it yet.
+      const next = timelineModel.fadeCurveAcross(layers, layerId, which, id);
+      if (next === layers) return;
+      setLayers(next);
       commitHistory();
     });
     menu.appendChild(b);
@@ -2177,7 +2189,13 @@ function drawClipFades(layer, ctx, leftX, width, height) {
       : top;
     // V3.8.1. What this clip's fade in covers of the one under it, so the
     // under one's ramp is the same curve the other way up.
-    traceFadeRamp(ctx, curves.in, true, xAt(layer.start), xAt(layer.start + cross.overlap), underTop, height);
+    // V4.9. Where the one under it fades out itself, a sound or a see-through
+    // picture, the line is its own curve, which a curve chosen for the
+    // transition keeps the same as this one's.
+    const underOut = under && Math.abs(timelineModel.fadesOf(under).out - cross.overlap) < 1e-6
+      ? timelineModel.fadeCurvesOf(under).out
+      : curves.in;
+    traceFadeRamp(ctx, underOut, true, xAt(layer.start), xAt(layer.start + cross.overlap), underTop, height);
   }
   ctx.stroke();
   ctx.restore();

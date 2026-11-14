@@ -1537,6 +1537,76 @@ const timelineModel = (() => {
     return next;
   }
 
+  // ---- V4.9. The overlap a fade is part of ----
+  //
+  // The user: "Let the programm see if tracks overlap in a layer (it already
+  // does kinda, auto-applying a crossfade), when 2 tracks overlap, opening the
+  // fade-curves of the end (fade-out) of trackA or start (fade-in) of trackB
+  // shouldnt show the default grid for fading, but doubled (vertically mirrored
+  // second line) like it will be when applying."
+  //
+  // So an overlap is something that can be asked for by either of its two
+  // ends, and a curve chosen on either end is the transition's: the later
+  // clip comes in by it and the earlier one goes out by the same curve the
+  // other way up, which is the crossing pair the clip is drawn with.
+
+  /**
+   * The overlap one end of a layer is part of: `which` is 'in' for its
+   * start, where it is the later of two overlapping clips on a row, and 'out'
+   * for its end, where it is the earlier. Null when that end overlaps nothing,
+   * or when the later clip's fade in is no longer the one the overlap wrote: a
+   * fade dragged by hand since is somebody's own and is a plain fade again.
+   *
+   * `both` says whether the earlier clip fades out as well (a sound, or a
+   * picture that is see-through), and `curve` is the curve the transition
+   * runs by, the later clip's fade in.
+   */
+  function overlapOf(layers, id, which) {
+    for (const [pair, o] of overlapsOf(layers)) {
+      const [a, b] = pair.split('|');
+      if ((which === 'out' ? a : b) !== id) continue;
+      const from = layerById(layers, a);
+      const into = layerById(layers, b);
+      if (!from || !into) return null;
+      if (Math.abs(fadesOf(into).in - o) > 1e-6) return null;
+      return {
+        from: a,
+        into: b,
+        overlap: o,
+        both: fadesOutUnder(from, into) && Math.abs(fadesOf(from).out - o) <= 1e-6,
+        curve: fadeCurvesOf(into).in,
+      };
+    }
+    return null;
+  }
+
+  /**
+   * V4.9. Set the curve of one end of a layer's fade, for its whole group as
+   * fadeCurveGroup does, and where that end is part of a transition for the
+   * clip on the other side of it too: the later clip's fade in and the earlier
+   * clip's fade out carry the same curve, so the two ramps mirror each other.
+   * Without a transition it is fadeCurveGroup exactly.
+   */
+  function fadeCurveAcross(layers, id, which, curve) {
+    const other = which === 'out' ? 'in' : 'out';
+    let next = layers;
+    for (const member of groupOf(layers, id)) {
+      // Asked of the list as it was, so one member's change cannot hide
+      // another's transition.
+      const cross = overlapOf(layers, member.id, which);
+      next = setFadeCurve(next, member.id, which, curve);
+      if (!cross) continue;
+      // The clip on the other side with its own group, so the choice comes
+      // to the same thing whichever end of the transition it was made on.
+      for (const partner of groupOf(layers, which === 'out' ? cross.into : cross.from)) {
+        next = setFadeCurve(next, partner.id, other, curve);
+      }
+    }
+    // The list it was given when every end already had the curve, so a caller
+    // can tell that nothing moved and take no undo step for it.
+    return next.every((l, i) => l === layers[i]) ? layers : next;
+  }
+
   /**
    * One lane one place towards the front or the back, with everything on it.
    *
@@ -2905,6 +2975,9 @@ const timelineModel = (() => {
     lanesOf,
     overlapsOf,
     crossfade,
+    // V4.9.
+    overlapOf,
+    fadeCurveAcross,
     moveLane,
     seeThrough,
     fadesOutUnder,
