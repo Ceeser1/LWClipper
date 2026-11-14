@@ -401,6 +401,7 @@ function bindSideSplitter(handle, sign) {
     sideFloors = null;
     document.body.classList.remove('splitting-side');
     if (handle.hasPointerCapture(evt.pointerId)) handle.releasePointerCapture(evt.pointerId);
+    saveLayout();
   };
   handle.addEventListener('pointerup', done);
   handle.addEventListener('pointercancel', done);
@@ -465,6 +466,7 @@ layersSplitter.addEventListener('pointermove', (evt) => {
   // and comes back lands where it started rather than a drag's worth away.
   const want = clamp(Math.round(gutterFrom.width + (evt.clientX - gutterFrom.x)),
     GUTTER_MIN, GUTTER_MAX);
+  gutterWish = want;
   document.documentElement.style.setProperty('--timeline-gutter', want + 'px');
   // The lane is narrower or wider than it was and every second in it has moved,
   // so the ruler, the clips and the playhead are all redrawn against the new
@@ -483,6 +485,7 @@ function endGutterDrag(evt) {
   // The view that came out of the drag may or may not be the fitted one any
   // more, which is what decides whether a window resize refits it.
   noteTimelineFit(timelineLane.getBoundingClientRect().width);
+  saveLayout();
 }
 
 layersSplitter.addEventListener('pointerup', endGutterDrag);
@@ -548,7 +551,17 @@ function splitEqualStack() {
  */
 function shiftSplitBy(stack, delta) {
   if (!delta) return;
-  const wish = Math.max(0, stack + delta);
+  holdSplitAt(stack + delta);
+}
+
+/**
+ * V4.11.1. The timeline's stack held at `wish`, in whichever way this window
+ * state keeps it. Project Media's own handle says where the stack belongs on
+ * every step of its drag, the step back to where it started included, which
+ * a shift by nothing would not have written.
+ */
+function holdSplitAt(stack) {
+  const wish = Math.max(0, stack);
   if (windowMaxed) {
     const room = splitRoom();
     if (room > 0) splitMaxShare = wish / room;
@@ -558,6 +571,126 @@ function shiftSplitBy(stack, delta) {
   applySplit();
   drawTimeline();
   updatePlayhead();
+  saveLayout();
+}
+
+// ---- V4.11.1. The layout kept between runs ----
+//
+// The user: "Save the size in the apps settings (not project) so the size
+// keeps staying when re-opening / new project. Other sizes should also be
+// saved so the user-moved layout stays each time the app gets reopened", and
+// "Under View add a new setting below Toggle Fullscreen called Restore default
+// layout - F12 which resets all frames to default size."
+//
+// Every handle keeps what it was dragged to as a wish, null while it is still
+// the stylesheet's own, and those wishes are what is saved: the split between
+// the previews and the timeline (as a height, and as a share of the room for
+// a maximized window, see above), the two side previews' width, the layer
+// column's, and the height of Project Media's pictures. They were session
+// state until now, "a way of looking at the timeline, not part of the
+// project", and they still are not part of a project: they are the app's.
+// The window's own size is kept by the main process, which owns it.
+
+/** The layer column's width as it was dragged, or null for the stylesheet's. */
+let gutterWish = null;
+let layoutSaveTimer = null;
+let layoutRestored = false;
+
+/** The wishes as they stand, as the settings keep them. */
+function layoutNow() {
+  const whole = (v) => (v === null ? null : Math.round(v));
+  return {
+    split: whole(splitWish),
+    splitMax: splitMaxShare === null ? null : Math.round(splitMaxShare * 10000) / 10000,
+    side: whole(sideWish),
+    gutter: whole(gutterWish),
+    media: typeof mediaHeightWish === 'function' ? mediaHeightWish() : null,
+  };
+}
+
+/** Written a moment after the last change, so a drag is one write. */
+function saveLayout() {
+  clearTimeout(layoutSaveTimer);
+  layoutSaveTimer = setTimeout(() => {
+    const now = layoutNow();
+    const any = Object.values(now).some((v) => v !== null);
+    window.lwclipper.setSettings({ layout: any ? now : null }).then((r) => {
+      if (r && r.settings) appSettings = r.settings;
+    });
+  }, 300);
+}
+
+/**
+ * The saved layout put back, once, when the settings first arrive. A number
+ * that is not one is left at its default, so a file edited by hand cannot
+ * put a frame somewhere it cannot be dragged back from; the clamps every
+ * handle already has hold the rest to the window.
+ */
+function restoreLayout(saved) {
+  if (layoutRestored) return;
+  layoutRestored = true;
+  if (!saved || typeof saved !== 'object') return;
+  const held = (v, lo, hi) => {
+    const n = Number(v);
+    return v === null || v === undefined || !Number.isFinite(n) ? null : Math.min(hi, Math.max(lo, n));
+  };
+  splitWish = held(saved.split, 0, 100000);
+  splitMaxShare = held(saved.splitMax, 0, 1);
+  sideWish = held(saved.side, 0, 100000);
+  gutterWish = held(saved.gutter, GUTTER_MIN, GUTTER_MAX);
+  if (gutterWish !== null) document.documentElement.style.setProperty('--timeline-gutter', gutterWish + 'px');
+  if (typeof setMediaHeight === 'function') setMediaHeight(held(saved.media, MEDIA_H_MIN, MEDIA_H_MAX));
+  // A split somebody set is theirs, so the window stops sizing itself round
+  // the previews, as it does the moment a handle is dragged.
+  if (splitWish !== null || sideWish !== null || (typeof mediaHeightWish === 'function' && mediaHeightWish() !== null)) {
+    splitTaken = true;
+    window.lwclipper.releaseWindowHeight();
+  }
+  const settle = () => {
+    applySideSplit();
+    applySplit();
+    drawTimeline();
+    updatePlayhead();
+    updateCropOverlays();
+  };
+  // Now, and again once the first layout has happened: the splits are
+  // clamped against the frames as they measure, and at the very start not
+  // everything has a size yet.
+  settle();
+  requestAnimationFrame(settle);
+  setTimeout(settle, 300);
+}
+
+/** View > Restore default layout: every frame, and the window, as they first open. */
+function resetLayout() {
+  splitWish = null;
+  splitMaxShare = null;
+  sideWish = null;
+  gutterWish = null;
+  splitTaken = false;
+  document.documentElement.style.removeProperty('--timeline-gutter');
+  if (typeof setMediaHeight === 'function') setMediaHeight(null);
+  clearTimeout(layoutSaveTimer);
+  window.lwclipper.setSettings({ layout: null }).then((r) => {
+    if (r && r.settings) appSettings = r.settings;
+  });
+  const settle = () => {
+    applySideSplit();
+    applySplit();
+    if (typeof fitMediaNames === 'function') fitMediaNames();
+    drawTimeline();
+    updatePlayhead();
+    updateCropOverlays();
+  };
+  settle();
+  // The window back at its own size, fitting its height again; then the
+  // frames once more, in the room that leaves them.
+  window.lwclipper.resetWindowSize().then(() => {
+    settle();
+    if (typeof drawProjectMedia === 'function') drawProjectMedia();
+    fitWindow();
+    setTimeout(settle, 300);
+  });
 }
 
 editSplitter.addEventListener('pointerdown', (evt) => {
@@ -621,6 +754,7 @@ function endSplit(evt) {
   if (editSplitter.hasPointerCapture(evt.pointerId)) {
     editSplitter.releasePointerCapture(evt.pointerId);
   }
+  saveLayout();
 }
 
 editSplitter.addEventListener('pointerup', endSplit);

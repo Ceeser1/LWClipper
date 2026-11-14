@@ -264,7 +264,41 @@ function mediaOnTimeline(src) {
 // The tile's name, whole while it fits, and otherwise as much as fits less
 // two more characters with ".." after them, the user's own rule.
 const mediaNameInk = document.createElement('canvas').getContext('2d');
-const MEDIA_NAME_WIDTH = 144;
+
+// ---- V4.11.1. The frame's size ----
+//
+// The user: "Add a size-slider between Project media and Timeline (like
+// between Previews and Project Media) so that project media can be
+// shrunk/extended (shrinking/extending its contents as well respectively)."
+// One number sizes everything in the frame: the height of a tile's picture.
+// Its width is 16:9 of that, the tile is the picture and its name, and Add
+// Media is as tall as a tile; the stylesheet works all of those out from
+// --media-h. null is the stylesheet's own, which is what it was before.
+const MEDIA_H_DEFAULT = 81;
+const MEDIA_H_MIN = 36;
+const MEDIA_H_MAX = 270;
+let mediaHeight = null;
+
+/** The height the handle was dragged to, or null while it is the default. */
+function mediaHeightWish() {
+  return mediaHeight;
+}
+
+/** A tile's picture as it is sized now, in pixels. */
+function mediaFrameSize() {
+  const h = mediaHeight === null ? MEDIA_H_DEFAULT : mediaHeight;
+  return { w: Math.round((h * 16) / 9), h };
+}
+
+/** Size the frame's contents: the height of a picture, or null for the default. */
+function setMediaHeight(height) {
+  const n = Number(height);
+  mediaHeight = height === null || !Number.isFinite(n) || Math.round(n) === MEDIA_H_DEFAULT
+    ? null
+    : Math.min(MEDIA_H_MAX, Math.max(MEDIA_H_MIN, Math.round(n)));
+  if (mediaHeight === null) document.documentElement.style.removeProperty('--media-h');
+  else document.documentElement.style.setProperty('--media-h', mediaHeight + 'px');
+}
 
 function fitMediaName(name, width, font) {
   mediaNameInk.font = font;
@@ -313,8 +347,7 @@ async function loadMediaPicture(entry) {
  */
 function drawAudioPicture(canvas, entry) {
   const dpr = window.devicePixelRatio || 1;
-  const w = 144;
-  const h = 81;
+  const { w, h } = mediaFrameSize();
   canvas.width = Math.round(w * dpr);
   canvas.height = Math.round(h * dpr);
   const ctx = canvas.getContext('2d');
@@ -439,7 +472,7 @@ function paintMediaUsage() {
 
 function fitMediaNames() {
   for (const node of projectMediaList.querySelectorAll('.media-tile__name')) {
-    const width = node.clientWidth || MEDIA_NAME_WIDTH;
+    const width = node.clientWidth || mediaFrameSize().w;
     node.textContent = fitMediaName(node.dataset.full, width, getComputedStyle(node).font);
   }
 }
@@ -476,6 +509,7 @@ function setMediaCollapsed(on, save) {
   const stack = timelineStack.getBoundingClientRect().height;
   projectMediaSection.classList.toggle('media-section--collapsed', on);
   projectMediaToggle.setAttribute('aria-expanded', String(!on));
+  mediaSplitter.classList.toggle('splitter--off', on);
   const after = projectMediaSection.getBoundingClientRect().height;
   if (before > 0 && after > 0) shiftSplitBy(stack, before - after);
   if (!on) fitMediaNames();
@@ -491,7 +525,61 @@ function applyMediaCollapsedSetting() {
   const on = !!(appSettings && appSettings.projectMediaCollapsed);
   projectMediaSection.classList.toggle('media-section--collapsed', on);
   projectMediaToggle.setAttribute('aria-expanded', String(!on));
+  mediaSplitter.classList.toggle('splitter--off', on);
 }
+
+// ---- V4.11.1. The handle between Project Media and the timeline ----
+//
+// Dragged down the frame grows and its tiles with it, dragged up it shrinks.
+// What it gains comes out of the timeline under it and what it gives up goes
+// there, the previews above keeping their height: the handle is between
+// these two, and it is the same trade folding the frame makes. Folded, there
+// is nothing to size, and the handle is only the gap it stands in.
+
+const mediaSplitter = el('mediaSplitter');
+let mediaFrom = null;
+
+mediaSplitter.addEventListener('pointerdown', (evt) => {
+  if (evt.button !== 0 || projectMediaSection.classList.contains('media-section--collapsed')) return;
+  mediaFrom = {
+    y: evt.clientY,
+    height: mediaFrameSize().h,
+    stack: timelineStack.getBoundingClientRect().height,
+    section: projectMediaSection.getBoundingClientRect().height,
+  };
+  mediaSplitter.setPointerCapture(evt.pointerId);
+  document.body.classList.add('splitting');
+  evt.preventDefault();
+});
+
+mediaSplitter.addEventListener('pointermove', (evt) => {
+  if (!mediaFrom) return;
+  // From where it was at the press, like every other handle. No taller than
+  // the timeline has rows to give: past that it would be the previews paying.
+  const want = Math.min(mediaFrom.height + (evt.clientY - mediaFrom.y), mediaFrom.height + mediaFrom.stack);
+  setMediaHeight(want);
+  const now = projectMediaSection.getBoundingClientRect().height;
+  // The window stops sizing itself round the previews, as for the handle above.
+  if (now !== mediaFrom.section && !splitTaken) {
+    splitTaken = true;
+    window.lwclipper.releaseWindowHeight();
+  }
+  holdSplitAt(mediaFrom.stack + (mediaFrom.section - now));
+});
+
+function endMediaSplit(evt) {
+  if (!mediaFrom) return;
+  mediaFrom = null;
+  document.body.classList.remove('splitting');
+  if (mediaSplitter.hasPointerCapture(evt.pointerId)) mediaSplitter.releasePointerCapture(evt.pointerId);
+  // The names are cut to the tiles' new width, and a sound's picture is
+  // drawn at the size it now is.
+  drawProjectMedia();
+  saveLayout();
+}
+
+mediaSplitter.addEventListener('pointerup', endMediaSplit);
+mediaSplitter.addEventListener('pointercancel', endMediaSplit);
 
 projectMediaToggle.addEventListener('click', () => {
   setMediaCollapsed(!projectMediaSection.classList.contains('media-section--collapsed'), true);

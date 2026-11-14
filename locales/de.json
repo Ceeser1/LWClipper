@@ -440,5 +440,6 @@
   "Speed: x{n}": "Tempo: x{n}",
   "Speed x{n}": "Tempo x{n}",
   "Drag to trim this edge, hold Ctrl to change the speed instead": "Zum Schneiden an dieser Kante ziehen, mit Strg stattdessen das Tempo ändern",
-  "Right click to play this track at its own speed again": "Rechtsklick, um diese Spur wieder in ihrem eigenen Tempo abzuspielen"
+  "Right click to play this track at its own speed again": "Rechtsklick, um diese Spur wieder in ihrem eigenen Tempo abzuspielen",
+  "Restore default layout": "Standardlayout wiederherstellen"
 }

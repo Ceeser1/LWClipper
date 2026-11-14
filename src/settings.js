@@ -40,6 +40,18 @@ const DEFAULTS = {
   renderDevice: 'auto',
   // V4.5. Whether the Project Media frame is folded down to its title.
   projectMediaCollapsed: false,
+  // V4.11.1. The frames as the handles between them were left: { split, the
+  // timeline's height; splitMax, its share of the room while the window is
+  // maximized; side, the two side previews' width; gutter, the layer column's;
+  // media, the height of a Project Media tile's picture }, each null while it
+  // is still the default. null until a handle is dragged, and again after
+  // View > Restore default layout.
+  layout: null,
+  // V4.11.1. The main window's own size as it was left, since the frames are
+  // measured inside it: { width, height, maximized, auto }, `auto` being
+  // whether the window was still fitting its own height. null until the
+  // window has been resized.
+  windowSize: null,
 };
 
 function settingsFile() {

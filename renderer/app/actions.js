@@ -195,6 +195,12 @@ const ACTIONS = [
     id: 'view.fullscreen', menu: 'view', label: () => t('Toggle Fullscreen'), keys: ['F11'], take: true,
     enabled: () => true, run: () => window.lwclipper.toggleFullscreen(),
   },
+  {
+    // V4.11.1. Every frame, and the window, back at the size they first open
+    // at, and nothing kept for next time (layout.js).
+    id: 'view.resetLayout', menu: 'view', label: () => t('Restore default layout'), keys: ['F12'], take: true,
+    enabled: () => true, run: () => resetLayout(),
+  },
 
   // ---- Settings ----
   {

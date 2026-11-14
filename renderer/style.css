@@ -5816,3 +5816,44 @@ body.media-dragging.media-dragging--nowhere * {
   pointer-events: none;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
 }
+
+/* ---- V4.11.1. Project Media at the size its handle was dragged to ---- */
+
+/* Everything in the frame from one number, the height of a tile's picture,
+   which projectMedia.js sets as --media-h: the picture 16:9 of it, the tile
+   that and its padding, and Add Media as tall as a tile is with its name. The
+   defaults are the sizes the frame always had. */
+.media-tile {
+  width: calc(var(--media-h, 81px) * 16 / 9 + 8px);
+}
+
+.media-tile__frame {
+  width: calc(var(--media-h, 81px) * 16 / 9);
+  height: var(--media-h, 81px);
+}
+
+.media-add {
+  width: calc(var(--media-h, 81px) + 27px);
+  height: calc(var(--media-h, 81px) + 27px);
+}
+
+.media-add__plus {
+  font-size: calc(var(--media-h, 81px) * 0.57);
+  line-height: 1;
+}
+
+/* The handle under the frame takes the frame's own bottom margin, as the one
+   above takes the previews'. Folded, the frame has nothing to size: the
+   handle keeps the gap and is nothing to take hold of. */
+body.advanced .media-section {
+  margin-bottom: 0;
+}
+
+.splitter--off {
+  cursor: default;
+  pointer-events: none;
+}
+
+.splitter--off::before {
+  display: none;
+}

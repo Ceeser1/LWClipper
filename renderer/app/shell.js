@@ -346,6 +346,9 @@ function applySettingsPayload(payload) {
     applyMediaCollapsedSetting();
     drawProjectMedia();
   }
+  // V4.11.1. The frames as their handles were left, the first time the
+  // settings arrive.
+  if (typeof restoreLayout === 'function') restoreLayout(appSettings.layout);
   // The buttons this one is measured against have just been relabelled.
   sizeSettingsBtn();
   updateRenderResolution();

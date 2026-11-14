@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld('lwclipper', {
   openAppFiles: () => ipcRenderer.invoke('shell:openAppFiles'),
   fitWindow: (delta) => ipcRenderer.invoke('window:fit', delta),
   releaseWindowHeight: () => ipcRenderer.invoke('window:release'),
+  // V4.11.1. View > Restore default layout.
+  resetWindowSize: () => ipcRenderer.invoke('window:resetSize'),
   deleteAppFiles: () => ipcRenderer.invoke('app:deleteAppFiles'),
   clearCache: (ticked) => ipcRenderer.invoke('tools:clearCache', ticked),
   listClaims: () => ipcRenderer.invoke('tools:claims'),

@@ -125,17 +125,57 @@ function openingSpot(width, height) {
   };
 }
 
+const BASE_WIDTH = 1000;
+const MIN_WIDTH = 820;
+const MIN_HEIGHT = BASE_HEIGHT - 40;
+
+/**
+ * V4.11.1. The size the window was left at, to open at again: "Other sizes
+ * should also be saved so the user-moved layout stays each time the app gets
+ * reopened". The frames are measured inside the window, so a layout put back
+ * into a window of another size would not be the layout that was left.
+ *
+ * Held to what the window may be and to the screen it will open on. `auto`
+ * says the window was still fitting its own height when it was left, and
+ * then only the width is taken: the fit works the height out again, as it
+ * always has. Null when nothing was saved or it cannot be read.
+ */
+function keptWindowSize() {
+  const saved = settings.get('windowSize');
+  if (!saved || typeof saved !== 'object') return null;
+  const width = Math.round(Number(saved.width));
+  const height = Math.round(Number(saved.height));
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+  const all = screen.getAllDisplays();
+  const display = all.length < 2
+    ? screen.getPrimaryDisplay()
+    : all.reduce((far, d) => (d.bounds.x > far.bounds.x ? d : far));
+  const area = display.workArea;
+  const auto = saved.auto !== false;
+  return {
+    width: Math.max(MIN_WIDTH, Math.min(width, area.width)),
+    height: auto ? BASE_HEIGHT : Math.max(MIN_HEIGHT, Math.min(height, area.height)),
+    maximized: saved.maximized === true,
+    auto,
+  };
+}
+
 function createWindow() {
   // Without this the taskbar and window show Electron's default icon, because
   // signAndEditExecutable is off and rcedit never stamps the inner executable.
   const icon = toolPaths.appIconPath();
+  // V4.11.1. At the size it was left at, when there is one.
+  const kept = keptWindowSize();
+  const openWidth = kept ? kept.width : BASE_WIDTH;
+  const openHeight = kept ? kept.height : BASE_HEIGHT;
+  if (kept && !kept.auto) autoHeight = false;
   // Passed to the constructor rather than set afterwards, so the window is
   // never painted on one monitor and then moved to another.
-  const spot = openingSpot(1000, BASE_HEIGHT);
+  const spot = openingSpot(openWidth, openHeight);
   mainWindow = new BrowserWindow({
     ...(icon ? { icon } : {}),
     ...(spot || {}),
-    width: 1000,
+    width: openWidth,
     // The frame boxes are locked to 16:9 of their own width, so height the
     // preview section is given beyond what its title, frame and controls need
     // cannot be used and shows as an empty strip under the controls.
@@ -153,11 +193,11 @@ function createWindow() {
     // the strip comes back at about 38px. That is deliberate rather than
     // overlooked: flattening it too would mean sizing the window for the state
     // it is not usually in, and costing the spectrum another 40px to do it.
-    height: BASE_HEIGHT,
-    minWidth: 820,
+    height: openHeight,
+    minWidth: MIN_WIDTH,
     // 40px of shrink below the default, the same latitude the old 920/880 pair
     // allowed. Nothing scrolls at that height in any of the three states.
-    minHeight: BASE_HEIGHT - 40,
+    minHeight: MIN_HEIGHT,
     backgroundColor: '#1e1e22',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -171,12 +211,21 @@ function createWindow() {
   // Only a height we did not set counts as the user resizing. Dragging the
   // window wider leaves the height alone, so that on its own does not stop the
   // fit, which is about height only.
-  lastAutoHeight = BASE_HEIGHT;
+  lastAutoHeight = openHeight;
   mainWindow.on('resize', () => {
     if (!autoHeight || mainWindow.isDestroyed()) return;
     const height = mainWindow.getSize()[1];
     if (height !== lastAutoHeight) autoHeight = false;
   });
+
+  // V4.11.1. The size written down a moment after it stops changing, as it
+  // would be restored down: a maximized window is remembered as maximized
+  // over the size it goes back to. Not while minimized or fullscreen, which
+  // are not sizes anybody chose for next time.
+  mainWindow.on('resize', noteWindowSize);
+  mainWindow.on('maximize', noteWindowSize);
+  mainWindow.on('unmaximize', noteWindowSize);
+  if (kept && kept.maximized) mainWindow.maximize();
 
   // Step 21c-2. The split is shared differently when the window is maximized,
   // and only the main process knows that it is. Both events fire after the
@@ -1577,6 +1626,38 @@ ipcMain.handle('window:isMaximized', () =>
 // for the rest of the run.
 ipcMain.handle('window:release', () => {
   autoHeight = false;
+  noteWindowSize();
+});
+
+// V4.11.1. See keptWindowSize.
+let windowSizeTimer = null;
+function noteWindowSize() {
+  clearTimeout(windowSizeTimer);
+  windowSizeTimer = setTimeout(() => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized() || mainWindow.isFullScreen()) return;
+    const b = mainWindow.getNormalBounds();
+    settings.set({
+      windowSize: { width: b.width, height: b.height, maximized: mainWindow.isMaximized(), auto: autoHeight },
+    });
+  }, 400);
+}
+
+// V4.11.1. View > Restore default layout: the window back at the size it
+// first opens at, fitting its own height again, and nothing kept for next
+// time. A maximized or fullscreen window is left as it is; only what it goes
+// back to is forgotten.
+ipcMain.handle('window:resetSize', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  clearTimeout(windowSizeTimer);
+  autoHeight = true;
+  lastAutoHeight = BASE_HEIGHT;
+  if (!mainWindow.isMaximized() && !mainWindow.isFullScreen() && !mainWindow.isMinimized()) {
+    mainWindow.setSize(BASE_WIDTH, BASE_HEIGHT, false);
+  }
+  clearTimeout(windowSizeTimer);
+  settings.set({ windowSize: null });
+  return true;
 });
 
 /**
