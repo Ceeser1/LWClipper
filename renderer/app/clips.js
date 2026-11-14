@@ -642,7 +642,10 @@ function buildLayerClip(track, layer) {
     const handle = document.createElement('div');
     handle.className = 'layer-clip__edge layer-clip__edge--' + side;
     handle.dataset.edge = side;
-    handle.title = t('Drag to trim this edge');
+    // Two calls rather than one with a choice inside t(, for the checker.
+    handle.title = timelineModel.isStill(layer)
+      ? t('Drag to trim this edge')
+      : t('Drag to trim this edge, hold Ctrl to change the speed instead');
     clip.appendChild(handle);
   }
 
@@ -764,6 +767,37 @@ function buildLayerClip(track, layer) {
       bindFadeMenu(mark, layer.id, which);
       clip.appendChild(mark);
     }
+  }
+
+  // V4.11. The user: "A speed-changed track permanently gets the "Speed x1.0"
+  // with background in its center with a thin wiggly white line extending
+  // towards its borders. Right-clicking the center-text with background resets
+  // the playback speed and length to default". On every clip that has a clock;
+  // shown and placed by placeSpeedMark while the speed is not 1, or while its
+  // edge is being dragged with Ctrl. A press on the figure is the clip's own,
+  // so the clip still drags by it.
+  if (!timelineModel.isStill(layer)) {
+    const line = document.createElement('div');
+    line.className = 'clip-speed-line';
+    line.hidden = true;
+    clip.appendChild(line);
+    const figure = document.createElement('div');
+    figure.className = 'clip-speed';
+    figure.hidden = true;
+    figure.title = t('Right click to play this track at its own speed again');
+    figure.addEventListener('contextmenu', (evt) => {
+      evt.preventDefault();
+      // Not on to the timeline's own right click, which opens the clip menu.
+      evt.stopPropagation();
+      if (busy || !timelineDriving()) return;
+      closeClipMenu();
+      const next = timelineModel.resetSpeed(layers, layer.id);
+      if (next === layers) return;
+      selectLayer(layer.id);
+      setLayers(next);
+      commitHistory();
+    });
+    clip.appendChild(figure);
   }
 
   bindClipDrag(clip, layer.id);
@@ -1024,6 +1058,15 @@ function bindClipDrag(clip, layerId) {
     // What the gesture is dragging: the clip's position, or the edge's own
     // place on the timeline.
     const valueOf = (l) => (edge === 'end' ? timelineModel.endOf(l) : l.start);
+    // V4.11. The user: "When holding ctrl before or while dragging a tracks
+    // edge it doesnt cut/extend a tracks length, but shorten (speeds up) or
+    // extends (slows down) playback of the track". So on the edge of a clip
+    // that has a clock Ctrl is the speed, where everywhere else it is still
+    // the hundred times finer drag; Shift stays the ten times finer one. A
+    // still has no speed, and its edge with Ctrl is trimmed finely as before.
+    const stretchy = !!edge && !timelineModel.isStill(layer);
+    const modeOf = (ev) => (stretchy && ev.ctrlKey ? 'speed' : 'trim');
+    const factorOf = (ev) => (stretchy && ev.ctrlKey ? (ev.shiftKey ? FINE_SHIFT : 1.0) : modifierFactor(ev));
 
     const rect = timelineLane.getBoundingClientRect();
     // The fit is frozen for the duration of the drag. A layer dragged
@@ -1037,7 +1080,11 @@ function bindClipDrag(clip, layerId) {
       // V3.4. When it went down, for telling a quick click from a hold.
       pressedAt: performance.now(),
       anchorValue: valueOf(layer),
-      factor: modifierFactor(evt),
+      factor: factorOf(evt),
+      // V4.11. 'speed' while Ctrl is held on an edge, 'trim' otherwise.
+      mode: modeOf(evt),
+      // Where the pointer last was, for a key pressed while it holds still.
+      at: { x: evt.clientX, y: evt.clientY },
       moved: false,
       // V2.9. The row a move is aimed at, and the box drawn on it. A trim
       // never has one: an edge belongs to the row its clip is on.
@@ -1055,9 +1102,23 @@ function bindClipDrag(clip, layerId) {
     // is a picture and its own sound. moveGroup and trimGroup fall through to
     // the single-layer versions when there is no group, so there is one path
     // here rather than two.
+    // V4.11. The speed beside the pointer and in the middle of the clip
+    // while Ctrl is held: "show a text right next to the mouse and in the
+    // center of the track with a background while dragging "Speed: x1.0",
+    // changing to the actualy values".
+    const showSpeed = () => {
+      const now = timelineModel.layerById(layers, layerId);
+      if (drag.mode !== 'speed' || !now) {
+        hideSpeedTip();
+        return;
+      }
+      showSpeedTip(drag.at.x, drag.at.y, timelineModel.speedOf(now));
+    };
     const apply = (value) => {
       layers = edge
-        ? timelineModel.trimGroup(layers, layerId, edge, value)
+        ? (drag.mode === 'speed'
+          ? timelineModel.stretchGroup(layers, layerId, edge, value)
+          : timelineModel.trimGroup(layers, layerId, edge, value))
         : (together
           ? timelineModel.moveSet(layers, [...selectedLayerIds], layerId, value)
           : timelineModel.moveGroup(layers, layerId, value));
@@ -1066,15 +1127,27 @@ function bindClipDrag(clip, layerId) {
     };
 
     const onMove = (ev) => {
+      drag.at = { x: ev.clientX, y: ev.clientY };
       if (!drag.moved) {
         // Either way counts now that a clip can be carried up or down as well.
         const far = Math.max(Math.abs(ev.clientX - drag.anchorX),
           edge ? 0 : Math.abs(ev.clientY - drag.anchorY));
-        if (far < TIMELINE_DRAG_SLOP) return;
+        if (far < TIMELINE_DRAG_SLOP) {
+          // Not a drag yet, but Ctrl may have gone down or up meanwhile.
+          drag.mode = modeOf(ev);
+          drag.factor = factorOf(ev);
+          speedDragIds = drag.mode === 'speed'
+            ? new Set(timelineModel.groupOf(layers, layerId).map((l) => l.id))
+            : new Set();
+          showSpeed();
+          drawTimeline();
+          return;
+        }
         drag.moved = true;
       }
-      const factor = modifierFactor(ev);
-      if (factor !== drag.factor) {
+      const factor = factorOf(ev);
+      const mode = modeOf(ev);
+      if (factor !== drag.factor || mode !== drag.mode) {
         // Re-anchored on the layer as it stands now, so the new rate carries on
         // from where the clip is rather than jumping. Read back from the model
         // rather than tracked, because the model may have clamped the last move.
@@ -1083,6 +1156,7 @@ function bindClipDrag(clip, layerId) {
         drag.anchorX = ev.clientX;
         drag.anchorValue = valueOf(now);
         drag.factor = factor;
+        drag.mode = mode;
         setDragHint(factor);
       }
       // Seconds per pixel is the zoom, so a clip travels with the cursor at
@@ -1095,7 +1169,11 @@ function bindClipDrag(clip, layerId) {
       if (!edge && !together) drag.target = laneTargetAt(here.type, here.lane, ev.clientY);
       const lane = drag.target ? drag.target.lane : here.lane;
       const snap = snapClipValue(here, edge, drag.anchorValue + delta, lane);
+      // Before the redraw apply ends with, which is what writes it on the clip.
+      if (drag.mode === 'speed') speedDragIds = new Set(timelineModel.groupOf(layers, layerId).map((l) => l.id));
+      else speedDragIds = new Set();
       apply(snap.value);
+      showSpeed();
       // Green on the end that met something and on what it met, while it is
       // held: the grip being dragged for a trim, and for a move whichever of
       // the clip's two ends it was.
@@ -1107,7 +1185,26 @@ function bindClipDrag(clip, layerId) {
         if (now) placeLaneGhost(drag, clip, now);
       }
     };
+    // Ctrl pressed or let go while the pointer holds still changes what the
+    // drag is doing at once, not at the next move.
+    const onKey = (ev) => {
+      if (ev.key !== 'Control' && ev.key !== 'Shift') return;
+      onMove({ clientX: drag.at.x, clientY: drag.at.y, ctrlKey: ev.ctrlKey, shiftKey: ev.shiftKey });
+    };
+    if (stretchy) {
+      window.addEventListener('keydown', onKey, true);
+      window.addEventListener('keyup', onKey, true);
+      showSpeed();
+      if (drag.mode === 'speed') {
+        speedDragIds = new Set(timelineModel.groupOf(layers, layerId).map((l) => l.id));
+        drawTimeline();
+      }
+    }
     const onUp = (ev) => {
+      window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('keyup', onKey, true);
+      hideSpeedTip();
+      speedDragIds = new Set();
       clip.classList.remove('layer-clip--dragging');
       document.body.classList.remove('layer-dragging', 'layer-trimming');
       lightSnap([]);
@@ -1141,6 +1238,9 @@ function bindClipDrag(clip, layerId) {
       // click that never became a drag seeks here, on its release. Not on a
       // trim edge, whose press means the edge.
       else {
+        // V4.11. Ctrl held on an edge and let go without a move: the figure
+        // shown meanwhile goes again.
+        if (stretchy) drawTimeline();
         // V3.8.2. A click on one of several chosen clips narrows them to it.
         if (together) selectLayer(layerId);
         if (!edge && ev.type === 'pointerup' && performance.now() - drag.pressedAt <= CLIP_CLICK_MS) {
@@ -1150,6 +1250,64 @@ function bindClipDrag(clip, layerId) {
     };
     beginDrag(clip, evt, onMove, onUp);
   });
+}
+
+// ---- V4.11. The speed of a clip, shown ----
+
+// The clips whose edge is being dragged with Ctrl right now, which show their
+// speed even at 1, and as the drag's readout rather than the standing one.
+let speedDragIds = new Set();
+let speedTip = null;
+
+/**
+ * A speed as it is written: one decimal where that says it, x1.0 or x2.5,
+ * and two where it does not, x1.37, since an edge can be let go anywhere.
+ */
+function speedText(speed) {
+  const r = Math.round(speed * 100) / 100;
+  return Math.abs(r * 10 - Math.round(r * 10)) < 1e-9 ? r.toFixed(1) : r.toFixed(2);
+}
+
+/** The speed beside the pointer while an edge is dragged with Ctrl. */
+function showSpeedTip(x, y, speed) {
+  if (!speedTip) {
+    speedTip = document.createElement('div');
+    speedTip.className = 'speed-tip';
+    document.body.appendChild(speedTip);
+  }
+  speedTip.textContent = t('Speed: x{n}', { n: speedText(speed) });
+  speedTip.hidden = false;
+  // Below and to the right of the pointer, and kept inside the window.
+  const w = speedTip.offsetWidth;
+  const h = speedTip.offsetHeight;
+  speedTip.style.left = Math.max(4, Math.min(x + 14, window.innerWidth - w - 4)) + 'px';
+  speedTip.style.top = Math.max(4, Math.min(y + 16, window.innerHeight - h - 4)) + 'px';
+}
+
+function hideSpeedTip() {
+  if (speedTip) speedTip.hidden = true;
+}
+
+/**
+ * The speed in the middle of a clip, with the wavy line through it: while the
+ * clip plays at another speed than its own, and while its edge is dragged
+ * with Ctrl. In the middle of the part of the clip that is on screen, like
+ * the alpha bar, so a clip longer than the window still shows it.
+ */
+function placeSpeedMark(clip, layer, from, visible) {
+  const figure = clip.querySelector('.clip-speed');
+  const line = clip.querySelector('.clip-speed-line');
+  if (!figure || !line) return;
+  const speed = timelineModel.speedOf(layer);
+  const live = speedDragIds.has(layer.id);
+  const shown = (live || speed !== 1) && visible >= 76;
+  figure.hidden = !shown;
+  line.hidden = !shown;
+  if (!shown) return;
+  // Two calls, so the checker sees both literals.
+  const text = live ? t('Speed: x{n}', { n: speedText(speed) }) : t('Speed x{n}', { n: speedText(speed) });
+  if (figure.textContent !== text) figure.textContent = text;
+  figure.style.left = (from + visible / 2) + 'px';
 }
 
 // How far the pointer moves before a press on a fade handle is a drag. Smaller
@@ -1720,6 +1878,7 @@ function positionLayerClips() {
     placeClipKeyframes(clip, layer);
     placeClipMarks(clip, width, from, visible, gripW);
     placeAlphaLine(track, clip, layer, x0, from, visible, gripW);
+    placeSpeedMark(clip, layer, from, visible);
     drawClipArt(layer, art, x0 + from, visible, clip.clientHeight - stripH);
   }
 }
@@ -2362,7 +2521,9 @@ function drawClipFilmstrip(layer, ctx, leftX, width, height) {
   // length: thirty minutes at fit-to-width asks for the same handful a thirty
   // second clip does. Past what one sheet holds it is the density that carries
   // on rising, and the sheets cover windows instead of the whole source.
-  const want = Math.ceil((layer.sourceDuration * tlView.scale) / drawW);
+  // V4.11. At the clip's speed: a slowed clip spreads its source over more of
+  // the row and needs as many more thumbnails, a faster one as many fewer.
+  const want = Math.ceil((layer.sourceDuration * tlView.scale) / timelineModel.speedOf(layer) / drawW);
   const atFor = (px) =>
     timelineModel.sourceTimeFor(layer, timelineView.xToTime(tlView, leftX + px));
   // Step 21d. Both ends of what is on screen, because the visible span can
@@ -2389,7 +2550,8 @@ function drawClipFilmstrip(layer, ctx, leftX, width, height) {
 function drawClipWaveform(layer, ctx, leftX, width, height) {
   // One bucket per pixel of the source at this zoom, which is what the frame
   // can actually show.
-  const want = Math.ceil(layer.sourceDuration * tlView.scale);
+  // V4.11. By the clip's speed, as the filmstrip is.
+  const want = Math.ceil((layer.sourceDuration * tlView.scale) / timelineModel.speedOf(layer));
   ensurePeaks(layer, want);
   const entry = peakCache.get(layer.src);
   if (!entry || !entry.peaks) return;

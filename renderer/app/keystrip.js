@@ -171,8 +171,11 @@ function makeKeyStrip(root, readout, canvas, opts) {
     // where the clip starts in it to as far again.
     drawKeyStripRuler(ctx, { from: 0, span, scale, w, top: 0, above: true });
     if (s.lower) {
+      // V4.11. At the clip's speed: that many seconds of the source to each
+      // of the clip's.
+      const speed = timelineModel.speedOf(layer);
       drawKeyStripRuler(ctx, {
-        from: layer.sourceIn || 0, span, scale, w, top: barTop + KEYS_BAR, above: false,
+        from: layer.sourceIn || 0, span: span * speed, scale: scale / speed, w, top: barTop + KEYS_BAR, above: false,
       });
     }
     // The playhead, while it is on the clip: a line through the rulers and

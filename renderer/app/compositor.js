@@ -1005,7 +1005,11 @@ function followDecoders() {
     const v = entry.el;
     if (l.enabled && timelineModel.covers(l, compositeAt)) {
       const want = timelineModel.sourceTimeFor(l, compositeAt);
-      if (Math.abs(v.currentTime - want) > COMPOSITE_SLACK) v.currentTime = want;
+      // V4.11. At the layer's speed, and lost by as much more of the source
+      // as goes by in the same time at it.
+      const rate = timelineModel.speedOf(l);
+      if (v.playbackRate !== rate) v.playbackRate = rate;
+      if (Math.abs(v.currentTime - want) > COMPOSITE_SLACK * Math.max(0.2, rate)) v.currentTime = want;
       if (v.paused) v.play().catch(() => {});
     } else if (!v.paused) {
       v.pause();
@@ -1149,7 +1153,14 @@ function followPlayers(force) {
     const a = entry.el;
     if (l.enabled && timelineModel.covers(l, compositeAt)) {
       const want = timelineModel.sourceTimeFor(l, compositeAt);
-      if (force || Math.abs(a.currentTime - want) > AUDIO_SYNC_SLACK) a.currentTime = want;
+      // V4.11. At the layer's speed, its pitch kept, which is what the file's
+      // atempo does too.
+      const rate = timelineModel.speedOf(l);
+      if (a.playbackRate !== rate) {
+        a.preservesPitch = true;
+        a.playbackRate = rate;
+      }
+      if (force || Math.abs(a.currentTime - want) > AUDIO_SYNC_SLACK * Math.max(0.2, rate)) a.currentTime = want;
       // V2.2. Every tick, because the fade is a function of where the playhead
       // is and this is the only thing that runs as it moves. A layer with no
       // fades gets its own volume back, so this is not a special case for

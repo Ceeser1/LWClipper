@@ -436,5 +436,9 @@
   "Transition: {name}. Click to change it.": "Transition: {name}. Click to change it.",
   "A transition is what a fade does to the picture. It takes as long as the fade is and runs by the fade's curve": "A transition is what a fade does to the picture. It takes as long as the fade is and runs by the fade's curve",
   "At the start of a track the picture comes in, at its end it goes out, and where two tracks overlap the earlier one goes out as the later one comes in": "At the start of a track the picture comes in, at its end it goes out, and where two tracks overlap the earlier one goes out as the later one comes in",
-  "s": "s"
+  "s": "s",
+  "Speed: x{n}": "Speed: x{n}",
+  "Speed x{n}": "Speed x{n}",
+  "Drag to trim this edge, hold Ctrl to change the speed instead": "Drag to trim this edge, hold Ctrl to change the speed instead",
+  "Right click to play this track at its own speed again": "Right click to play this track at its own speed again"
 }

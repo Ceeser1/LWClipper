@@ -436,5 +436,9 @@
   "Transition: {name}. Click to change it.": "Übergang: {name}. Klicken, um ihn zu ändern.",
   "A transition is what a fade does to the picture. It takes as long as the fade is and runs by the fade's curve": "Ein Übergang ist das, was eine Blende mit dem Bild macht. Er dauert so lange wie die Blende und läuft nach ihrer Kurve",
   "At the start of a track the picture comes in, at its end it goes out, and where two tracks overlap the earlier one goes out as the later one comes in": "Am Anfang einer Spur kommt das Bild herein, am Ende geht es hinaus, und wo sich zwei Spuren überlappen, geht die frühere hinaus, während die spätere hereinkommt",
-  "s": "s"
+  "s": "s",
+  "Speed: x{n}": "Tempo: x{n}",
+  "Speed x{n}": "Tempo x{n}",
+  "Drag to trim this edge, hold Ctrl to change the speed instead": "Zum Schneiden an dieser Kante ziehen, mit Strg stattdessen das Tempo ändern",
+  "Right click to play this track at its own speed again": "Rechtsklick, um diese Spur wieder in ihrem eigenen Tempo abzuspielen"
 }

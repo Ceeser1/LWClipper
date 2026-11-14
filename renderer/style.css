@@ -5763,3 +5763,56 @@ body.media-dragging.media-dragging--nowhere * {
 .gen-num.gen-num--wide {
   width: 64px;
 }
+
+/* ---- V4.11. Speed ---- */
+
+/* The speed of a clip that does not play at its own, in the clip's middle on
+   a dark ground, and the same figure beside the pointer while an edge is
+   dragged with Ctrl. The clip's figure takes the right click that resets it;
+   a left press on it goes on to the clip, which still drags by it. */
+.clip-speed,
+.speed-tip {
+  padding: 1px 7px 2px;
+  border-radius: 3px;
+  background: rgba(14, 14, 18, 0.86);
+  color: #f2f4fa;
+  font-size: 11px;
+  font-weight: bold;
+  line-height: 1.4;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.clip-speed {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 5;
+}
+
+.clip-speed[hidden],
+.clip-speed-line[hidden],
+.speed-tip[hidden] {
+  display: none;
+}
+
+/* The thin wavy line from the figure out to the clip's ends, under it. */
+.clip-speed-line {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 50%;
+  height: 8px;
+  margin-top: -4px;
+  z-index: 1;
+  pointer-events: none;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='8' viewBox='0 0 16 8'%3E%3Cpath d='M0 4 Q4 0.5 8 4 T16 4' fill='none' stroke='white' stroke-width='1.1' stroke-opacity='0.9'/%3E%3C/svg%3E") repeat-x left center;
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.8));
+}
+
+.speed-tip {
+  position: fixed;
+  z-index: 30;
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}

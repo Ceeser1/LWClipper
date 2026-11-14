@@ -839,8 +839,12 @@ const timelineModel = (() => {
     const still = kind !== 'media';
     const sourceDuration = still ? 0 : Math.max(0, round(props.sourceDuration || 0));
     const sourceIn = clamp(props.sourceIn === undefined ? 0 : props.sourceIn, 0, sourceDuration);
-    // A layer defaults to showing the rest of its source from sourceIn onwards.
-    const rest = sourceDuration - sourceIn;
+    // V4.11. How fast the source plays, 1 for every layer from before and for
+    // a still, which has no clock to run faster.
+    const speed = still ? 1 : speedValue(props.speed);
+    // A layer defaults to showing the rest of its source from sourceIn onwards,
+    // which at another speed takes that much less or more of the timeline.
+    const rest = (sourceDuration - sourceIn) / speed;
     const duration = still
       ? round(stillSpan(props))
       : (props.duration === undefined ? rest : clamp(props.duration, 0, rest));
@@ -867,6 +871,10 @@ const timelineModel = (() => {
       duration: round(duration),
       sourceIn: round(sourceIn),
       sourceDuration: round(sourceDuration),
+      // V4.11. Seconds of the source to one second of the timeline, 0.1 to 10,
+      // see "Speed" below. Declared here for the reason groupId is: a field
+      // createLayer does not name is a field the project open path drops.
+      speed,
       enabled: props.enabled === undefined ? true : !!props.enabled,
       volume: props.volume === undefined ? 1 : props.volume,
       // Set and read by grouping in Step 14. Declared here because the
@@ -1007,9 +1015,12 @@ const timelineModel = (() => {
   // number, because trimLayer clamps against this and a clamp with no ceiling
   // is what "no ceiling" means. round(Infinity) is Infinity, so the arithmetic
   // above it needs no special case.
+  //
+  // V4.11. In the timeline's seconds, so at twice the speed half as much is
+  // left to drag out.
   function sourceRemaining(layer) {
     if (isStill(layer)) return Infinity;
-    return round(layer.sourceDuration - layer.sourceIn);
+    return round((layer.sourceDuration - layer.sourceIn) / speedOf(layer));
   }
 
   // How much source lies before the in-point. The limit on lengthening a layer
@@ -1025,7 +1036,7 @@ const timelineModel = (() => {
   // layer already goes through, is what turns that into 0.0s.
   function sourceBefore(layer) {
     if (isStill(layer)) return Infinity;
-    return round(layer.sourceIn);
+    return round(layer.sourceIn / speedOf(layer));
   }
 
   function covers(layer, t) {
@@ -1445,8 +1456,144 @@ const timelineModel = (() => {
    * deciding that is cheaper than every caller having to handle a null. Ask
    * covers() first.
    */
+  //
+  // V4.11. At the layer's speed: a second of the timeline is that many seconds
+  // of the source. 1 for every layer that was never stretched, which is the
+  // sum this always was.
   function sourceTimeFor(layer, t) {
-    return round(t - layer.start + layer.sourceIn);
+    return round((t - layer.start) * speedOf(layer) + layer.sourceIn);
+  }
+
+  // ---- V4.11. Speed ----
+  //
+  // The user: "When holding ctrl before or while dragging a tracks edge it
+  // doesnt cut/extend a tracks length, but shorten (speeds up) or extends
+  // (slows down) playback of the track ... Playback speed should range from
+  // min x0.1 to x10.0 max." And a right click on the speed shown in the
+  // middle of the track "resets the playback speed and length to default".
+  //
+  // So a layer has a `speed`: how many seconds of its source go by in one
+  // second of the timeline. 1 is every layer from before this, and a still's
+  // always, since one picture has no clock. The part of the source a layer
+  // shows is `duration * speed` long from `sourceIn`, and stretching a layer
+  // keeps exactly that part and changes how long it takes: the edge that was
+  // dragged moves, the other stays, and the speed is what makes the same
+  // source fill the new length. sourceTimeFor above is the one place a moment
+  // of the timeline becomes a moment of the source, for the preview and the
+  // encoder alike.
+  //
+  // What is on the clip goes with what it shows: its keyframes, and the ones
+  // of its Obscure and Pixelate areas, keep their place in the picture, so a
+  // clip made twice as long has them twice as far apart. Its fades are times
+  // of the timeline and stay the length they were, held to the new clip.
+
+  const SPEED_MIN = 0.1;
+  const SPEED_MAX = 10;
+
+  /**
+   * A speed as the model keeps one: held to its range, 1 for anything else.
+   * Not rounded the way a time is: it is the part of the source shown over
+   * the length it is shown for, and rounded, that part would creep by a
+   * microsecond every time the clip was stretched again.
+   */
+  function speedValue(v) {
+    const n = Number(v);
+    if (v === null || v === undefined || v === '' || !Number.isFinite(n) || !(n > 0)) return 1;
+    return clamp(n, SPEED_MIN, SPEED_MAX);
+  }
+
+  /** How fast a layer's source plays: 1 for a still and for anything unset. */
+  function speedOf(layer) {
+    if (!layer || isStill(layer)) return 1;
+    return speedValue(layer.speed);
+  }
+
+  // A layer and what is on it made `r` times as long about `anchor`, a second
+  // of the timeline that stays where it is.
+  function stretched(l, anchor, r) {
+    const duration = round(l.duration * r);
+    const next = {
+      ...l,
+      start: round(Math.max(0, anchor + (l.start - anchor) * r)),
+      duration,
+    };
+    if (!isStill(l)) {
+      // From the part of the source it shows, so that part stays the same
+      // however often it is stretched.
+      const shown = l.duration * speedOf(l);
+      const speed = clamp(shown / duration, SPEED_MIN, SPEED_MAX);
+      next.speed = Math.abs(speed - 1) < 1e-9 ? 1 : speed;
+    }
+    const keys = keyframesFor(l);
+    if (keys.length) next.keyframes = keys.map((k) => ({ ...k, t: round(k.t * r) }));
+    for (const kind of COVER_KINDS) {
+      const cover = l[kind];
+      if (!cover || !cover.areas.some((a) => coverKeysFor(a).length)) continue;
+      next[kind] = {
+        ...cover,
+        areas: cover.areas.map((a) => {
+          const list = coverKeysFor(a);
+          return list.length ? { ...a, keys: list.map((k) => ({ ...k, t: round(k.t * r) })) } : a;
+        }),
+      };
+    }
+    next.fadeIn = round(Math.min(l.fadeIn || 0, duration));
+    next.fadeOut = round(Math.min(l.fadeOut || 0, Math.max(0, duration - next.fadeIn)));
+    return next;
+  }
+
+  /**
+   * Drag one edge of a layer to `time` without cutting anything: the same
+   * part of its source made to take the new length, faster or slower. Its
+   * whole group goes with it by the same share, about the edge that stays, so
+   * a picture and its sound stay together.
+   *
+   * Held where any of them would pass a tenth or ten times the speed, shrink
+   * below a clip's least length, or start before the timeline does. A still
+   * has no speed to change, so an edge of one is simply trimmed, as without
+   * the key. Hands back the list it was given when nothing moves.
+   */
+  function stretchGroup(layers, id, edge, time) {
+    const layer = layerById(layers, id);
+    if (!layer) return layers;
+    if (isStill(layer)) return trimGroup(layers, id, edge, time);
+    const members = groupOf(layers, id);
+    const anchor = edge === 'start' ? endOf(layer) : layer.start;
+    const want = edge === 'start' ? anchor - time : time - anchor;
+    let lo = 0;
+    let hi = Infinity;
+    for (const m of members) {
+      lo = Math.max(lo, MIN_LAYER_SPAN / m.duration);
+      if (!isStill(m)) {
+        lo = Math.max(lo, speedOf(m) / SPEED_MAX);
+        hi = Math.min(hi, speedOf(m) / SPEED_MIN);
+      }
+      // One that starts before the edge that stays must not be pushed off
+      // the front of the timeline.
+      const before = anchor - m.start;
+      if (before > 0) hi = Math.min(hi, anchor / before);
+    }
+    if (lo > hi) return layers;
+    const r = clamp(want / layer.duration, lo, hi);
+    if (!Number.isFinite(r) || Math.abs(r - 1) < 1e-9) return layers;
+    return layers.map((l) => (members.includes(l) ? stretched(l, anchor, r) : l));
+  }
+
+  /**
+   * A layer back at its own speed: the part of its source it shows at the
+   * length that part has, from where the layer starts. Every member of its
+   * group that has a speed goes back to its own. The list it was given when
+   * the layer already plays at 1.
+   */
+  function resetSpeed(layers, id) {
+    const layer = layerById(layers, id);
+    if (!layer || speedOf(layer) === 1) return layers;
+    const members = groupOf(layers, id);
+    const anchor = layer.start;
+    return layers.map((l) => {
+      if (!members.includes(l) || speedOf(l) === 1) return l;
+      return { ...stretched(l, anchor, speedOf(l)), speed: 1 };
+    });
   }
 
   function layerById(layers, id) {
@@ -2028,7 +2175,8 @@ const timelineModel = (() => {
           // the shift can never take it below zero. It is the whole of what a
           // still needs: its edge runs past its own beginning, and there is no
           // in-point behind it to go negative.
-          sourceIn: round(Math.max(0, l.sourceIn + shift)),
+          // V4.11. By as much of the source as that much of the timeline is.
+          sourceIn: round(Math.max(0, l.sourceIn + shift * speedOf(l))),
           duration: round(l.duration - shift),
           // V3.3. Held where they are on the timeline while the start moves
           // under them, which on the clip's own clock is back by the shift.
@@ -2643,7 +2791,7 @@ const timelineModel = (() => {
       id: newId(),
       start: round(at),
       duration: rest,
-      sourceIn: isStill(layer) ? layer.sourceIn : round(layer.sourceIn + kept),
+      sourceIn: isStill(layer) ? layer.sourceIn : round(layer.sourceIn + kept * speedOf(layer)),
       fadeIn: 0,
       fadeInCurve: 'linear',
       fadeInTransition: null,
@@ -3176,6 +3324,12 @@ const timelineModel = (() => {
     endOf,
     sourceRemaining,
     sourceBefore,
+    // V4.11.
+    SPEED_MIN,
+    SPEED_MAX,
+    speedOf,
+    stretchGroup,
+    resetSpeed,
     covers,
     IMAGE_SECONDS,
     isStill,

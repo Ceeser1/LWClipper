@@ -250,7 +250,8 @@ function ownAlpha(l) {
  * each cover's PNG input, in their order.
  */
 function coverHead(graph, l, n, input, fps, inputs, source) {
-  const plain = '[' + input + ':v]';
+  // V4.11. At the layer's speed from the very start, covers and all.
+  const plain = '[' + input + ':v]' + speedHead(l, fps);
   const files = (Array.isArray(l.coverFiles) && l.type === 'video' ? l.coverFiles : [])
     .map((f, i) => ({ ...f, input: inputs && inputs[i] }))
     .filter((f) => {
@@ -334,6 +335,48 @@ function keepOwnAlpha(graph, l, tag) {
   graph.push('[' + tag('mm') + ']scale=out_range=full[' + tag('mn') + ']');
   graph.push('[' + tag('ma') + '][' + tag('mn') + ']blend=all_mode=multiply[' + tag('mb') + ']');
   return '[' + tag('mq') + '][' + tag('mb') + ']';
+}
+
+// ---- V4.11. Speed ----
+//
+// A layer at another speed shows the same part of its source in more or less
+// time (timeline.js "Speed"). The input is read for as long as that part is,
+// and its frames' times are divided by the speed before anything else looks
+// at them, so from there on the layer is as long as it is on the timeline and
+// every later filter, the frame rate first, finds it at its own pace. A sound
+// is stretched by atempo, which keeps its pitch, as the preview's player
+// does. atempo takes a half to a hundred, and above two it drops samples
+// rather than blending them, so a speed outside a half to two goes in steps.
+
+/**
+ * What goes first on a picture's chain to bring it to the layer's speed: its
+ * frames' times divided by the speed, and the project's rate taken from them
+ * there and then. Rounded up, which gives each frame of the output the last
+ * frame of the source that had begun by its own moment: the frame the
+ * preview shows with the playhead on it. Left to round to the nearest, as it
+ * does at the source's own speed where the two are the same, the file ran up
+ * to a source frame ahead of the preview at a speed like 1.37 (measured).
+ */
+function speedHead(l, fps) {
+  const speed = timeline.speedOf(l);
+  return speed === 1 ? '' : 'setpts=(PTS-STARTPTS)/' + fixed(speed) + ',fps=' + fps + ':round=up,';
+}
+
+/** The atempo filters that bring a sound to a speed, none for 1. */
+function tempoFilters(speed) {
+  const out = [];
+  let left = speed;
+  if (!(left > 0) || Math.abs(left - 1) < 1e-9) return out;
+  while (left > 2 + 1e-9) {
+    out.push('atempo=2.0');
+    left /= 2;
+  }
+  while (left < 0.5 - 1e-9) {
+    out.push('atempo=0.5');
+    left /= 0.5;
+  }
+  if (Math.abs(left - 1) > 1e-9) out.push('atempo=' + fixed(left));
+  return out;
 }
 
 const evenDown = (v) => Math.floor(v / 2) * 2;
@@ -620,7 +663,9 @@ function buildComposeArgs({
     } else if (timeline.isStill(l)) {
       args.push('-loop', '1', '-framerate', String(fps), '-t', fixed(l.duration), '-i', l.src);
     } else {
-      args.push('-ss', fixed(l.sourceIn), '-t', fixed(l.duration), '-i', l.src);
+      // V4.11. As much of the source as the layer shows, which at another
+      // speed is not as long as the layer is.
+      args.push('-ss', fixed(l.sourceIn), '-t', fixed(l.duration * timeline.speedOf(l)), '-i', l.src);
     }
     addMask(l);
     addCovers(l);
@@ -800,6 +845,9 @@ function buildComposeArgs({
       graph.push('[' + indexOf.get(l.id) + ':a]'
         + chain([
           'asetpts=PTS-STARTPTS',
+          // V4.11. Its speed first, so the fades after it are in the
+          // timeline's seconds like everything else about the layer.
+          ...tempoFilters(timeline.speedOf(l)),
           l.volume !== 1 ? 'volume=' + fixed(l.volume) : null,
           // Step 22a, and the opposite placement to the video above. adelay has
           // to stay last, so the fades go before it, which means they are still
@@ -996,4 +1044,6 @@ async function render({
   return out;
 }
 
-module.exports = { buildComposeArgs, outputSpan, enableExpr, sourceSizes, render, spillGraph, GRAPH_ARG_MAX };
+module.exports = {
+  buildComposeArgs, outputSpan, enableExpr, sourceSizes, render, spillGraph, GRAPH_ARG_MAX, tempoFilters,
+};
