@@ -1267,7 +1267,387 @@ const genDraw = (() => {
     return [...out];
   }
 
+  // ---- V4.10. Transitions ----
+  //
+  // What a fade does to a picture in place of fading it (timeline.js
+  // "Transitions"). Five of them are a matte: where the new picture already
+  // shows, at a moment of the way from the old one to it. drawTransitionMatte
+  // is that matte and the only drawing of it, so the preview, which lays it
+  // on the picture it is drawing, and the export, which writes it out frame
+  // by frame for the encoder, cut by the same pixels. The other two move the
+  // picture: geometry.js places a file's picture, and drawGenTransition below
+  // draws a generated one, which is a canvas already.
+
+  // Surfaces kept like the soft edge's: the window has OffscreenCanvas, node
+  // has neither. 0 and 1 are a generated picture and its matte, 2 what a soft
+  // iris is drawn on before it is blurred, 3 a dissolve's cells.
+  const transitionSurfaces = [null, null, null, null];
+  function transitionSurface(i, w, h) {
+    if (typeof OffscreenCanvas === 'undefined') return null;
+    if (!transitionSurfaces[i]) transitionSurfaces[i] = new OffscreenCanvas(w, h).getContext('2d');
+    const c = transitionSurfaces[i].canvas;
+    if (c.width !== w) c.width = w;
+    if (c.height !== h) c.height = h;
+    return transitionSurfaces[i];
+  }
+
+  /**
+   * A dissolve cell's place in the order they come in, 0 up to 1: the same
+   * for the same cell every time, and nothing like its neighbours'.
+   */
+  function dissolveOrder(i, j) {
+    let n = (Math.imul(i | 0, 374761393) + Math.imul(j | 0, 668265263)) | 0;
+    n = Math.imul(n ^ (n >>> 13), 1274126177);
+    n ^= n >>> 16;
+    return (n >>> 0) / 4294967296;
+  }
+
+  // A five-pointed star, one point straight up: how far in its points' hollows
+  // lie, as a share of the points.
+  const STAR_INNER = 0.381966;
+
+  /**
+   * How far a star whose points are at 1 reaches from its middle in a
+   * direction: to the edge between the point and the hollow either side.
+   */
+  function starReach(angle) {
+    const step = Math.PI / 5;
+    const turn = ((((angle + Math.PI / 2) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) / step;
+    const k = Math.min(9, Math.floor(turn));
+    const corner = (i) => {
+      const a = -Math.PI / 2 + i * step;
+      const reach = i % 2 ? STAR_INNER : 1;
+      return [Math.cos(a) * reach, Math.sin(a) * reach];
+    };
+    const [ax, ay] = corner(k);
+    const [bx, by] = corner(k + 1);
+    const ex = bx - ax;
+    const ey = by - ay;
+    return (ax * ey - ay * ex) / (Math.cos(angle) * ey - Math.sin(angle) * ex);
+  }
+
+  /**
+   * How large a star's points have to be for it to hold a picture `w` by
+   * `h` about its middle: until the last corner is inside it. Worked out from
+   * the corners rather than from the circle the star holds, which a wide
+   * picture's corners are inside long before, so the star would have covered
+   * the picture with a fifth of the way still to go.
+   */
+  function starCover(w, h) {
+    const far = Math.hypot(w, h) / 2;
+    let least = Infinity;
+    for (const [x, y] of [[w, h], [-w, h], [w, -h], [-w, -h]]) {
+      least = Math.min(least, starReach(Math.atan2(y, x)));
+    }
+    return far / least;
+  }
+
+  /**
+   * An iris's opening as a path: `r` is how far it has opened, and at `far`,
+   * the way to the picture's corner, every shape just covers the picture. A
+   * square has the picture's own proportions and a diamond stands on its
+   * corners.
+   */
+  function irisPath(ctx, shape, w, h, r, far) {
+    const cx = w / 2;
+    const cy = h / 2;
+    const k = r / far;
+    if (shape === 'square') {
+      ctx.rect(cx - (k * w) / 2, cy - (k * h) / 2, k * w, k * h);
+      return;
+    }
+    if (shape === 'diamond') {
+      ctx.moveTo(cx, cy - k * h);
+      ctx.lineTo(cx + k * w, cy);
+      ctx.lineTo(cx, cy + k * h);
+      ctx.lineTo(cx - k * w, cy);
+      ctx.closePath();
+      return;
+    }
+    if (shape === 'star') {
+      const outer = k * starCover(w, h);
+      for (let i = 0; i < 10; i += 1) {
+        const a = -Math.PI / 2 + (i * Math.PI) / 5;
+        const reach = i % 2 ? outer * STAR_INNER : outer;
+        if (i) ctx.lineTo(cx + Math.cos(a) * reach, cy + Math.sin(a) * reach);
+        else ctx.moveTo(cx + Math.cos(a) * reach, cy + Math.sin(a) * reach);
+      }
+      ctx.closePath();
+      return;
+    }
+    ctx.moveTo(cx + r, cy);
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  }
+
+  /**
+   * A path filled white with its edge blurred by `sigma`, in the pixels the
+   * path is said in: drawn sharp on a surface with room round it and blurred
+   * back, as a shape's soft edge is. Sharp when there is no blur to make or
+   * no surface to make it on.
+   */
+  function fillSoft(ctx, sigma, trace, surface) {
+    const T = typeof ctx.getTransform === 'function' ? ctx.getTransform() : null;
+    const blur = T ? sigma * Math.hypot(T.a, T.b) : 0;
+    const m = blur > 0.05 && ctx.canvas && surface
+      ? surface(2, ctx.canvas.width + (Math.ceil(blur * 3) + 2) * 2, ctx.canvas.height + (Math.ceil(blur * 3) + 2) * 2)
+      : null;
+    if (!m) {
+      ctx.beginPath();
+      trace(ctx);
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+      return;
+    }
+    const pad = Math.ceil(blur * 3) + 2;
+    m.setTransform(1, 0, 0, 1, 0, 0);
+    m.clearRect(0, 0, m.canvas.width, m.canvas.height);
+    m.setTransform(T.a, T.b, T.c, T.d, T.e + pad, T.f + pad);
+    m.beginPath();
+    trace(m);
+    m.fillStyle = '#ffffff';
+    m.fill();
+    m.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.filter = 'blur(' + blur + 'px)';
+    ctx.drawImage(m.canvas, -pad, -pad);
+    ctx.restore();
+  }
+
+  /**
+   * Where the new picture already shows, `e` of the way through a transition
+   * (0 none of it, 1 all of it), onto a cleared canvas: white where it does,
+   * clear where it does not, in a box `w` by `h` at the context's origin. The
+   * old picture's part is this taken away from everything.
+   *
+   * `pad` is how far round the box the matte is carried on, for a picture
+   * that reaches past the box it is measured by, a title's shadow say. Each
+   * kind goes on outside the box the way it goes inside it.
+   *
+   * `surface(i, w, h)` hands out scratch contexts, or is null for none: then
+   * a soft iris is drawn sharp, which is what the tests draw.
+   */
+  function drawTransitionMatte(ctx, transition, e, w, h, pad = 0, surface) {
+    const u = Math.min(1, Math.max(0, Number(e) || 0));
+    if (u <= 0 || !transition) return;
+    const on = surface === undefined ? transitionSurface : surface;
+    const x0 = 0 - pad;
+    const y0 = 0 - pad;
+    const x1 = w + pad;
+    const y1 = h + pad;
+    ctx.save();
+    if (u >= 1) {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+      ctx.restore();
+      return;
+    }
+    const soft = Math.min(1, Math.max(0, Number(transition.soft) || 0));
+    const kind = transition.kind;
+    if (kind === 'wipe') {
+      // A straight edge, square to the way it travels, from the box's near
+      // corner to its far one. Its soft band is a share of that way, and it
+      // starts wholly before the box and ends wholly past it.
+      const a = (transition.angle * Math.PI) / 180;
+      const ux = Math.cos(a);
+      const uy = Math.sin(a);
+      const reach = (Math.abs(ux) * w + Math.abs(uy) * h) / 2;
+      const band = Math.max(1, soft * 2 * reach);
+      const mid = -reach - band / 2 + u * (2 * reach + band);
+      const g = ctx.createLinearGradient(
+        w / 2 + ux * (mid - band / 2), h / 2 + uy * (mid - band / 2),
+        w / 2 + ux * (mid + band / 2), h / 2 + uy * (mid + band / 2));
+      g.addColorStop(0, 'rgba(255,255,255,1)');
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+    } else if (kind === 'iris') {
+      // A shape growing from the middle until it holds the whole box, or with
+      // `reverse` everything but a shape that shrinks onto the middle.
+      const far = Math.hypot(w, h) / 2;
+      const sigma = (soft * far) / SOFT_SPREAD;
+      const room = sigma * 3;
+      const r = -room + (transition.reverse ? 1 - u : u) * (far + room * 2);
+      if (transition.reverse) {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+        ctx.globalCompositeOperation = 'destination-out';
+      }
+      if (r > 0) fillSoft(ctx, sigma, (c) => irisPath(c, transition.shape, w, h, r, far), on);
+    } else if (kind === 'clock') {
+      // A hand going once round the middle from `start`, the new picture
+      // behind it. `q` is a place on the way round, 0 up to 1.
+      const band = Math.max(0.004, soft);
+      const hand = -band / 2 + u * (1 + band);
+      const alphaAt = (q) => Math.min(1, Math.max(0, (hand + band / 2 - q) / band));
+      const g = ctx.createConicGradient((transition.start * Math.PI) / 180, w / 2, h / 2);
+      for (const q of [0, hand - band / 2, hand + band / 2, 1]) {
+        if (q < 0 || q > 1) continue;
+        g.addColorStop(transition.clockwise ? q : 1 - q, 'rgba(255,255,255,' + alphaAt(q) + ')');
+      }
+      ctx.fillStyle = g;
+      ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+    } else if (kind === 'blinds') {
+      // Slats side by side, each opening across its own width like a wipe.
+      const along = transition.vertical ? w : h;
+      const size = along / transition.count;
+      const band = Math.max(1, soft * size);
+      const edge = -band / 2 + u * (size + band);
+      for (let i = Math.floor((0 - pad) / size); i < Math.ceil((along + pad) / size); i += 1) {
+        const from = i * size;
+        const g = transition.vertical
+          ? ctx.createLinearGradient(from + edge - band / 2, 0, from + edge + band / 2, 0)
+          : ctx.createLinearGradient(0, from + edge - band / 2, 0, from + edge + band / 2);
+        g.addColorStop(0, 'rgba(255,255,255,1)');
+        g.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = g;
+        if (transition.vertical) ctx.fillRect(from, y0, size, y1 - y0);
+        else ctx.fillRect(x0, from, x1 - x0, size);
+      }
+    } else if (kind === 'dissolve') {
+      // Square cells, `rows` of them down the box, each coming in at its own
+      // moment and over `soft` of the way.
+      const cell = h / transition.rows;
+      const band = Math.max(0.001, soft);
+      const level = u * (1 + band);
+      // No further out than is worth the cells: a small box in a large frame
+      // would otherwise ask for millions of them.
+      const most = 1200;
+      const i0 = Math.max(Math.floor(x0 / cell), Math.floor(w / cell / 2) - most);
+      const i1 = Math.min(Math.ceil(x1 / cell), Math.ceil(w / cell / 2) + most);
+      const j0 = Math.max(Math.floor(y0 / cell), Math.floor(transition.rows / 2) - most);
+      const j1 = Math.min(Math.ceil(y1 / cell), Math.ceil(transition.rows / 2) + most);
+      const cols = Math.max(1, i1 - i0);
+      const rows = Math.max(1, j1 - j0);
+      const alphaAt = (i, j) => Math.min(1, Math.max(0, (level - dissolveOrder(i, j)) / band));
+      const cells = on ? on(3, cols, rows) : null;
+      if (cells && typeof cells.createImageData === 'function') {
+        // One pixel a cell, drawn up to size without smoothing, so cells meet
+        // without a seam between them.
+        const img = cells.createImageData(cols, rows);
+        for (let j = 0; j < rows; j += 1) {
+          for (let i = 0; i < cols; i += 1) {
+            const at = (j * cols + i) * 4;
+            img.data[at] = 255;
+            img.data[at + 1] = 255;
+            img.data[at + 2] = 255;
+            img.data[at + 3] = Math.round(alphaAt(i0 + i, j0 + j) * 255);
+          }
+        }
+        cells.putImageData(img, 0, 0);
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(cells.canvas, 0, 0, cols, rows, i0 * cell, j0 * cell, cols * cell, rows * cell);
+      } else {
+        for (let j = j0; j < j1; j += 1) {
+          for (let i = i0; i < i1; i += 1) {
+            const a = alphaAt(i, j);
+            if (a <= 0) continue;
+            ctx.fillStyle = 'rgba(255,255,255,' + a + ')';
+            ctx.fillRect(i * cell, j * cell, cell, cell);
+          }
+        }
+      }
+    }
+    ctx.restore();
+  }
+
+  /**
+   * The box a generated layer's transition is measured by, in the frame's
+   * pixels, with its turn: a text's or a shape's own box, with room for an
+   * outline, a shadow or a soft edge round it, a bar's strip, and the whole
+   * frame for a text laid out in it or an inverted shape, which fills it.
+   */
+  function transitionBox(gen, width, height) {
+    const whole = { x: 0, y: 0, w: width, h: height, rotation: 0 };
+    if (!gen) return whole;
+    const k = scaleOf(gen, height);
+    const grown = (b, by, rotation) => ({
+      x: b.x - by, y: b.y - by, w: b.w + by * 2, h: b.h + by * 2, rotation: Number(rotation) || 0,
+    });
+    if (gen.form === 'bar') return grown(barRect(gen.bar, k, width, height), 0, 0);
+    if (gen.form === 'shape') {
+      const s = gen.shape;
+      if (s.invert) return whole;
+      return grown(shapeBox(gen, width, height), (Number(s.soft) || 0) * k, s.rotation);
+    }
+    const text = gen.text;
+    if (!text || !text.box) return whole;
+    const style = text.style || {};
+    const room = ((style.outline ? style.outline.width : 0)
+      + (style.shadow ? style.shadow.distance + style.shadow.size : 0)) * k;
+    return grown(boxOf(text, k, width, height), room, text.rotation);
+  }
+
+  /**
+   * A generated layer's picture, `width` by `height` like the frame, drawn
+   * through a transition onto a canvas `kx` by `ky` of its pixels for one of
+   * the frame's: the whole of what a transition does to a text, a shape or a
+   * bar, for the preview and for the frames the export writes. `state` is
+   * timeline.js transitionAt's, and `box` transitionBox's, which a matte is
+   * measured by and a zoom grows from the middle of. A slide crosses the
+   * whole frame, since a title's own box would cut its shadow off.
+   */
+  function drawGenTransition(ctx, picture, state, box, width, height, kx = 1, ky = 1, surface) {
+    const { half, transition } = state;
+    const u = Math.min(1, Math.max(0, Number(state.e) || 0));
+    const shown = half === 'in' ? u : 1 - u;
+    if (shown <= 0) return;
+    const W = width * kx;
+    const H = height * ky;
+    if (transition.kind === 'slide') {
+      const a = (transition.angle * Math.PI) / 180;
+      const by = half === 'in' ? -(1 - u) : u;
+      ctx.drawImage(picture, 0, 0, width, height,
+        Math.round(Math.cos(a)) * by * W, Math.round(Math.sin(a)) * by * H, W, H);
+      return;
+    }
+    if (transition.kind === 'zoom') {
+      const cx = (box.x + box.w / 2) * kx;
+      const cy = (box.y + box.h / 2) * ky;
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate((half === 'in' ? -(1 - u) : u) * transition.turns * Math.PI * 2);
+      ctx.scale(shown, shown);
+      ctx.translate(-cx, -cy);
+      ctx.drawImage(picture, 0, 0, width, height, 0, 0, W, H);
+      ctx.restore();
+      return;
+    }
+    const on = surface === undefined ? transitionSurface : surface;
+    const w = Math.max(1, Math.round(W));
+    const h = Math.max(1, Math.round(H));
+    const p = on ? on(0, w, h) : null;
+    const m = on ? on(1, w, h) : null;
+    if (!p || !m) {
+      ctx.drawImage(picture, 0, 0, width, height, 0, 0, W, H);
+      return;
+    }
+    p.setTransform(1, 0, 0, 1, 0, 0);
+    p.globalCompositeOperation = 'source-over';
+    p.clearRect(0, 0, w, h);
+    p.drawImage(picture, 0, 0, width, height, 0, 0, w, h);
+    m.setTransform(1, 0, 0, 1, 0, 0);
+    m.clearRect(0, 0, w, h);
+    // The matte in the box's own pixels, turned with it, and carried on over
+    // the whole frame.
+    m.setTransform(w / width, 0, 0, h / height, 0, 0);
+    m.translate(box.x + box.w / 2, box.y + box.h / 2);
+    m.rotate(((Number(box.rotation) || 0) * Math.PI) / 180);
+    m.translate(-box.w / 2, -box.h / 2);
+    drawTransitionMatte(m, transition, u, box.w, box.h, Math.hypot(width, height), on);
+    m.setTransform(1, 0, 0, 1, 0, 0);
+    p.globalCompositeOperation = half === 'in' ? 'destination-in' : 'destination-out';
+    p.drawImage(m.canvas, 0, 0);
+    p.globalCompositeOperation = 'source-over';
+    ctx.drawImage(p.canvas, 0, 0, w, h, 0, 0, W, H);
+  }
+
   return {
+    // V4.10.
+    drawTransitionMatte,
+    dissolveOrder,
+    transitionBox,
+    drawGenTransition,
     scaleOf,
     barRect,
     SHAPE_ASPECT,

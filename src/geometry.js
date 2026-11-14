@@ -664,6 +664,157 @@ const layerGeometry = (() => {
     });
   }
 
+  // ---- V4.10. A picture a transition moves ----
+  //
+  // Two of the transitions move the picture where the others only cut it: a
+  // slide pushes it across its own box, and a zoom grows it from its middle,
+  // turning if asked. Both are a placement at every moment, so they are said
+  // the way keyframes are: a list of placements at times, with a straight
+  // blend between neighbours. The preview draws the blend and composer.js
+  // turns the same list into its expressions of t, which is the road a
+  // picture between keyframes already takes, so the two cannot differ.
+  //
+  // The times come from timeline.js transitionSteps, which also carries how
+  // far the transition has got at each: its curve cut into straight pieces.
+
+  /**
+   * A placement as a moving transition has it at progress `e`: `half` is
+   * 'in' for the new picture coming and 'out' for the old one going.
+   *
+   * A slide shows only the part of the picture still inside its box: that
+   * part of the source, at that part of the box, and `window` says which
+   * part it is, as fractions of the whole picture, for whatever is cut to the
+   * picture's shape (a mask). A turned picture slides along its own turned
+   * box. A zoom is the whole picture smaller about its middle, turned by
+   * what is left of its spin. Never smaller than two pixels, since a picture
+   * of no size cannot be scaled to.
+   */
+  function transitionPlacement(p, half, transition, e) {
+    const u = clamp(finite(e, 0), 0, 1);
+    const d = p.dest;
+    const cx = d.x + d.width / 2;
+    const cy = d.y + d.height / 2;
+    if (transition.kind === 'zoom') {
+      const least = 2 / Math.max(2, Math.min(d.width, d.height));
+      const s = Math.max(least, half === 'in' ? u : 1 - u);
+      const turns = finite(transition.turns, 0);
+      const spin = (half === 'in' ? -(1 - u) : u) * turns * 360;
+      return {
+        src: p.src,
+        dest: { x: cx - (d.width * s) / 2, y: cy - (d.height * s) / 2, width: d.width * s, height: d.height * s },
+        rotation: finite(p.rotation, 0) + spin,
+        window: null,
+      };
+    }
+    // A slide: which way it travels, and how much of the picture is in the box.
+    const angle = ((Math.round(finite(transition.angle, 0) / 90) % 4) + 4) % 4;
+    const across = angle === 0 || angle === 2;
+    const forward = angle === 0 || angle === 1;
+    const extent = across ? d.width : d.height;
+    const f = clamp(half === 'in' ? u : 1 - u, 2 / Math.max(2, extent), 1);
+    // Coming in forwards, or going out backwards, it is the picture's far
+    // part that shows, at the near side of the box; otherwise its near part,
+    // at the far side.
+    const far = (half === 'in') === forward;
+    const window = across
+      ? { x: far ? 1 - f : 0, y: 0, w: f, h: 1 }
+      : { x: 0, y: far ? 1 - f : 0, w: 1, h: f };
+    const part = across
+      ? { x: d.x + (far ? 0 : (1 - f) * d.width), y: d.y, width: f * d.width, height: d.height }
+      : { x: d.x, y: d.y + (far ? 0 : (1 - f) * d.height), width: d.width, height: f * d.height };
+    // Turned, the part's middle goes round the box's middle with the box.
+    const a = finite(p.rotation, 0) * Math.PI / 180;
+    if (a) {
+      const px = part.x + part.width / 2 - cx;
+      const py = part.y + part.height / 2 - cy;
+      part.x = cx + px * Math.cos(a) - py * Math.sin(a) - part.width / 2;
+      part.y = cy + px * Math.sin(a) + py * Math.cos(a) - part.height / 2;
+    }
+    return {
+      src: {
+        x: p.src.x + window.x * p.src.width,
+        y: p.src.y + window.y * p.src.height,
+        width: window.w * p.src.width,
+        height: window.h * p.src.height,
+      },
+      dest: part,
+      rotation: finite(p.rotation, 0),
+      window,
+    };
+  }
+
+  /**
+   * A layer's placements through its moving transitions, as keyframes are:
+   * `[{ t, src, dest, rotation, turn, window }]` in time order, `turn` being
+   * the rotation carried on from one to the next without wrapping, which is
+   * what a straight blend between neighbours needs. Its own keyframes are in
+   * the list too, moved by the transition where they fall inside one. Null
+   * without `steps`, timeline.js transitionSteps, or when it cannot be placed.
+   */
+  function shownKeys(layer, source, project, steps) {
+    if (!Array.isArray(steps) || !steps.length) return null;
+    const base = keyedPlacements(layer, source, project);
+    const times = [...new Set([...steps.map((s) => s.t), ...base.map((k) => k.t)])].sort((a, b) => a - b);
+    // How far a half has got at `t`: between the two steps either side of it.
+    const progress = (half, t) => {
+      const mine = steps.filter((s) => s.half === half);
+      if (!mine.length || t < mine[0].t || t > mine[mine.length - 1].t) return null;
+      let i = 0;
+      while (i + 2 < mine.length && mine[i + 1].t <= t) i += 1;
+      const a = mine[i];
+      const b = mine[Math.min(i + 1, mine.length - 1)];
+      const u = b.t > a.t ? clamp((t - a.t) / (b.t - a.t), 0, 1) : 0;
+      return { transition: a.transition, e: a.e + (b.e - a.e) * u };
+    };
+    const out = [];
+    let turned = 0;
+    let before = null;
+    for (const t of times) {
+      const p = placementAt(layer, t, source, project);
+      if (!p) return null;
+      // The layer's own turn, the short way round from the moment before.
+      turned = before === null ? p.rotation : turned + turnBetween(before, p.rotation);
+      before = p.rotation;
+      const own = { src: p.src, dest: p.dest, rotation: turned };
+      const going = progress('in', t);
+      const leaving = going ? null : progress('out', t);
+      const state = going || leaving;
+      const moved = state ? transitionPlacement(own, going ? 'in' : 'out', state.transition, state.e) : { ...own, window: null };
+      out.push({ t, src: moved.src, dest: moved.dest, rotation: turnOf(moved.rotation), turn: moved.rotation, window: moved.window });
+    }
+    return out;
+  }
+
+  /**
+   * Where the picture is at `t` along shownKeys' list: the straight blend of
+   * the two either side, the first before them all and the last after. The
+   * rotation is the unwrapped one, so a spin of several turns blends as one.
+   */
+  function shownPlacementAt(keys, t) {
+    if (!keys || !keys.length) return null;
+    const at = finite(t, 0);
+    const pick = (k) => ({ src: k.src, dest: k.dest, rotation: k.turn, window: k.window });
+    if (at <= keys[0].t) return pick(keys[0]);
+    const last = keys[keys.length - 1];
+    if (at >= last.t) return pick(last);
+    let i = 0;
+    while (keys[i + 1].t <= at) i += 1;
+    const a = keys[i];
+    const b = keys[i + 1];
+    const u = (at - a.t) / (b.t - a.t);
+    const whole = { x: 0, y: 0, w: 1, h: 1 };
+    const wa = a.window || whole;
+    const wb = b.window || whole;
+    return {
+      src: blendRect(a.src, b.src, u),
+      dest: blendRect(a.dest, b.dest, u),
+      rotation: a.turn + (b.turn - a.turn) * u,
+      window: a.window || b.window
+        ? { x: wa.x + (wb.x - wa.x) * u, y: wa.y + (wb.y - wa.y) * u, w: wa.w + (wb.w - wa.w) * u, h: wa.h + (wb.h - wa.h) * u }
+        : null,
+    };
+  }
+
   /**
    * Where something of this size sits along an axis of this length, anchored at
    * the near edge, the middle, or the far edge.
@@ -1146,6 +1297,10 @@ const layerGeometry = (() => {
     placeLayer,
     placementAt,
     motionOf,
+    // V4.10.
+    transitionPlacement,
+    shownKeys,
+    shownPlacementAt,
     previewCanvasSize,
     drawImageArgs,
     filterParts,

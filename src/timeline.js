@@ -959,6 +959,14 @@ const timelineModel = (() => {
       // open path drops. Linear for anything unknown, old files included.
       fadeInCurve: curveId(props.fadeInCurve),
       fadeOutCurve: curveId(props.fadeOutCurve),
+      // V4.10. What each fade does to the picture in place of fading it: a
+      // wipe, a slide and so on, see "Transitions" below. Null is the plain
+      // fade, which every layer written before this has. A sound has nothing
+      // to wipe, so it never carries one. Declared here for the reason fadeIn
+      // is: a field createLayer does not name is a field the project open
+      // path drops.
+      fadeInTransition: props.type === 'audio' && kind !== 'gen' ? null : transitionSettingsOf(props.fadeInTransition),
+      fadeOutTransition: props.type === 'audio' && kind !== 'gen' ? null : transitionSettingsOf(props.fadeOutTransition),
       // V2.4. The ceiling the fades rise to, asked for as a line across the
       // clip: "Add a new horizontal line to set maximum alpha of video tracks."
       // 1 for every layer until somebody drags that line, so nothing written
@@ -1063,7 +1071,9 @@ const timelineModel = (() => {
   function fadeAlphaAt(layer, t) {
     const span = Math.max(0, round(Number(layer && layer.duration) || 0));
     if (!(span > 0)) return 1;
-    const fades = fadesOf(layer);
+    // V4.10. An end with a transition is not faded: the transition is what
+    // brings the picture in or takes it out there.
+    const fades = alphaFadesOf(layer);
     if (!fades.in && !fades.out) return 1;
     const into = clamp(round(t - (Number(layer.start) || 0)), 0, span);
     const curves = fadeCurvesOf(layer);
@@ -1145,6 +1155,223 @@ const timelineModel = (() => {
   /** A layer's two curves. Linear for every layer that never chose one. */
   function fadeCurvesOf(layer) {
     return { in: curveId(layer && layer.fadeInCurve), out: curveId(layer && layer.fadeOutCurve) };
+  }
+
+  // ---- V4.10. Transitions ----
+  //
+  // The user: "When rightclicking fade-in or fade-out (also at overlapping
+  // tracks) below the 3x3 grid of fade curves add a row "Transision" which
+  // opens a window where you can select one of pre-defined transitions. A
+  // transition always takes an "old" track and a "new" track so they behave
+  // identical between single-track "fade-in" transition, using a completely
+  // transparent "track" as before-track if no overlap exists. If an overlap
+  // exists it uses both tracks."
+  //
+  // So a transition is what a fade does to the picture in place of fading it,
+  // and it belongs to one end of a layer the way a fade's length and curve do:
+  // `fadeInTransition` and `fadeOutTransition`, each null for the plain fade
+  // or `{ kind, ...its settings }`. The fade's length is how long it takes and
+  // the fade's curve is how its progress runs, so the nine curves ease a wipe
+  // exactly as they ease a fade.
+  //
+  // Progress `e` runs from 0, all of the old picture, to 1, all of the new.
+  // A layer's start is the new picture coming in over whatever is under it,
+  // and its end is the old picture going out for whatever is under it: on a
+  // single track the other one is nothing at all, and where two tracks overlap
+  // the earlier one's end and the later one's start carry the same transition
+  // and run through it together, so the two halves are one movement.
+  //
+  //   wipe      a straight edge crossing the picture in a direction
+  //   iris      a shape opening from the middle, or closing onto it
+  //   clock     a hand sweeping round the middle
+  //   blinds    slats opening side by side
+  //   dissolve  blocks appearing in no order
+  //   slide     the new picture pushing the old one out in a direction
+  //   zoom      the new picture growing from the middle, turning if asked
+  //
+  // The first five are a matte, where the new picture shows and where it does
+  // not yet; the last two move the picture. genDraw.js draws the mattes and
+  // geometry.js places the moved pictures, each once for the preview and the
+  // export alike.
+
+  const TRANSITION_KINDS = ['wipe', 'iris', 'clock', 'blinds', 'dissolve', 'slide', 'zoom'];
+  const IRIS_SHAPES = ['circle', 'square', 'diamond', 'star'];
+  // What each kind is when nothing has been set on it yet.
+  const TRANSITION_DEFAULTS = {
+    wipe: { angle: 0, soft: 0.1 },
+    iris: { shape: 'circle', soft: 0.1, reverse: false },
+    clock: { start: 270, clockwise: true, soft: 0.05 },
+    blinds: { count: 8, vertical: false, soft: 0 },
+    dissolve: { rows: 24, soft: 0.2 },
+    slide: { angle: 0 },
+    zoom: { turns: 0 },
+  };
+
+  // A direction in whole degrees, 0 up to 360: 0 to the right and positive
+  // clockwise, the app's way.
+  function directionOf(v, fallback) {
+    const n = Number(v);
+    if (v === null || v === undefined || v === '' || !Number.isFinite(n)) return fallback;
+    return ((Math.round(n) % 360) + 360) % 360;
+  }
+
+  /**
+   * A transition's settings as the model knows them, or null for the plain
+   * fade: anything that is not one of the kinds, which is also what every file
+   * written before 4.10 has. Each setting is held to its range, so a file
+   * edited by hand opens as something drawable.
+   */
+  function transitionSettingsOf(v) {
+    if (!v || typeof v !== 'object' || !TRANSITION_KINDS.includes(v.kind)) return null;
+    const d = TRANSITION_DEFAULTS[v.kind];
+    const soft = () => round(within(v.soft, 0, 1, d.soft));
+    if (v.kind === 'wipe') return { kind: 'wipe', angle: directionOf(v.angle, d.angle), soft: soft() };
+    if (v.kind === 'iris') {
+      return { kind: 'iris', shape: oneOf(v.shape, IRIS_SHAPES, d.shape), soft: soft(), reverse: bool(v.reverse) };
+    }
+    if (v.kind === 'clock') {
+      return { kind: 'clock', start: directionOf(v.start, d.start), clockwise: v.clockwise !== false, soft: soft() };
+    }
+    if (v.kind === 'blinds') {
+      return { kind: 'blinds', count: Math.round(within(v.count, 2, 64, d.count)), vertical: bool(v.vertical), soft: soft() };
+    }
+    if (v.kind === 'dissolve') return { kind: 'dissolve', rows: Math.round(within(v.rows, 2, 200, d.rows)), soft: soft() };
+    if (v.kind === 'slide') {
+      // One of the four sides: the nearest quarter turn.
+      return { kind: 'slide', angle: (Math.round(directionOf(v.angle, d.angle) / 90) % 4) * 90 };
+    }
+    // Quarter turns, either way round, four whole ones at most.
+    return { kind: 'zoom', turns: Math.round(within(v.turns, -4, 4, d.turns) * 4) / 4 };
+  }
+
+  /** A kind as it is before anything is set on it. */
+  function transitionDefault(kind) {
+    return transitionSettingsOf({ kind });
+  }
+
+  /** A layer's two transitions, each null for the plain fade. */
+  function transitionsOf(layer) {
+    return {
+      in: transitionSettingsOf(layer && layer.fadeInTransition),
+      out: transitionSettingsOf(layer && layer.fadeOutTransition),
+    };
+  }
+
+  /** Whether a transition moves the picture, where the others only cut it. */
+  function transitionMoves(transition) {
+    return !!transition && (transition.kind === 'slide' || transition.kind === 'zoom');
+  }
+
+  /**
+   * Whether a transition moves the old picture as well as the new one. Then
+   * the earlier of two overlapping clips has to go through it too, even where
+   * the later one would cover it: a slide pushes it out of the way.
+   */
+  function transitionMovesOld(transition) {
+    return !!transition && transition.kind === 'slide';
+  }
+
+  /**
+   * A layer's fade lengths as far as they fade its alpha: fadesOf, with an
+   * end that has a transition counted as no fade at all, since the transition
+   * is what happens there instead. What the preview and the encoder fade by.
+   */
+  function alphaFadesOf(layer) {
+    const fades = fadesOf(layer);
+    const tr = transitionsOf(layer);
+    return { in: tr.in ? 0 : fades.in, out: tr.out ? 0 : fades.out };
+  }
+
+  /**
+   * The transition a layer is going through at timeline second `t`, or null
+   * for none: `{ half, transition, e }`, `half` being 'in' for its start and
+   * 'out' for its end, and `e` how far it has got, 0 to 1, by the fade's own
+   * curve. Only one can be running, since the two fades never overlap. At
+   * the very end of its way in and before the start of its way out there is
+   * none: the picture is simply there.
+   */
+  function transitionAt(layer, t) {
+    const tr = transitionsOf(layer);
+    if (!tr.in && !tr.out) return null;
+    const span = Math.max(0, round(Number(layer.duration) || 0));
+    if (!(span > 0)) return null;
+    const fades = fadesOf(layer);
+    const curves = fadeCurvesOf(layer);
+    const into = clamp(round(t - (Number(layer.start) || 0)), 0, span);
+    if (tr.in && fades.in > 0 && into < fades.in) {
+      return { half: 'in', transition: tr.in, e: fadeShape(curves.in, into / fades.in) };
+    }
+    if (tr.out && fades.out > 0 && into > span - fades.out) {
+      return { half: 'out', transition: tr.out, e: fadeShape(curves.out, (into - (span - fades.out)) / fades.out) };
+    }
+    return null;
+  }
+
+  // How many straight pieces a moving transition's way is cut into when its
+  // curve is not a straight line. The preview and the encoder both go along
+  // the same pieces, so this is how smooth the easing looks and never a
+  // difference between the two.
+  const TRANSITION_STEPS = 12;
+
+  /**
+   * The moments a layer's moving transitions are placed at, in the clip's own
+   * seconds and in order: `[{ t, half, transition, e }]`, from each one's
+   * start to its end. Two for a straight curve, which a straight blend
+   * between them follows exactly, TRANSITION_STEPS pieces for any other.
+   * Empty when neither end has a transition that moves the picture.
+   */
+  function transitionSteps(layer) {
+    const tr = transitionsOf(layer);
+    const fades = fadesOf(layer);
+    const curves = fadeCurvesOf(layer);
+    const span = Math.max(0, round(Number(layer && layer.duration) || 0));
+    const out = [];
+    const run = (half, transition, from, length, curve) => {
+      if (!transitionMoves(transition) || !(length > 0)) return;
+      const n = curve === 'linear' ? 1 : TRANSITION_STEPS;
+      for (let i = 0; i <= n; i += 1) {
+        out.push({ t: round(from + (length * i) / n), half, transition, e: fadeShape(curve, i / n) });
+      }
+    };
+    run('in', tr.in, 0, fades.in, curves.in);
+    run('out', tr.out, round(span - fades.out), fades.out, curves.out);
+    return out;
+  }
+
+  /**
+   * Set the transition of one end of a layer, null for the plain fade.
+   *
+   * For every picture in its group, as a fade's length and curve are. Where
+   * that end is part of an overlap, the clip on the other side gets the same
+   * one on its facing end, and the earlier clip's fade out is brought to what
+   * the transition needs: the length of the overlap when it has to go through
+   * it itself (a sound never does; a see-through picture always; any picture
+   * when the transition moves the old one), and nothing when the later clip
+   * simply covers it.
+   *
+   * Hands back the list it was given when nothing changed.
+   */
+  function setTransition(layers, id, which, transition) {
+    const want = transitionSettingsOf(transition);
+    const key = (end) => (end === 'out' ? 'fadeOutTransition' : 'fadeInTransition');
+    const other = which === 'out' ? 'in' : 'out';
+    const same = (a, b) => JSON.stringify(a || null) === JSON.stringify(b || null);
+    const put = (list, layerId, end) => replace(list, layerId, (l) => {
+      if (l.type !== 'video' || same(transitionSettingsOf(l[key(end)]), want)) return l;
+      return { ...l, [key(end)]: want };
+    });
+    let next = layers;
+    for (const member of groupOf(layers, id)) {
+      const cross = overlapOf(layers, member.id, which);
+      next = put(next, member.id, which);
+      if (!cross || member.type !== 'video') continue;
+      next = put(next, which === 'out' ? cross.into : cross.from, other);
+      const from = layerById(next, cross.from);
+      const into = layerById(next, cross.into);
+      const both = fadesOutUnder(from, into) || transitionMovesOld(want);
+      next = setFade(next, cross.from, 'out', both ? cross.overlap : 0);
+    }
+    return next.every((l, i) => l === layers[i]) ? layers : next;
   }
 
   // ---- V2.4. The maximum alpha of a layer ----
@@ -1523,18 +1750,33 @@ const timelineModel = (() => {
       if (now.get(pair) === o) continue;
       const [a, b] = pair.split('|');
       if (fadeIs(b, 'fadeIn', o)) next = setFade(next, b, 'in', 0);
-      if (fadesOutUnder(layerById(next, a), layerById(next, b)) && fadeIs(a, 'fadeOut', o)) {
-        next = setFade(next, a, 'out', 0);
-      }
+      // V4.10. Or a picture that went through a transition that moved it.
+      const went = fadesOutUnder(layerById(next, a), layerById(next, b))
+        || transitionMovesOld(transitionsOf(layerById(next, a)).out);
+      if (went && fadeIs(a, 'fadeOut', o)) next = setFade(next, a, 'out', 0);
     }
     for (const [pair, o] of now) {
       if (was.get(pair) === o) continue;
       const [a, b] = pair.split('|');
-      const both = fadesOutUnder(layerById(next, a), layerById(next, b));
+      const into = layerById(next, b);
+      // V4.10. The overlap is the later clip's way in: its curve and its
+      // transition become the earlier clip's way out as well, so the two
+      // halves are one movement, and a transition that moves the old picture
+      // has the earlier clip go through it whatever it is.
+      const transition = transitionsOf(into).in;
+      const curve = fadeCurvesOf(into).in;
+      const both = fadesOutUnder(layerById(next, a), into) || transitionMovesOld(transition);
       next = setFade(next, b, 'in', o);
       next = setFade(next, a, 'out', both ? o : 0);
+      next = replace(next, a, (l) => {
+        const own = l.type === 'video' ? transition : null;
+        const sameCurve = curveId(l.fadeOutCurve) === curve;
+        const sameTransition = JSON.stringify(transitionSettingsOf(l.fadeOutTransition)) === JSON.stringify(own);
+        return sameCurve && sameTransition ? l : { ...l, fadeOutCurve: curve, fadeOutTransition: own };
+      });
     }
-    return next;
+    // The list it was given when nothing was written.
+    return next.every((l, i) => l === after[i]) ? after : next;
   }
 
   // ---- V4.9. The overlap a fade is part of ----
@@ -1575,6 +1817,8 @@ const timelineModel = (() => {
         overlap: o,
         both: fadesOutUnder(from, into) && Math.abs(fadesOf(from).out - o) <= 1e-6,
         curve: fadeCurvesOf(into).in,
+        // V4.10. And the transition it runs through, null for the plain fade.
+        transition: transitionsOf(into).in,
       };
     }
     return null;
@@ -2391,6 +2635,8 @@ const timelineModel = (() => {
       // V3.8.1. The cut end is not a fade and does not keep a curve either, or
       // a fade dragged out there later would come out in a shape nobody chose.
       fadeOutCurve: 'linear',
+      // V4.10. Nor a transition, for the same reason.
+      fadeOutTransition: null,
     };
     const right = {
       ...layer,
@@ -2400,6 +2646,7 @@ const timelineModel = (() => {
       sourceIn: isStill(layer) ? layer.sourceIn : round(layer.sourceIn + kept),
       fadeIn: 0,
       fadeInCurve: 'linear',
+      fadeInTransition: null,
       fadeOut: round(Math.min(layer.fadeOut || 0, rest)),
       groupId,
       // V3.3. Both halves keep every keyframe, the right one on its own clock,
@@ -2836,13 +3083,16 @@ const timelineModel = (() => {
       if (!isPiece.has(l.id)) return l;
       const at = pieceIds.indexOf(l.id);
       const out = { ...l, joinId };
+      // V4.10. A seam is a cut, so it has no transition either.
       if (at > 0) {
         out.fadeIn = 0;
         out.fadeInCurve = 'linear';
+        out.fadeInTransition = null;
       }
       if (at < pieceIds.length - 1) {
         out.fadeOut = 0;
         out.fadeOutCurve = 'linear';
+        out.fadeOutTransition = null;
       }
       return out;
     });
@@ -2955,6 +3205,19 @@ const timelineModel = (() => {
     fadeCurvesOf,
     setFadeCurve,
     fadeCurveGroup,
+    // V4.10.
+    TRANSITION_KINDS,
+    IRIS_SHAPES,
+    TRANSITION_STEPS,
+    transitionSettingsOf,
+    transitionDefault,
+    transitionsOf,
+    transitionMoves,
+    transitionMovesOld,
+    alphaFadesOf,
+    transitionAt,
+    transitionSteps,
+    setTransition,
     alphaOf,
     layerAlphaAt,
     sourceTimeFor,

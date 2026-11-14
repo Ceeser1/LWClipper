@@ -421,13 +421,32 @@ function drawLayerInto(ctx, canvas, layer, crop = layer.crop, render = layer.ren
   const source = layerSource(layer);
   if (!source) return;
   const frame = projectFrame();
+  // V4.10. The transition the layer is going through at this moment, if any:
+  // a wipe, a slide and so on in place of its fade. Only at a moment of the
+  // timeline; the editors' drafts are drawn without one and show the picture
+  // whole. At the very start of its way in there is nothing of it yet.
+  const going = at !== null ? timelineModel.transitionAt(layer, at) : null;
+  if (going && going.half === 'in' && going.e <= 0) return;
+  if (going && entry.gen) {
+    // A generated picture is a canvas, so the whole transition is drawn:
+    // genDraw's one drawing, which the export's frames are made by too.
+    const gen = genDraw.genAt(layer, at - layer.start, frame.width, frame.height);
+    genDraw.drawGenTransition(ctx, entry.el, going, genDraw.transitionBox(gen, frame.width, frame.height),
+      frame.width, frame.height, canvas.width / frame.width, canvas.height / frame.height);
+    return;
+  }
+  // A file's picture is placed through a slide or a zoom by geometry.js, the
+  // list composer.js turns into its expressions, and cut by a matte below.
+  const moved = at !== null && layer.kind !== 'gen' ? shownKeysFor(layer, source, frame) : null;
   // V3.3. At a moment of the timeline, a layer with keyframes is wherever they
   // put it then: the same placementAt composer.js turns into its expressions.
   // The popup's drafts come without a moment, because a draft is one keyframe.
   // A generated layer's keyframes move what is drawn on its canvas, above,
   // and the canvas itself always covers the frame.
-  const keyed = at !== null && layer.kind !== 'gen' && timelineModel.keyframesFor(layer).length;
-  const placement = keyed
+  const keyed = !!moved || (at !== null && layer.kind !== 'gen' && timelineModel.keyframesFor(layer).length);
+  const placement = moved
+    ? layerGeometry.shownPlacementAt(moved, at - layer.start)
+    : keyed
     ? layerGeometry.placementAt(layer, at - layer.start, source, frame)
     : layerGeometry.placeLayer({
       source,
@@ -462,7 +481,11 @@ function drawLayerInto(ctx, canvas, layer, crop = layer.crop, render = layer.ren
   // part of the source the rectangle is.
   const pic = maskedPicture(layer, entry.el, [d.sx * kx, d.sy * ky, d.sw * kx, d.sh * ky], d,
     at === null ? compositeAt : at,
-    { x: d.sx, y: d.sy, w: d.sw, h: d.sh, W: source.width, H: source.height, ex: kx, ey: ky });
+    { x: d.sx, y: d.sy, w: d.sw, h: d.sh, W: source.width, H: source.height, ex: kx, ey: ky },
+    // V4.10. The matte of a transition that cuts the picture, and the part
+    // of the picture a slide is showing, which its mask is cut to as well.
+    going && !timelineModel.transitionMoves(going.transition) ? going : null,
+    (placement && placement.window) || null);
   if (!turn) {
     ctx.drawImage(pic.el, ...pic.from, d.dx, d.dy, d.dw, d.dh);
     return;
@@ -497,7 +520,10 @@ function maskedSurface(i, w, h) {
  */
 // V4.7. `src`, when given, says what part of the source picture `from` is,
 // and with it the layer's Obscure and Pixelate are laid on first, see layCover.
-function maskedPicture(layer, el, from, d, at, src = null) {
+// V4.10. `matte`, when given, is the transition cutting the picture at this
+// moment (timeline.js transitionAt), laid on last, and `win` the part of the
+// whole picture being drawn, as fractions of it, when a slide shows only part.
+function maskedPicture(layer, el, from, d, at, src = null, matte = null, win = null) {
   const mask = layer.kind !== 'gen' ? timelineModel.maskAt(layer, at - layer.start) : null;
   // A custom mask whose picture cannot be read, gone from the disk since, is
   // shown as no mask rather than as a picture with nothing left of it.
@@ -505,7 +531,7 @@ function maskedPicture(layer, el, from, d, at, src = null) {
   // V4.8. Each with its areas where their own keyframes put them at `at`.
   const covers = (src ? timelineModel.coverList(layer) : [])
     .map((c) => ({ kind: c.kind, cover: timelineModel.coverAt(c.cover, at - layer.start) }));
-  if (!cut && !covers.length) return { el, from };
+  if (!cut && !covers.length && !matte) return { el, from };
   const w = Math.max(1, Math.round(d.dw));
   const h = Math.max(1, Math.round(d.dh));
   // Before the picture is drawn: it is made on the surfaces the covers use.
@@ -518,14 +544,53 @@ function maskedPicture(layer, el, from, d, at, src = null) {
     if (c.kind === 'pixelate' && under) layCover(p, c, under.el, under.src, w, h);
     else layCover(p, c, el, src, w, h);
   }
-  if (!cut) return { el: p.canvas, from: [0, 0, w, h] };
-  const m = maskedSurface(1, w, h);
-  m.setTransform(1, 0, 0, 1, 0, 0);
-  genDraw.drawMask(m, mask, w, h, maskPicture(mask));
-  p.globalCompositeOperation = 'destination-in';
-  p.drawImage(m.canvas, 0, 0);
-  p.globalCompositeOperation = 'source-over';
+  if (cut) {
+    const m = maskedSurface(1, w, h);
+    m.setTransform(1, 0, 0, 1, 0, 0);
+    if (win && win.w > 0 && win.h > 0) {
+      // V4.10. A slide is showing part of the picture, and the mask is the
+      // whole picture's: drawn at the whole picture's size, moved so that the
+      // part showing is the part on the surface.
+      m.clearRect(0, 0, w, h);
+      const W = w / win.w;
+      const H = h / win.h;
+      m.setTransform(1, 0, 0, 1, -win.x * W, -win.y * H);
+      genDraw.drawMask(m, mask, W, H, maskPicture(mask));
+      m.setTransform(1, 0, 0, 1, 0, 0);
+    } else {
+      genDraw.drawMask(m, mask, w, h, maskPicture(mask));
+    }
+    p.globalCompositeOperation = 'destination-in';
+    p.drawImage(m.canvas, 0, 0);
+    p.globalCompositeOperation = 'source-over';
+  }
+  if (matte) {
+    // V4.10. The transition's matte: the new picture kept where it shows on
+    // its way in, the old one taken away there on its way out.
+    const m = maskedSurface(1, w, h);
+    m.setTransform(1, 0, 0, 1, 0, 0);
+    m.globalCompositeOperation = 'source-over';
+    m.clearRect(0, 0, w, h);
+    genDraw.drawTransitionMatte(m, matte.transition, matte.e, w, h);
+    p.globalCompositeOperation = matte.half === 'in' ? 'destination-in' : 'destination-out';
+    p.drawImage(m.canvas, 0, 0);
+    p.globalCompositeOperation = 'source-over';
+  }
   return { el: p.canvas, from: [0, 0, w, h] };
+}
+
+// V4.10. A layer's placements through a slide or a zoom, kept by the layer
+// object and the frame it was worked out for: asked for on every frame drawn,
+// and a layer is a new object whenever anything about it changes.
+const shownKeysCache = new WeakMap();
+function shownKeysFor(layer, source, frame) {
+  const key = source.width + 'x' + source.height + ':' + frame.width + 'x' + frame.height;
+  const kept = shownKeysCache.get(layer);
+  if (kept && kept.key === key) return kept.keys;
+  const steps = timelineModel.transitionSteps(layer);
+  const keys = steps.length ? layerGeometry.shownKeys(layer, source, frame, steps) : null;
+  shownKeysCache.set(layer, { key, keys });
+  return keys;
 }
 
 // ---- V4.7. Obscure and Pixelate ----

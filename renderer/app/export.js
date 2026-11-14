@@ -134,37 +134,145 @@ function exportName() {
  * Cached like the single PNGs, by everything the frames depend on, so a second
  * export of the same project draws nothing.
  */
-async function exportGenFrames(l, motion, frame) {
+//
+// V4.10. And one going through a transition, any of them, for the stretch of
+// each: a generated picture is a canvas, so genDraw draws the transition
+// itself (drawGenTransition, the preview's own drawing) and the encoder is
+// handed the result. `spans` are the stretches drawn, as frames.
+async function exportGenFrames(l, spans, frame) {
   const fps = Number(frame.fps) || 30;
+  const runs = frameRuns(spans);
+  const key = JSON.stringify(['frames', l.gen, l.keyframes, l.duration, fps, frame.width, frame.height, runs,
+    transitionKey(l)]);
+  const canvas = document.createElement('canvas');
+  canvas.width = frame.width;
+  canvas.height = frame.height;
+  const ctx = canvas.getContext('2d');
+  // The picture itself, drawn again only when it is another picture.
+  const own = new OffscreenCanvas(frame.width, frame.height);
+  const ownCtx = own.getContext('2d');
+  let ownKey = null;
+  const wrote = await writeFrameRuns(key, runs, async (i) => {
+    const t = i / fps;
+    const gen = genDraw.genAt(l, t, frame.width, frame.height);
+    const genKey = genDraw.keyOf(gen, frame.width, frame.height);
+    if (genKey !== ownKey) {
+      genDraw.drawGen(ownCtx, gen, frame.width, frame.height);
+      ownKey = genKey;
+    }
+    const going = timelineModel.transitionAt(l, l.start + t);
+    ctx.clearRect(0, 0, frame.width, frame.height);
+    if (!going) ctx.drawImage(own, 0, 0);
+    else if (!(going.half === 'in' && going.e <= 0)) {
+      genDraw.drawGenTransition(ctx, own, going, genDraw.transitionBox(gen, frame.width, frame.height),
+        frame.width, frame.height);
+    }
+    return canvasPng(canvas);
+  });
+  if (!wrote.ok) return wrote;
+  return { ok: true, frames: { pattern: wrote.pattern, ...frameHolds(runs, l.duration, fps) } };
+}
+
+// ---- V4.10. Frames drawn for parts of a clip ----
+//
+// A moving mask, a moving generated picture and now a transition are each
+// drawn frame by frame, but only where they change: before, between and
+// after, the encoder holds a frame (composer.js holdFrames). With a
+// transition at each end of a clip that is two stretches with the whole
+// middle between them, so the stretches are a list.
+
+/** A canvas as a PNG's bytes, or null. */
+async function canvasPng(canvas) {
+  const blob = await new Promise((done) => canvas.toBlob(done, 'image/png'));
+  return blob ? new Uint8Array(await blob.arrayBuffer()) : null;
+}
+
+/** Stretches of frames, each [first, last], in order and run together where they meet. */
+function frameRuns(spans) {
+  const sorted = spans.filter((r) => r && r[1] >= r[0]).map((r) => [r[0], r[1]]).sort((a, b) => a[0] - b[0]);
+  const runs = [];
+  for (const r of sorted) {
+    const last = runs[runs.length - 1];
+    if (last && r[0] <= last[1] + 1) last[1] = Math.max(last[1], r[1]);
+    else runs.push(r);
+  }
+  return runs;
+}
+
+/** The stretch of frames a part of the clip covers, from `from` to `to` in its own seconds. */
+function frameSpan(l, fps, from, to) {
   const total = Math.max(1, Math.round(l.duration * fps));
-  const first = Math.min(total - 1, Math.max(0, Math.floor(motion.from * fps)));
-  const last = Math.min(total - 1, Math.max(first, Math.ceil(motion.to * fps)));
-  const key = JSON.stringify(['frames', l.gen, l.keyframes, l.duration, fps, frame.width, frame.height, first, last]);
+  const first = Math.min(total - 1, Math.max(0, Math.floor(from * fps)));
+  const last = Math.min(total - 1, Math.max(first, Math.ceil(to * fps)));
+  return [first, last];
+}
+
+/**
+ * How the encoder holds the frames of `runs` for the rest of the clip: the
+ * first for `lead` seconds before them, the last for `tail` after, and
+ * between two runs the last frame of the earlier one for the frames missing.
+ */
+function frameHolds(runs, duration, fps) {
+  const gaps = [];
+  let drawn = 0;
+  for (let i = 0; i < runs.length; i += 1) {
+    if (i) gaps.push({ after: drawn, frames: runs[i][0] - runs[i - 1][1] - 1 });
+    drawn += runs[i][1] - runs[i][0] + 1;
+  }
+  const holds = {
+    lead: runs[0][0] / fps,
+    tail: Math.max(0, duration - (runs[runs.length - 1][1] + 1) / fps),
+  };
+  return gaps.length ? { ...holds, gaps } : holds;
+}
+
+/**
+ * The frames of `runs` written under `key`, numbered on from 0 through every
+ * run, each drawn by `draw(i)`, which hands back a PNG's bytes for the clip's
+ * frame i. Nothing is drawn when the cache already holds them.
+ */
+async function writeFrameRuns(key, runs, draw) {
   const begun = await window.lwclipper.genFrames(key, { start: true });
   if (!begun.ok) return { ok: false, error: begun.error || 'no folder for the frames' };
   if (!begun.have) {
-    const canvas = document.createElement('canvas');
-    canvas.width = frame.width;
-    canvas.height = frame.height;
-    const ctx = canvas.getContext('2d');
-    for (let i = first; i <= last; i += 1) {
-      genDraw.drawGen(ctx, genDraw.genAt(l, i / fps, frame.width, frame.height), frame.width, frame.height);
-      const blob = await new Promise((done) => canvas.toBlob(done, 'image/png'));
-      if (!blob) return { ok: false, error: 'canvas toBlob gave no PNG' };
-      const wrote = await window.lwclipper.genFrame(key, i - first, new Uint8Array(await blob.arrayBuffer()));
-      if (!wrote.ok) return { ok: false, error: wrote.error };
+    let n = 0;
+    for (const [first, last] of runs) {
+      for (let i = first; i <= last; i += 1) {
+        const bytes = await draw(i);
+        if (!bytes) return { ok: false, error: 'canvas toBlob gave no PNG' };
+        const wrote = await window.lwclipper.genFrame(key, n, bytes);
+        if (!wrote.ok) return { ok: false, error: wrote.error };
+        n += 1;
+      }
     }
     const done = await window.lwclipper.genFrames(key, { finish: true });
     if (!done.ok) return { ok: false, error: done.error };
   }
-  return {
-    ok: true,
-    frames: {
-      pattern: begun.dir.replace(/\\/g, '/') + '/%05d.png',
-      lead: first / fps,
-      tail: Math.max(0, l.duration - (last + 1) / fps),
-    },
-  };
+  return { ok: true, pattern: begun.dir.replace(/\\/g, '/') + '/%05d.png' };
+}
+
+/** Everything about a layer's two fades a drawn transition depends on. */
+function transitionKey(l) {
+  const fades = timelineModel.fadesOf(l);
+  return [fades, timelineModel.fadeCurvesOf(l), timelineModel.transitionsOf(l)];
+}
+
+/**
+ * The stretches of a clip its transitions are drawn over, as frames: each
+ * end's, where `counts(transition)` says that one is drawn.
+ */
+function transitionSpans(l, fps, counts) {
+  const fades = timelineModel.fadesOf(l);
+  const tr = timelineModel.transitionsOf(l);
+  const spans = [];
+  if (tr.in && fades.in > 0 && counts(tr.in)) spans.push(frameSpan(l, fps, 0, fades.in));
+  if (tr.out && fades.out > 0 && counts(tr.out)) spans.push(frameSpan(l, fps, l.duration - fades.out, l.duration));
+  return spans;
+}
+
+/** Whether a file's picture is cut by a transition's matte at either end. */
+function hasTransitionMatte(l) {
+  return transitionSpans(l, 30, (t) => !timelineModel.transitionMoves(t)).length > 0;
 }
 
 /**
@@ -174,11 +282,20 @@ async function exportGenFrames(l, motion, frame) {
  * it to the picture on every frame. One PNG when the mask holds still on the
  * picture, which it does even while the picture moves; the frames of its own
  * change when its keyframes move it. Cached like a generated layer's.
+ *
+ * V4.10. A transition that cuts the picture is cut into this: where the mask
+ * shows the picture and the transition's matte does, over the frames of the
+ * transition, so the encoder takes the two as the one alpha it already knows
+ * how to take. A picture with no mask of its own has the matte alone, on
+ * white. And a mask on a picture that slides is drawn as the part of it the
+ * slide is showing, since the encoder fits what it is handed to that part.
  */
 async function exportMask(l, frame) {
   const source = layerSource(l);
   if (!source) return { ok: true, file: null };
-  const motion = layerGeometry.motionOf(l, source, frame);
+  const steps = timelineModel.transitionSteps(l);
+  const shown = steps.length ? layerGeometry.shownKeys(l, source, frame, steps) : null;
+  const motion = shown || layerGeometry.motionOf(l, source, frame);
   const still = layerGeometry.placementAt(l, 0, source, frame);
   const dests = motion ? motion.map((k) => k.dest) : (still ? [still.dest] : []);
   if (!dests.length) return { ok: true, file: null };
@@ -187,7 +304,7 @@ async function exportMask(l, frame) {
   const h = side(Math.max(...dests.map((d) => d.height)));
   let picture = null;
   let pictureSize = null;
-  if (l.mask.kind === 'custom') {
+  if (l.mask && l.mask.kind === 'custom') {
     try {
       picture = await loadMaskPicture(l.mask);
       pictureSize = [picture.width, picture.height];
@@ -200,58 +317,66 @@ async function exportMask(l, frame) {
   canvas.height = h;
   const ctx = canvas.getContext('2d');
   const ink = new OffscreenCanvas(w, h).getContext('2d');
+  const matte = new OffscreenCanvas(w, h).getContext('2d');
   const draw = (t) => {
-    genDraw.drawMask(ink, timelineModel.maskAt(l, t), w, h, picture);
+    ink.setTransform(1, 0, 0, 1, 0, 0);
+    ink.globalCompositeOperation = 'source-over';
+    // The part of the picture a slide is showing at this moment, if any.
+    const win = shown && l.mask ? layerGeometry.shownPlacementAt(shown, t).window : null;
+    if (!l.mask) {
+      ink.fillStyle = '#fff';
+      ink.fillRect(0, 0, w, h);
+    } else if (win && win.w > 0 && win.h > 0) {
+      ink.clearRect(0, 0, w, h);
+      const W = w / win.w;
+      const H = h / win.h;
+      ink.setTransform(1, 0, 0, 1, -win.x * W, -win.y * H);
+      genDraw.drawMask(ink, timelineModel.maskAt(l, t), W, H, picture);
+      ink.setTransform(1, 0, 0, 1, 0, 0);
+    } else {
+      genDraw.drawMask(ink, timelineModel.maskAt(l, t), w, h, picture);
+    }
+    const going = timelineModel.transitionAt(l, l.start + t);
+    if (going && !timelineModel.transitionMoves(going.transition)) {
+      matte.clearRect(0, 0, w, h);
+      genDraw.drawTransitionMatte(matte, going.transition, going.e, w, h);
+      ink.globalCompositeOperation = going.half === 'in' ? 'destination-in' : 'destination-out';
+      ink.drawImage(matte.canvas, 0, 0);
+      ink.globalCompositeOperation = 'source-over';
+    }
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, w, h);
     ctx.drawImage(ink.canvas, 0, 0);
   };
-  const png = async () => {
-    const blob = await new Promise((done) => canvas.toBlob(done, 'image/png'));
-    return blob ? new Uint8Array(await blob.arrayBuffer()) : null;
-  };
-  const moving = timelineModel.maskMotion(l);
-  if (!moving) {
+  const fps = Number(frame.fps) || 30;
+  const moving = l.mask ? timelineModel.maskMotion(l) : null;
+  // A matte at either end, and a slide's part of a mask, are drawn frame by
+  // frame like a mask that moves.
+  const runs = frameRuns([
+    ...(moving ? [frameSpan(l, fps, moving.from, moving.to)] : []),
+    ...transitionSpans(l, fps, (t) => !timelineModel.transitionMoves(t) || (!!l.mask && t.kind === 'slide')),
+  ]);
+  if (!runs.length) {
+    if (!l.mask) return { ok: true, file: null };
     const key = JSON.stringify(['mask', timelineModel.maskAt(l, 0), w, h, pictureSize]);
     let saved = await window.lwclipper.genImage(key, null);
     if (saved.ok && !saved.path) {
       draw(0);
-      const bytes = await png();
+      const bytes = await canvasPng(canvas);
       if (!bytes) return { ok: false, error: 'canvas toBlob gave no PNG' };
       saved = await window.lwclipper.genImage(key, bytes);
     }
     if (!saved.ok || !saved.path) return { ok: false, error: saved.error || 'no PNG path' };
     return { ok: true, file: { src: saved.path } };
   }
-  const fps = Number(frame.fps) || 30;
-  const total = Math.max(1, Math.round(l.duration * fps));
-  const first = Math.min(total - 1, Math.max(0, Math.floor(moving.from * fps)));
-  const last = Math.min(total - 1, Math.max(first, Math.ceil(moving.to * fps)));
   const key = JSON.stringify(['maskframes', l.mask, timelineModel.keyframesFor(l).map((k) => [k.t, k.mask]),
-    l.duration, fps, w, h, first, last, pictureSize]);
-  const begun = await window.lwclipper.genFrames(key, { start: true });
-  if (!begun.ok) return { ok: false, error: begun.error || 'no folder for the mask frames' };
-  if (!begun.have) {
-    for (let i = first; i <= last; i += 1) {
-      draw(i / fps);
-      const bytes = await png();
-      if (!bytes) return { ok: false, error: 'canvas toBlob gave no PNG' };
-      const wrote = await window.lwclipper.genFrame(key, i - first, bytes);
-      if (!wrote.ok) return { ok: false, error: wrote.error };
-    }
-    const done = await window.lwclipper.genFrames(key, { finish: true });
-    if (!done.ok) return { ok: false, error: done.error };
-  }
-  return {
-    ok: true,
-    file: {
-      frames: {
-        pattern: begun.dir.replace(/\\/g, '/') + '/%05d.png',
-        lead: first / fps,
-        tail: Math.max(0, l.duration - (last + 1) / fps),
-      },
-    },
-  };
+    l.duration, fps, w, h, runs, pictureSize, transitionKey(l)]);
+  const wrote = await writeFrameRuns(key, runs, async (i) => {
+    draw(i / fps);
+    return canvasPng(canvas);
+  });
+  if (!wrote.ok) return wrote;
+  return { ok: true, file: { frames: { pattern: wrote.pattern, ...frameHolds(runs, l.duration, fps) } } };
 }
 
 /**
@@ -357,9 +482,12 @@ async function exportLayers() {
   for (const l of layers) {
     // V3.6. A masked picture goes with its mask.
     // V4.7. And one with an Obscure or a Pixelate with where each acts.
-    if (l.kind !== 'gen' && l.enabled && l.type === 'video' && (l.mask || timelineModel.coverList(l).length)) {
+    // V4.10. And one a transition cuts with the matte of that, which goes
+    // the mask's way whether it has a mask or not.
+    if (l.kind !== 'gen' && l.enabled && l.type === 'video'
+      && (l.mask || timelineModel.coverList(l).length || hasTransitionMatte(l))) {
       let next = l;
-      if (l.mask) {
+      if (l.mask || hasTransitionMatte(l)) {
         const m = await exportMask(l, frame);
         if (!m.ok) return m;
         if (m.file) next = { ...next, maskFile: m.file };
@@ -380,9 +508,15 @@ async function exportLayers() {
     }
     if (await loadGenFonts(l.gen)) entry.key = null;
     // V3.3. One that moves goes as the frames of its move.
+    // V4.10. And one with a transition as the frames of that, whichever it is.
     const motion = genDraw.genMotion(l);
-    if (motion) {
-      const seq = await exportGenFrames(l, motion, frame);
+    const fps = Number(frame.fps) || 30;
+    const spans = [
+      ...(motion ? [frameSpan(l, fps, motion.from, motion.to)] : []),
+      ...transitionSpans(l, fps, () => true),
+    ];
+    if (spans.length) {
+      const seq = await exportGenFrames(l, spans, frame);
       if (!seq.ok) return seq;
       out.push({ ...l, src: seq.frames.pattern, frames: seq.frames,
         sourceWidth: frame.width, sourceHeight: frame.height });

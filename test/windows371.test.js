@@ -144,7 +144,8 @@ test('every window\'s row is Remove on the left, Cancel in the middle and Accept
   const rows = actionRows();
   // V4.6. Nine with the text's Gradient modal. V4.7: ten with Obscure and
   // Pixelate's window.
-  assert.equal(rows.length, 10);
+  // V4.10. Eleven with the Transitions window.
+  assert.equal(rows.length, 11);
   for (const row of rows) {
     const order = ['remove', 'cancel', 'accept'].filter((k) => row.includes(k));
     assert.deepEqual(row, order);
@@ -155,7 +156,8 @@ test('every window\'s row is Remove on the left, Cancel in the middle and Accept
 test('the editor windows\' hints are in their Info pop-up, not in the window', () => {
   const pops = [...HTML.matchAll(/<div class="info-tip__pop">([\s\S]*?)\n\s*<\/div>\n\s*<\/div>/g)].map((m) => m[1]);
   // V4.7. And Obscure and Pixelate's.
-  assert.equal(pops.length, 6, 'Crop and Mask, Crop Render Frame, Bar, Shape, Text and the covers');
+  // V4.10. And the Transitions window's.
+  assert.equal(pops.length, 7, 'Crop and Mask, Crop Render Frame, Bar, Shape, Text, the covers and Transitions');
   const inPops = pops.join('\n');
   for (const id of ['cropHint', 'cropPanHint', 'placeHint', 'placeZoomHint', 'maskHint', 'maskZoomHint',
     'cropKeysHint', 'renderHint', 'shapeHint', 'textHint']) {

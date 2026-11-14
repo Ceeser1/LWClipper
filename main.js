@@ -324,7 +324,7 @@ function createWindow() {
 const POPOUT_NAME = /^lwc-pop-[a-z]+$/;
 
 // V4.1. A first size for the windows that are not a picture to edit.
-const POPOUT_SIZES = { 'lwc-pop-prefs': [580, 640], 'lwc-pop-keys': [620, 720] };
+const POPOUT_SIZES = { 'lwc-pop-prefs': [580, 640], 'lwc-pop-keys': [620, 720], 'lwc-pop-transition': [720, 500] };
 
 // V3.7.1. The editor windows open now, by their names.
 const popoutWindows = new Map();
@@ -1640,8 +1640,31 @@ ipcMain.handle('clipboard:readText', () => clipboard.readText());
  * anything the user put there, and it is never in a project: a project is
  * redrawn from its settings on opening.
  */
+//
+// V4.10. Everything in it was drawn by the app's own code, and a newer
+// version may draw the same settings differently: found when a star iris was
+// changed and an export went on using the frames the older star had left
+// there. So the folder says which version filled it, and one found filled by
+// another version is emptied the first time a run asks for it. Nothing in it
+// is more than a picture that can be drawn again.
+let genDirChecked = false;
 function genImageDir() {
-  return path.join(appFilesDir(), 'gen');
+  const dir = path.join(appFilesDir(), 'gen');
+  if (!genDirChecked) {
+    genDirChecked = true;
+    try {
+      const mark = path.join(dir, 'version.txt');
+      const filledBy = fs.existsSync(mark) ? fs.readFileSync(mark, 'utf8').trim() : null;
+      if (filledBy !== app.getVersion()) {
+        fs.rmSync(dir, { recursive: true, force: true });
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(mark, app.getVersion());
+      }
+    } catch {
+      // A folder that cannot be swept is used as it is, as it was before.
+    }
+  }
+  return dir;
 }
 
 ipcMain.handle('gen:image', (_event, { key, png }) => {

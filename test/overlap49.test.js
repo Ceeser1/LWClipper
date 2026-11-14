@@ -32,7 +32,8 @@ function pair(type, bStart, props = {}) {
 
 test('an overlap is one transition, asked for by the earlier clip\'s end or the later clip\'s start', () => {
   const list = pair('video', 8);
-  const want = { from: 'A', into: 'B', overlap: 2, both: false, curve: 'linear' };
+  // V4.10. And the transition it runs through, none here.
+  const want = { from: 'A', into: 'B', overlap: 2, both: false, curve: 'linear', transition: null };
   assert.deepEqual(T.overlapOf(list, 'B', 'in'), want);
   assert.deepEqual(T.overlapOf(list, 'A', 'out'), want);
   // The ends that overlap nothing are plain fades.

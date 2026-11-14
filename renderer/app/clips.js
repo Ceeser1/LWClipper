@@ -746,6 +746,24 @@ function buildLayerClip(track, layer) {
     // and redraw it from the corner.
     bindFadeDrag(line, layer.id, which, false);
     bindFadeMenu(line, layer.id, which);
+
+    // V4.10. The user: "If a transition is applied, show a icon-button in the
+    // center of the fade-in/out or overlap so the transition window can be
+    // opened again by clicking it". Shown and placed by placeFadeGrips; a
+    // press on it is its own and not the clip's, like the other marks.
+    if (layer.type === 'video') {
+      const mark = document.createElement('button');
+      mark.className = 'clip-transition-mark';
+      mark.dataset.transition = which;
+      mark.hidden = true;
+      mark.addEventListener('pointerdown', (evt) => evt.stopPropagation());
+      mark.addEventListener('click', (evt) => {
+        evt.stopPropagation();
+        openTransition(layer.id, which);
+      });
+      bindFadeMenu(mark, layer.id, which);
+      clip.appendChild(mark);
+    }
   }
 
   bindClipDrag(clip, layer.id);
@@ -1358,6 +1376,21 @@ function openFadeMenu(evt, layerId, which) {
     });
     menu.appendChild(b);
   }
+  // V4.10. Under them, the row that opens the Transitions window on this end,
+  // naming the transition in force. A picture's only: a sound has nothing to
+  // wipe or slide.
+  if (layer.type === 'video') {
+    const row = document.createElement('button');
+    row.className = 'clip-menu__item clip-fade-transition';
+    row.setAttribute('role', 'menuitem');
+    const label = document.createElement('span');
+    label.textContent = t('Transition');
+    const now = document.createElement('span');
+    now.textContent = transitionName(cross ? cross.transition : timelineModel.transitionsOf(layer)[which]);
+    row.append(label, now);
+    row.addEventListener('click', () => openTransition(layerId, which));
+    menu.appendChild(row);
+  }
   // Any click inside it closes it, the gaps between the choices included. A
   // choice has already acted by the time this runs.
   menu.addEventListener('click', closeClipMenu);
@@ -1766,6 +1799,27 @@ function placeFadeGrips(clip, layer, x0, width, gripW) {
       : timelineModel.endOf(layer) - span;
     line.style.left = (timelineView.timeToX(tlView, at) - x0) + 'px';
   }
+  // V4.10. The button of a fade that has a transition, in the middle of the
+  // fade. Where two clips overlap the fade is the later clip's way in, so the
+  // one button there is that clip's, and the earlier clip's is left out.
+  const tr = timelineModel.transitionsOf(layer);
+  for (const mark of clip.querySelectorAll('.clip-transition-mark')) {
+    const which = mark.dataset.transition;
+    const span = fades[which];
+    // Shown however short the fade is drawn, as long as the clip has room
+    // for it: it is the way back into the window.
+    const shown = !!tr[which] && span > 0 && width >= 30
+      && !(which === 'out' && transitionOutOf(layer));
+    mark.hidden = !shown;
+    if (!shown) continue;
+    const mid = which === 'in' ? layer.start + span / 2 : timelineModel.endOf(layer) - span / 2;
+    // In the middle of the fade, and wholly inside the clip, which cuts off
+    // whatever of its own hangs past its edge.
+    const at = timelineView.timeToX(tlView, mid) - x0;
+    mark.style.left = Math.min(Math.max(at, 13), width - 13) + 'px';
+    // Two calls rather than one with the name built in, for the checker.
+    mark.title = t('Transition: {name}. Click to change it.', { name: transitionName(tr[which]) });
+  }
 }
 
 /**
@@ -2106,18 +2160,36 @@ function drawClipArt(layer, canvas, leftX, width, height) {
 // V2.9.1 item 5. Which clip each transition's later clip covers, and by how
 // much, worked out once per list rather than once per clip per frame: this is
 // read from drawClipFades, which runs for every clip on every pan and zoom.
-let transitionCache = { of: null, into: new Map() };
+let transitionCache = { of: null, into: new Map(), out: new Map() };
 
-function transitionInto(layer) {
+function transitionPairs() {
   if (transitionCache.of !== layers) {
     const into = new Map();
+    const out = new Map();
     for (const [pair, o] of timelineModel.overlapsOf(layers)) {
       const [a, b] = pair.split('|');
       into.set(b, { from: a, overlap: o });
+      out.set(a, { into: b, overlap: o });
     }
-    transitionCache = { of: layers, into };
+    transitionCache = { of: layers, into, out };
   }
-  return transitionCache.into.get(layer.id) || null;
+  return transitionCache;
+}
+
+function transitionInto(layer) {
+  return transitionPairs().into.get(layer.id) || null;
+}
+
+/**
+ * V4.10. The overlap a clip goes out under, when the later clip's fade in is
+ * still the overlap's own: then the two ends are one transition, and it is
+ * drawn and opened from the later clip.
+ */
+function transitionOutOf(layer) {
+  const pair = transitionPairs().out.get(layer.id);
+  if (!pair) return null;
+  const into = timelineModel.layerById(layers, pair.into);
+  return into && Math.abs(timelineModel.fadesOf(into).in - pair.overlap) < 1e-6 ? pair : null;
 }
 
 /**

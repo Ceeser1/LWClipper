@@ -1440,6 +1440,126 @@
     </div>
   </div>
 
+  <!-- V4.10. Transitions, opened from a fade's right click menu or from the
+       icon in the middle of a fade that has one: the transitions in a row,
+       the chosen one's settings beside a small picture of it running from
+       one track to the other, and how long it takes. Accept puts it on that
+       end of the track, and where two tracks overlap on both of them. -->
+  <div id="transitionModal" class="modal" hidden>
+    <div class="modal__panel modal__panel--crop modal__panel--transition" role="dialog" aria-modal="true"
+      aria-labelledby="transitionTitle">
+      <div id="transitionTitle" class="modal__title">Transition</div>
+      <div class="info-tip">
+        <button class="info-tip__btn" type="button" tabindex="-1">Info</button>
+        <div class="info-tip__pop">
+          <div class="hint-label">A transition is what a fade does to the picture. It takes as long as the fade is and runs by the fade's curve</div>
+          <div class="hint-label">At the start of a track the picture comes in, at its end it goes out, and where two tracks overlap the earlier one goes out as the later one comes in</div>
+        </div>
+      </div>
+      <div id="transitionWhere" class="transition-where" data-no-translate></div>
+      <div id="transitionKinds" class="transition-kinds">
+        <button data-kind="fade"><canvas></canvas><span>Fade</span></button>
+        <button data-kind="wipe"><canvas></canvas><span>Wipe</span></button>
+        <button data-kind="iris"><canvas></canvas><span>Iris</span></button>
+        <button data-kind="clock"><canvas></canvas><span>Clock</span></button>
+        <button data-kind="blinds"><canvas></canvas><span>Blinds</span></button>
+        <button data-kind="dissolve"><canvas></canvas><span>Dissolve</span></button>
+        <button data-kind="slide"><canvas></canvas><span>Slide</span></button>
+        <button data-kind="zoom"><canvas></canvas><span>Zoom</span></button>
+      </div>
+      <div class="transition-body">
+        <canvas id="transitionDemo" class="transition-demo"></canvas>
+        <div id="transitionGrid" class="transition-settings">
+          <div class="gen-field" data-for="fade">
+            <span id="transitionFadeNote" class="hint-label">The picture fades by the curve chosen in the fade's right click menu</span>
+          </div>
+          <div class="gen-field" data-for="wipe slide">
+            <span class="gen-field__caption">Direction:</span>
+            <div id="transitionDirs" class="gen-choice transition-arrows" data-no-translate>
+              <button data-angle="225" title="225">&#8598;</button>
+              <button data-angle="270" title="270">&#8593;</button>
+              <button data-angle="315" title="315">&#8599;</button>
+              <button data-angle="180" title="180">&#8592;</button>
+              <button data-angle="0" title="0">&#8594;</button>
+              <button data-angle="135" title="135">&#8601;</button>
+              <button data-angle="90" title="90">&#8595;</button>
+              <button data-angle="45" title="45">&#8600;</button>
+            </div>
+          </div>
+          <div class="gen-field" data-for="iris">
+            <span class="gen-field__caption">Shape:</span>
+            <div id="transitionShapes" class="gen-choice">
+              <button data-shape="circle">Circle</button>
+              <button data-shape="square">Square</button>
+              <button data-shape="diamond">Diamond</button>
+              <button data-shape="star">Star</button>
+            </div>
+          </div>
+          <div class="gen-field" data-for="iris">
+            <span class="gen-field__caption"></span>
+            <label class="gen-check gen-check--field"><input id="transitionReverse" type="checkbox" /> Close instead of open</label>
+          </div>
+          <div class="gen-field" data-for="clock">
+            <span class="gen-field__caption">Direction:</span>
+            <div id="transitionClock" class="gen-choice">
+              <button data-clockwise="true">Clockwise</button>
+              <button data-clockwise="false">Counterclockwise</button>
+            </div>
+          </div>
+          <div class="gen-field" data-for="clock">
+            <span class="gen-field__caption">Start:</span>
+            <div id="transitionStarts" class="gen-choice transition-arrows" data-no-translate>
+              <button data-start="270" title="270">&#8593;</button>
+              <button data-start="0" title="0">&#8594;</button>
+              <button data-start="90" title="90">&#8595;</button>
+              <button data-start="180" title="180">&#8592;</button>
+            </div>
+          </div>
+          <div class="gen-field" data-for="blinds">
+            <span class="gen-field__caption">Slats:</span>
+            <input id="transitionCountSlider" class="gen-field__slider gen-field__slider--short" type="range" min="2" max="64" step="1" value="8" />
+            <input id="transitionCountBox" class="gen-num" type="text" inputmode="numeric" maxlength="2" />
+            <span class="gen-field__unit"></span>
+          </div>
+          <div class="gen-field" data-for="blinds">
+            <span class="gen-field__caption"></span>
+            <div id="transitionSlats" class="gen-choice">
+              <button data-vertical="false">Horizontal</button>
+              <button data-vertical="true">Vertical</button>
+            </div>
+          </div>
+          <div class="gen-field" data-for="dissolve">
+            <span class="gen-field__caption">Blocks:</span>
+            <input id="transitionRowsSlider" class="gen-field__slider gen-field__slider--short" type="range" min="2" max="200" step="1" value="24" />
+            <input id="transitionRowsBox" class="gen-num" type="text" inputmode="numeric" maxlength="3" />
+            <span class="gen-field__unit"></span>
+          </div>
+          <div class="gen-field" data-for="zoom">
+            <span class="gen-field__caption">Turns:</span>
+            <input id="transitionTurnsSlider" class="gen-field__slider gen-field__slider--short" type="range" min="-16" max="16" step="1" value="0" />
+            <input id="transitionTurnsBox" class="gen-num" type="text" inputmode="decimal" maxlength="5" />
+            <span class="gen-field__unit"></span>
+          </div>
+          <div class="gen-field" data-for="wipe iris clock blinds dissolve">
+            <span class="gen-field__caption">Soft Edge:</span>
+            <input id="transitionSoftSlider" class="gen-field__slider gen-field__slider--short" type="range" min="0" max="100" step="1" value="0" />
+            <input id="transitionSoftBox" class="gen-num" type="text" inputmode="numeric" maxlength="3" />
+            <span class="gen-field__unit">%</span>
+          </div>
+          <div class="gen-field">
+            <span class="gen-field__caption">Duration:</span>
+            <input id="transitionSecondsBox" class="gen-num gen-num--wide" type="text" inputmode="decimal" maxlength="7" />
+            <span class="gen-field__unit">s</span>
+          </div>
+        </div>
+      </div>
+      <div class="crop-actions">
+        <button id="transitionCancelBtn">Cancel</button>
+        <button id="transitionAcceptBtn" class="crop-accept-btn">Accept</button>
+      </div>
+    </div>
+  </div>
+
   <!-- V3, 30d. The colour picker, over whichever modal asked for it. Ours
        rather than <input type=color>, which in Electron 33 has no alpha. The
        user's design: the wheel, then Brightness and Alpha as two vertical bars,
@@ -1529,6 +1649,7 @@
   <script src="app/gen/effects.js"></script>
   <script src="app/gen/textGradient.js"></script>
   <script src="app/cover.js"></script>
+  <script src="app/transition.js"></script>
   <script src="app/mask.js"></script>
   <script src="app/export.js"></script>
   <script src="app/autosave.js"></script>

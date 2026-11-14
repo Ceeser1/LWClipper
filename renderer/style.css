@@ -5600,3 +5600,166 @@ body.media-dragging.media-dragging--nowhere * {
   border-color: #f08080;
   color: #ffffff;
 }
+
+/* ---- V4.10. Transitions ---- */
+
+/* The row under the nine fade curves that opens the Transitions window: the
+   width of the pop-up, its name on the left and the transition in force on
+   the right. */
+.clip-fade-transition {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 2px;
+  padding-top: 6px;
+  border-top: 1px solid #45454e;
+  border-radius: 0 0 4px 4px;
+}
+
+.clip-fade-transition > span:last-child {
+  color: #8fe0a4;
+}
+
+/* The button in the middle of a fade that has a transition, which opens the
+   window on it again: a small frame, half the old picture and half the new.
+   In the clip like the fade handles, and over them and the alpha bar. */
+.clip-transition-mark {
+  position: absolute;
+  top: 50%;
+  width: 22px;
+  height: 14px;
+  margin: -7px 0 0 -11px;
+  padding: 0;
+  z-index: 8;
+  border: 1px solid #f0f2f8;
+  border-radius: 2px;
+  background: linear-gradient(115deg, rgba(232, 200, 96, 0.95) 0 50%, rgba(24, 24, 30, 0.9) 50% 100%);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.75), 0 1px 4px rgba(0, 0, 0, 0.6);
+  cursor: pointer;
+}
+
+.clip-transition-mark:hover:not(:disabled) {
+  border-color: #ffffff;
+  background: linear-gradient(115deg, #f4dc80 0 50%, rgba(40, 40, 48, 0.95) 50% 100%);
+}
+
+.clip-transition-mark[hidden] {
+  display: none;
+}
+
+/* The window. As a modal it is no wider than it needs; out in its own window
+   it is the window's width like every other. */
+.modal > .modal__panel--transition {
+  width: 700px;
+  max-width: calc(100vw - 40px);
+}
+
+.transition-where {
+  margin: 2px 0 10px;
+  color: #b8b8c0;
+  font-size: 12px;
+}
+
+/* The transitions in a row, each a picture of itself over its name. */
+.transition-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.transition-kinds > button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  padding: 4px 3px 3px;
+  font-size: 11px;
+}
+
+.transition-kinds > button > canvas {
+  display: block;
+  border: 1px solid #45454e;
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+/* The picture of it running, and the chosen one's settings beside it. */
+.transition-body {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 14px 20px;
+  min-height: 190px;
+}
+
+.transition-demo {
+  width: 320px;
+  height: 180px;
+  flex: none;
+  border: 1px solid #45454e;
+  border-radius: 3px;
+  background: #1b1b20;
+}
+
+.transition-settings {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 9px;
+  min-width: 250px;
+  text-align: left;
+}
+
+.transition-settings .gen-field__caption {
+  min-width: 70px;
+}
+
+.transition-settings .hint-label {
+  max-width: 250px;
+  text-align: left;
+}
+
+/* The arrows of a direction, three to a row so they stand round a middle:
+   the fourth and fifth leave the centre empty. */
+.transition-arrows {
+  display: grid;
+  grid-template-columns: repeat(3, 26px);
+  gap: 3px;
+}
+
+.transition-arrows > button {
+  min-width: 0;
+  width: 26px;
+  height: 24px;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.transition-arrows > button[hidden] {
+  display: none;
+}
+
+/* Each where it points, so the four a slide keeps stay a cross. */
+#transitionDirs > [data-angle="225"] { grid-area: 1 / 1; }
+#transitionDirs > [data-angle="270"] { grid-area: 1 / 2; }
+#transitionDirs > [data-angle="315"] { grid-area: 1 / 3; }
+#transitionDirs > [data-angle="180"] { grid-area: 2 / 1; }
+#transitionDirs > [data-angle="0"] { grid-area: 2 / 3; }
+#transitionDirs > [data-angle="135"] { grid-area: 3 / 1; }
+#transitionDirs > [data-angle="90"] { grid-area: 3 / 2; }
+#transitionDirs > [data-angle="45"] { grid-area: 3 / 3; }
+
+/* A slide has four ways to go, and a clock four places to start: in one row. */
+#transitionStarts {
+  grid-template-columns: repeat(4, 26px);
+}
+
+.gen-num.gen-num--wide {
+  width: 64px;
+}

@@ -21,6 +21,7 @@
 //   frame below straight through while it waits, in every variant tried.
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const {
   videoTrackArgs, videoAudioTrackArgs, audioFileArgs, discardPartial, MIN_SPAN,
@@ -71,9 +72,12 @@ function escapeExpr(expr) {
   return expr.replace(/,/g, '\\,');
 }
 
+// V4.10. Every fade in here is read through alphaFadesOf: an end that has a
+// transition is not faded at all, the transition being what happens there.
+
 /** Whether a layer has a fade that is not linear, and so needs the expression. */
 function hasCurvedFade(l) {
-  const fades = timeline.fadesOf(l);
+  const fades = timeline.alphaFadesOf(l);
   const curves = timeline.fadeCurvesOf(l);
   return (fades.in > 0 && curves.in !== 'linear') || (fades.out > 0 && curves.out !== 'linear');
 }
@@ -83,7 +87,7 @@ function hasCurvedFade(l) {
  * the seconds into the layer. The window's fadeAlphaAt, in ffmpeg's words.
  */
 function fadeGainExpr(l, time) {
-  const fades = timeline.fadesOf(l);
+  const fades = timeline.alphaFadesOf(l);
   const curves = timeline.fadeCurvesOf(l);
   const parts = [];
   if (fades.in > 0) {
@@ -140,19 +144,39 @@ function curvedFade(graph, l, n, input, fps, tail, label) {
  * for as long as the clip runs on either side of the move. Null when it covers
  * the whole clip.
  */
-function holdFrames(frames) {
+//
+// V4.10. `gaps` are stretches in the middle the sequence does not cover
+// either, each `{ after, frames }`: once `after` of its frames have gone by,
+// the last of them is held for `frames` more. A clip with a transition at
+// each end is drawn for the two transitions and held between them. The
+// frames' own times are moved on past each gap, and fps fills what that
+// leaves with the frame before it. `fps` is the project's rate.
+function holdFrames(frames, fps) {
   const lead = Math.max(0, Number(frames.lead) || 0);
   const tail = Math.max(0, Number(frames.tail) || 0);
-  if (!lead && !tail) return null;
-  return 'tpad=' + [
-    lead ? 'start_mode=clone:start_duration=' + fixed(lead) : null,
-    tail ? 'stop_mode=clone:stop_duration=' + fixed(tail) : null,
-  ].filter(Boolean).join(':');
+  const gaps = (Array.isArray(frames.gaps) ? frames.gaps : [])
+    .filter((g) => g && Number(g.after) > 0 && Number(g.frames) > 0);
+  const parts = [];
+  if (gaps.length && fps) {
+    const skipped = gaps.map((g) => Math.round(g.frames) + '*gte(N\\,' + Math.round(g.after) + ')').join('+');
+    parts.push("setpts='(N+" + skipped + ')/(' + fps + "*TB)'", 'fps=' + fps);
+  }
+  if (lead || tail) {
+    parts.push('tpad=' + [
+      lead ? 'start_mode=clone:start_duration=' + fixed(lead) : null,
+      tail ? 'stop_mode=clone:stop_duration=' + fixed(tail) : null,
+    ].filter(Boolean).join(':'));
+  }
+  return parts.length ? parts.join(',') : null;
 }
 
 /** An ffmpeg expression of t: the values at the times, blended between them. */
 function piecewise(times, values) {
   const num = (v) => fixed(v);
+  // V4.10. One number the whole way is that number: a slide to the right
+  // never changes its height, and a transition's dozen moments would
+  // otherwise say it a dozen times in every expression that uses it.
+  if (values.every((v) => v === values[0])) return '(' + num(values[0]) + ')';
   const seg = (i) => {
     const a = values[i];
     const b = values[i + 1];
@@ -180,7 +204,7 @@ function piecewise(times, values) {
 /** The mask's input, on the timeline's clock and in grey, ready to scale. */
 function maskSource(l, input, fps) {
   return '[' + input + ':v]' + chain([
-    l.maskFile.frames ? holdFrames(l.maskFile.frames) : null,
+    l.maskFile.frames ? holdFrames(l.maskFile.frames, fps) : null,
     'fps=' + fps,
     'setpts=PTS-STARTPTS+' + fixed(l.start) + '/TB',
     'format=gray',
@@ -254,7 +278,7 @@ function coverHead(graph, l, n, input, fps, inputs, source) {
     // Both this and the picture count from the clip's first frame here, the
     // layer's place on the timeline being given to it further down.
     const where = '[' + f.input + ':v]' + chain([
-      f.frames && f.frames.pattern ? holdFrames(f.frames) : null,
+      f.frames && f.frames.pattern ? holdFrames(f.frames, fps) : null,
       'fps=' + fps,
       'format=gray',
       'scale=' + r.width + ':' + r.height,
@@ -287,6 +311,31 @@ function coverHead(graph, l, n, input, fps, inputs, source) {
   return '[' + cur + ']';
 }
 
+/**
+ * V4.10. The two inputs a moving layer's alphamerge takes: its picture laid
+ * on its canvas, and where the picture shows. A picture with an alpha of its
+ * own, a PNG, has that multiplied into where it shows first, or the merge
+ * would put the plain rectangle in its place and the see-through parts would
+ * come out solid. Found with a PNG sliding in; a PNG moved by keyframes took
+ * the same road and lost its alpha the same way.
+ */
+//
+// Both are brought to the full range before they are multiplied. An alpha is
+// 0 to 255, but where the picture shows is a grey video made from a colour
+// source, which is 16 to 235, and ffmpeg matches the two by squeezing the
+// alpha into that as well: measured with the bundled ffmpeg, a solid part of
+// a PNG then came out at 0.91 and a half see-through one at 0.45, and over a
+// video worse, 0.74 and 0.37 with a faint veil over everything the picture
+// travels across. Multiplied at the full range they come out 1 and 0.5.
+function keepOwnAlpha(graph, l, tag) {
+  if (!ownAlpha(l)) return '[' + tag('mp') + '][' + tag('mm') + ']';
+  graph.push('[' + tag('mp') + ']split[' + tag('mq') + '][' + tag('mr') + ']');
+  graph.push('[' + tag('mr') + ']alphaextract,scale=out_range=full[' + tag('ma') + ']');
+  graph.push('[' + tag('mm') + ']scale=out_range=full[' + tag('mn') + ']');
+  graph.push('[' + tag('ma') + '][' + tag('mn') + ']blend=all_mode=multiply[' + tag('mb') + ']');
+  return '[' + tag('mq') + '][' + tag('mb') + ']';
+}
+
 const evenDown = (v) => Math.floor(v / 2) * 2;
 const evenUp = (v) => Math.ceil(v / 2) * 2;
 
@@ -302,7 +351,7 @@ function unionOf(rects) {
  * The filters for one moving layer, composited onto `prev`. Hands back the
  * label of what it made, the next layer's `prev`.
  */
-function movingLayer(graph, l, n, motion, prev, { input, fps, source, projW, projH, mask, head }) {
+function movingLayer(graph, l, n, motion, prev, { input, fps, source, projW, projH, mask, head, from }) {
   const times = motion.map((k) => l.start + k.t);
   const at = (pick) => piecewise(times, motion.map(pick));
   // 1. The fixed cut. Every crop is even and inside the source already, so
@@ -359,15 +408,16 @@ function movingLayer(graph, l, n, motion, prev, { input, fps, source, projW, pro
 
   // Then the fades and the ceiling, the same as a still picture's, on the alpha
   // the mask has just given it.
-  const fades = timeline.fadesOf(l);
+  const fades = timeline.alphaFadesOf(l);
   const alpha = timeline.alphaOf(l);
   const label = 'v' + n;
+  const merge = keepOwnAlpha(graph, l, tag);
   if (hasCurvedFade(l)) {
-    graph.push('[' + tag('mp') + '][' + tag('mm') + ']alphamerge[' + tag('mf') + ']');
+    graph.push(merge + 'alphamerge[' + tag('mf') + ']');
     curvedFade(graph, l, n, '[' + tag('mf') + ']', fps,
       [alpha < 1 ? 'colorchannelmixer=aa=' + fixed(alpha) : null], label);
   } else {
-    graph.push('[' + tag('mp') + '][' + tag('mm') + ']' + chain([
+    graph.push(merge + chain([
       'alphamerge',
       fades.in > 0 ? 'fade=t=in:st=' + fixed(l.start) + ':d=' + fixed(fades.in) + ':alpha=1' : null,
       fades.out > 0
@@ -378,7 +428,7 @@ function movingLayer(graph, l, n, motion, prev, { input, fps, source, projW, pro
   }
   const next = 'bg' + n;
   graph.push('[' + prev + '][' + label + ']overlay=' + bx + ':' + by
-    + ':eof_action=pass:' + enableExpr(l.start, timeline.endOf(l)) + '[' + next + ']');
+    + ':eof_action=pass:' + enableExpr(from === undefined ? l.start : from, timeline.endOf(l)) + '[' + next + ']');
   return next;
 }
 
@@ -394,7 +444,7 @@ function movingLayer(graph, l, n, motion, prev, { input, fps, source, projW, pro
  * the move, with what it uncovers left clear, and laid on the frame with its
  * middle on the moment's middle.
  */
-function movingTurnedLayer(graph, l, n, motion, prev, { input, fps, source, mask, head }) {
+function movingTurnedLayer(graph, l, n, motion, prev, { input, fps, source, mask, head, from }) {
   const times = motion.map((k) => l.start + k.t);
   const at = (pick) => piecewise(times, motion.map(pick));
   const cut = unionOf(motion.map((k) => k.src));
@@ -440,16 +490,17 @@ function movingTurnedLayer(graph, l, n, motion, prev, { input, fps, source, mask
   graph.push('[' + tag('md') + '][' + tag('mw') + "]overlay=x='round(" + half + '-' + dw + "/2)':y='round(" + half + '-' + dh
     + "/2)':eval=frame:eof_action=pass[" + tag('mm') + ']');
 
-  const fades = timeline.fadesOf(l);
+  const fades = timeline.alphaFadesOf(l);
   const alpha = timeline.alphaOf(l);
   const label = 'v' + n;
   const turnFilter = "rotate=a='" + turn + "':ow=" + side + ':oh=' + side + ':c=none';
+  const merge = keepOwnAlpha(graph, l, tag);
   if (hasCurvedFade(l)) {
-    graph.push('[' + tag('mp') + '][' + tag('mm') + ']alphamerge[' + tag('mf') + ']');
+    graph.push(merge + 'alphamerge[' + tag('mf') + ']');
     curvedFade(graph, l, n, '[' + tag('mf') + ']', fps,
       [alpha < 1 ? 'colorchannelmixer=aa=' + fixed(alpha) : null, turnFilter], label);
   } else {
-    graph.push('[' + tag('mp') + '][' + tag('mm') + ']' + chain([
+    graph.push(merge + chain([
       'alphamerge',
       fades.in > 0 ? 'fade=t=in:st=' + fixed(l.start) + ':d=' + fixed(fades.in) + ':alpha=1' : null,
       fades.out > 0
@@ -461,7 +512,8 @@ function movingTurnedLayer(graph, l, n, motion, prev, { input, fps, source, mask
   }
   const next = 'bg' + n;
   graph.push('[' + prev + '][' + label + "]overlay=x='round(" + dx + '+' + dw + '/2-' + half + ")':y='round("
-    + dy + '+' + dh + '/2-' + half + ")':eval=frame:eof_action=pass:" + enableExpr(l.start, timeline.endOf(l))
+    + dy + '+' + dh + '/2-' + half + ")':eval=frame:eof_action=pass:"
+    + enableExpr(from === undefined ? l.start : from, timeline.endOf(l))
     + '[' + next + ']');
   return next;
 }
@@ -594,7 +646,12 @@ function buildComposeArgs({
       // V3.3. A picture that moves between keyframes takes the road of its
       // own below. One that does not is placed once, as it always was, from
       // its keyframe when it has a single one.
-      const motion = geometry.motionOf(l, sources[l.src] || null, project);
+      // V4.10. Or through a slide or a zoom: the same kind of list, from the
+      // same sum the preview draws by. A generated layer's transition is in
+      // the frames the window drew, so it is not placed again here.
+      const steps = l.kind === 'gen' ? [] : timeline.transitionSteps(l);
+      const motion = (steps.length && geometry.shownKeys(l, sources[l.src] || null, project, steps))
+        || geometry.motionOf(l, sources[l.src] || null, project);
       // V4.7. What the layer's chain starts from, its covers laid on.
       const from = coverHead(graph, l, n, indexOf.get(l.id), fps, coverInputsOf.get(l.id), sources[l.src] || null);
       if (motion) {
@@ -603,6 +660,9 @@ function buildComposeArgs({
         prev = mover(graph, l, n, motion, prev, {
           input: indexOf.get(l.id), fps, source: sources[l.src] || null, projW, projH, mask: maskIndexOf.get(l.id),
           head: from,
+          // At the very start of a slide or a zoom in there is nothing of the
+          // picture yet, where the smallest it can be scaled to is two pixels.
+          from: steps.length && steps[0].half === 'in' ? l.start + 0.001 : l.start,
         });
         return;
       }
@@ -625,7 +685,7 @@ function buildComposeArgs({
       // After the setpts, and that matters: only once the timestamps have been
       // shifted are they the layer's timeline positions, which is what st is
       // measured in here. The audio side below is the other way round.
-      const fades = timeline.fadesOf(l);
+      const fades = timeline.alphaFadesOf(l);
       const alpha = timeline.alphaOf(l);
       // V3.4. A still turn: rotate on the placed picture, into the box round
       // it with what the turn uncovers left clear, laid with its middle on the
@@ -659,7 +719,7 @@ function buildComposeArgs({
       const needsAlpha = fades.in > 0 || fades.out > 0 || alpha < 1 || !!rotate || maskInput !== undefined;
       const picture = from
         + chain([
-          l.frames ? holdFrames(l.frames) : null,
+          l.frames ? holdFrames(l.frames, fps) : null,
           'fps=' + fps,
           parts && parts.crop,
           parts && parts.scale,
@@ -736,7 +796,7 @@ function buildComposeArgs({
     audioLayers.forEach((l, n) => {
       const label = 'a' + n;
       labels.push('[' + label + ']');
-      const fades = timeline.fadesOf(l);
+      const fades = timeline.alphaFadesOf(l);
       graph.push('[' + indexOf.get(l.id) + ':a]'
         + chain([
           'asetpts=PTS-STARTPTS',
@@ -809,6 +869,28 @@ function buildComposeArgs({
   return args;
 }
 
+// V4.10. Windows will not start a process whose command line is longer than
+// 32,767 characters, and the filter graph is one argument of it. A picture
+// that moves is said in expressions of t, every number of its move once for
+// each stretch between two moments, so a few clips eased through a slide can
+// reach that. Past this length the graph goes to ffmpeg in a file instead,
+// which it reads with the same parser.
+const GRAPH_ARG_MAX = 24000;
+
+/**
+ * The argv with its filter graph taken out into `graphFile` when the whole
+ * command would be too long: `{ args, graph }`, `graph` being the text to
+ * write there, or null when the argv is handed back as it was.
+ */
+function spillGraph(args, graphFile, limit = GRAPH_ARG_MAX) {
+  const at = args.indexOf('-filter_complex');
+  const length = args.reduce((n, a) => n + String(a).length + 3, 0);
+  if (at < 0 || length <= limit) return { args, graph: null };
+  const next = args.slice();
+  next.splice(at, 2, '-/filter_complex', graphFile);
+  return { args: next, graph: args[at + 1] };
+}
+
 /**
  * How big each source's frame is, keyed by path.
  *
@@ -873,9 +955,13 @@ async function render({
   if (span.duration < MIN_SPAN) throw new Error('The selected range is empty.');
 
   fs.mkdirSync(path.dirname(out), { recursive: true });
-  const args = buildComposeArgs({
+  const built = buildComposeArgs({
     layers, project, trim, output: out, format, compression, sources, encoder,
   });
+  // V4.10. A graph too long for a command line is read from a file.
+  const graphFile = path.join(os.tmpdir(), 'lwclipper-graph-' + process.pid + '-' + Date.now() + '.txt');
+  const { args, graph } = spillGraph(built, graphFile);
+  if (graph !== null) fs.writeFileSync(graphFile, graph);
 
   const reader = progress.ffmpegProgress(span.duration);
   let result;
@@ -890,6 +976,14 @@ async function render({
     // ever does and it is no more finished for that.
     if (e instanceof ProcessCancelledError) discardPartial(out);
     throw e;
+  } finally {
+    if (graph !== null) {
+      try {
+        fs.unlinkSync(graphFile);
+      } catch {
+        // Already gone, or still held: the temp folder is the system's to sweep.
+      }
+    }
   }
 
   if (result.exitCode !== 0) {
@@ -902,4 +996,4 @@ async function render({
   return out;
 }
 
-module.exports = { buildComposeArgs, outputSpan, enableExpr, sourceSizes, render };
+module.exports = { buildComposeArgs, outputSpan, enableExpr, sourceSizes, render, spillGraph, GRAPH_ARG_MAX };
