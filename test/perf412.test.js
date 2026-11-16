@@ -45,12 +45,14 @@ function fn(source, name) {
 function compositor() {
   const pixels = /const SCRUB_PIXELS = ([^;]+);/.exec(COMPOSITOR);
   assert.ok(pixels, 'the scrub ceiling is there');
-  const names = ['paintLayers', 'topCoveringFile', 'scrubPlan', 'scrubMoving', 'compositeDrawDue', 'layerMovesAt'];
+  const names = ['paintLayers', 'topCoveringFile', 'fileShowing', 'chosenCoveringFile', 'scrubPlan', 'scrubMoving',
+    'compositeDrawDue', 'layerMovesAt'];
   const body = `
     let layers = [];
     const decoders = new Map();
     const popoutPreviews = new Map();
     let compositeAt = 0;
+    let selectedLayerId = null;
     let compositeScrub = false;
     let scrubRested = false;
     let compositeDrawnFrame = -1;
@@ -58,13 +60,17 @@ function compositor() {
     const SCRUB_PIXELS = ${pixels[1]};
     const projectFrame = () => ({ fps, width: 1920, height: 1080 });
     const painted = [];
-    function drawLayerInto(ctx, canvas, shown) { painted.push(shown.id); }
+    // A shape is noted as one, and whether it lies over the followed file.
+    function drawLayerInto(ctx, canvas, shown, crop, render, at, shape) {
+      painted.push(shape ? shown.id + (shape.over ? ' shape over' : ' shape under') : shown.id);
+    }
     ${names.map((n) => fn(COMPOSITOR, n)).join('\n')}
     return {
       decoders, popoutPreviews, painted,
       set(o) {
         if ('layers' in o) layers = o.layers;
         if ('at' in o) compositeAt = o.at;
+        if ('selected' in o) selectedLayerId = o.selected;
         if ('scrub' in o) compositeScrub = o.scrub;
         if ('rested' in o) scrubRested = o.rested;
         if ('fps' in o) fps = o.fps;
@@ -130,7 +136,7 @@ test('a scrub is moving until the pointer rests, and again after', () => {
   assert.equal(c.scrubMoving(), false);
 });
 
-test('a moving scrub draws every still and the one file it seeks, and no other file', () => {
+test('a moving scrub draws every still and the one file it seeks, and no other file as a picture', () => {
   const c = compositor();
   const layers = [text('t', 0), file('a', 1), file('b', 2)];
   c.set({ layers, at: 2 });
@@ -139,11 +145,11 @@ test('a moving scrub draws every still and the one file it seeks, and no other f
   c.decoders.set('b', playing());
 
   c.paintLayers(CTX, CANVAS, 2, { file: layers[1], hold: false }, null);
-  assert.deepEqual(c.painted.splice(0), ['a', 't'], 'the text stays on over the seeked file');
+  assert.deepEqual(c.painted.splice(0), ['b shape under', 'a', 't'], 'the text stays on over the seeked file');
 
   // No file to seek: the stills are still drawn, where the preview went black.
   c.paintLayers(CTX, CANVAS, 2, { file: null, hold: false }, null);
-  assert.deepEqual(c.painted.splice(0), ['t']);
+  assert.deepEqual(c.painted.splice(0), ['b shape under', 'a shape under', 't']);
 
   // At rest, and with no scrub at all, the whole picture.
   c.paintLayers(CTX, CANVAS, 2, null, null);
@@ -243,6 +249,121 @@ test('each decoder reports its new pictures, and the tick draws only when one is
   // Play and a seek both draw whatever was drawn last.
   assert.match(fn(COMPOSITOR, 'seekComposite'), /compositeDrawnFrame = -1;/);
   assert.match(fn(COMPOSITOR, 'playComposite'), /compositeDrawnFrame = -1;/);
+});
+
+// ---- V4.12.1: the selected video is the one a drag follows ----
+
+test('a scrub follows the selected video and not the top one', () => {
+  const c = compositor();
+  const layers = [text('t', 0), file('inset', 1), file('full', 2)];
+  c.set({ layers, at: 2, scrub: true });
+  c.decoders.set('t', { still: true, el: {} });
+  c.decoders.set('inset', playing());
+  c.decoders.set('full', playing());
+  assert.equal(c.scrubPlan().file.id, 'inset', 'nothing chosen: the top file, as before');
+  c.set({ selected: 'full' });
+  assert.equal(c.chosenCoveringFile().id, 'full');
+  assert.deepEqual({ file: c.scrubPlan().file.id, hold: c.scrubPlan().hold }, { file: 'full', hold: false });
+  // A text chosen has no frame to follow, so the top file it is.
+  c.set({ selected: 't' });
+  assert.equal(c.chosenCoveringFile(), null);
+  assert.equal(c.scrubPlan().file.id, 'inset');
+  // And a clip that is gone.
+  c.set({ selected: 'nobody' });
+  assert.equal(c.scrubPlan().file.id, 'inset');
+});
+
+test('past the selected clip the scrub stays on its row, and falls to the top where the row is empty', () => {
+  const c = compositor();
+  const layers = [
+    file('inset', 0, { duration: 30 }),
+    file('one', 1, { start: 0, duration: 10 }),
+    file('two', 1, { start: 10, duration: 10 }),
+  ];
+  c.set({ layers, selected: 'one', scrub: true, at: 5 });
+  for (const l of layers) c.decoders.set(l.id, playing());
+  assert.equal(c.scrubPlan().file.id, 'one');
+  c.set({ at: 15 });
+  assert.equal(c.scrubPlan().file.id, 'two', 'across the cut, the same row');
+  c.set({ at: 25 });
+  assert.equal(c.scrubPlan().file.id, 'inset', 'the row has nothing here');
+});
+
+test('a selected video that cannot be shown is passed over, one above 1080p is held', () => {
+  const c = compositor();
+  c.set({ layers: [file('top', 0), file('sel', 1, { alpha: 0 })], selected: 'sel', scrub: true, at: 2 });
+  c.decoders.set('top', playing());
+  c.decoders.set('sel', playing());
+  assert.equal(c.scrubPlan().file.id, 'top', 'faded right out');
+  c.set({ layers: [file('top', 0), file('sel', 1)] });
+  c.decoders.set('sel', playing({ width: 0, height: 0 }));
+  assert.equal(c.scrubPlan().file.id, 'top', 'not read yet');
+  c.decoders.set('sel', playing({ width: 3840, height: 2160 }));
+  assert.deepEqual(c.scrubPlan(), { file: null, hold: true });
+  // Switched off, it covers nothing.
+  c.decoders.set('sel', playing());
+  c.set({ layers: [file('top', 0), file('sel', 1, { enabled: false })] });
+  assert.equal(c.scrubPlan().file.id, 'top');
+});
+
+test('the other files are drawn as shapes, and one lying over the followed file says so', () => {
+  const c = compositor();
+  const layers = [text('t', 0), file('inset', 1), file('full', 2), file('back', 3)];
+  c.set({ layers, at: 2 });
+  c.decoders.set('t', { still: true, el: {} });
+  for (const id of ['inset', 'full', 'back']) c.decoders.set(id, playing());
+  c.paintLayers(CTX, CANVAS, 2, { file: layers[2], hold: false }, null);
+  assert.deepEqual(c.painted.splice(0), ['back shape under', 'full', 'inset shape over', 't']);
+  // At rest there are no shapes, every file is on its frame.
+  c.paintLayers(CTX, CANVAS, 2, null, null);
+  assert.deepEqual(c.painted.splice(0), ['back', 'full', 'inset', 't']);
+});
+
+test('a shape is the layer\'s own cut-out made of a black picture, veiled when it would hide the frame', () => {
+  const draw = fn(COMPOSITOR, 'drawLayerInto');
+  // The same placement, mask and transition as the picture, a black source,
+  // and no Obscure or Pixelate.
+  assert.match(draw, /shape \? blackPicture\(\) : entry\.el,/);
+  assert.match(draw, /shape \? null : \{ x: d\.sx, y: d\.sy/);
+  assert.match(draw, /const veil = !!shape && shape\.over\s+&& shapeCover\(canvas, [^\n]+\) > SHAPE_VEIL_ABOVE;/);
+  assert.match(draw, /if \(veil\) ctx\.globalAlpha = alpha \* SHAPE_VEIL;/);
+  assert.match(fn(COMPOSITOR, 'paintLayers'), /drawLayerInto\(ctx, canvas, shown, undefined, undefined, at, shape\);/);
+});
+
+test('how much a shape covers is measured on a small copy of the canvas', () => {
+  // shapeCover on a stand-in surface: a drawing over the left half is a half.
+  const body = fn(COMPOSITOR, 'shapeCover');
+  class Surface {
+    constructor(w, h) { this.width = w; this.height = h; }
+
+    getContext() {
+      const canvas = this;
+      let k = [1, 1];
+      let filled = null;
+      return {
+        canvas,
+        setTransform(a, b, c2, d) { k = [a, d]; },
+        clearRect() { filled = null; },
+        fillRect(x, y, w, h) { filled = [x * k[0], y * k[1], w * k[0], h * k[1]]; },
+        getImageData(x, y, w, h) {
+          const data = new Uint8ClampedArray(w * h * 4);
+          for (let py = 0; py < h; py += 1) {
+            for (let px = 0; px < w; px += 1) {
+              const inside = filled && px >= filled[0] && px < filled[0] + filled[2]
+                && py >= filled[1] && py < filled[1] + filled[3];
+              data[(py * w + px) * 4 + 3] = inside ? 255 : 0;
+            }
+          }
+          return { data };
+        },
+      };
+    }
+  }
+  // eslint-disable-next-line no-new-func
+  const shapeCover = new Function('OffscreenCanvas', 'let shapeProbe = null;\n' + body + '\nreturn shapeCover;')(Surface);
+  assert.equal(shapeCover(CANVAS, (c) => c.fillRect(0, 0, CANVAS.width / 2, CANVAS.height)), 0.5);
+  assert.equal(shapeCover(CANVAS, (c) => c.fillRect(0, 0, CANVAS.width, CANVAS.height)), 1);
+  assert.equal(shapeCover(CANVAS, () => {}), 0);
 });
 
 // ---- the timeline: sizes read once ----

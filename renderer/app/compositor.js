@@ -431,7 +431,8 @@ function syncDecoders() {
  * `scrub`, when given, is a playhead being dragged: `{ file }` is the one
  * layer out of a file that is being seeked along, or null for none, and no
  * other file's picture is drawn. V4.12: a text, a shape, a bar and an image
- * are drawn all the same, having no frame to be on.
+ * are drawn all the same, having no frame to be on. V4.12.1: the other files
+ * are drawn as their shapes, see drawLayerInto's `shape`.
  */
 /**
  * One layer's picture, drawn where that layer goes.
@@ -440,8 +441,14 @@ function syncDecoders() {
  * the playhead has left, which the composite by definition does not hold. One
  * piece of arithmetic for both, which is the same reason paintLayers itself is
  * shared with the two trim frames.
+ *
+ * V4.12.1. `shape`, when given, draws the layer's shape and not its picture:
+ * black where the picture would be, see paintLayers. `{ over: true }` says it
+ * lies over the file a scrub is following, and then a shape that would hide
+ * most of the frame is drawn as a veil with its box outlined, so that what
+ * the drag is looking at is still to be seen under it.
  */
-function drawLayerInto(ctx, canvas, layer, crop = layer.crop, render = layer.render, at = null) {
+function drawLayerInto(ctx, canvas, layer, crop = layer.crop, render = layer.render, at = null, shape = null) {
   const entry = decoders.get(layer.id);
   if (entry && entry.gen) paintGen(layer, entry, at);
   if (!entry || !entry.width) return;
@@ -506,22 +513,88 @@ function drawLayerInto(ctx, canvas, layer, crop = layer.crop, render = layer.ren
   // picture goes. At the moment drawn, or the playhead's for a draft.
   // V4.7. And its Obscure and Pixelate before that, which need to know what
   // part of the source the rectangle is.
-  const pic = maskedPicture(layer, entry.el, [d.sx * kx, d.sy * ky, d.sw * kx, d.sh * ky], d,
+  // V4.12.1. A shape is the same cut-out made of a black picture, without
+  // the Obscure and Pixelate, which change what is in a picture and not where
+  // it is.
+  const pic = maskedPicture(layer,
+    shape ? blackPicture() : entry.el,
+    shape ? [0, 0, 2, 2] : [d.sx * kx, d.sy * ky, d.sw * kx, d.sh * ky],
+    d,
     at === null ? compositeAt : at,
-    { x: d.sx, y: d.sy, w: d.sw, h: d.sh, W: source.width, H: source.height, ex: kx, ey: ky },
+    shape ? null : { x: d.sx, y: d.sy, w: d.sw, h: d.sh, W: source.width, H: source.height, ex: kx, ey: ky },
     // V4.10. The matte of a transition that cuts the picture, and the part
     // of the picture a slide is showing, which its mask is cut to as well.
     going && !timelineModel.transitionMoves(going.transition) ? going : null,
     (placement && placement.window) || null);
-  if (!turn) {
-    ctx.drawImage(pic.el, ...pic.from, d.dx, d.dy, d.dw, d.dh);
-    return;
+  // Where the picture goes, on any context: the box as `box` draws it, about
+  // its own middle when it is turned.
+  const placed = (c, box) => {
+    if (!turn) {
+      box(d.dx, d.dy);
+      return;
+    }
+    c.save();
+    c.translate(d.dx + d.dw / 2, d.dy + d.dh / 2);
+    c.rotate(turn * Math.PI / 180);
+    box(-d.dw / 2, -d.dh / 2);
+    c.restore();
+  };
+  const veil = !!shape && shape.over
+    && shapeCover(canvas, (c) => placed(c, (x, y) => c.drawImage(pic.el, ...pic.from, x, y, d.dw, d.dh))) > SHAPE_VEIL_ABOVE;
+  const alpha = ctx.globalAlpha;
+  if (veil) ctx.globalAlpha = alpha * SHAPE_VEIL;
+  placed(ctx, (x, y) => ctx.drawImage(pic.el, ...pic.from, x, y, d.dw, d.dh));
+  if (!veil) return;
+  ctx.globalAlpha = alpha;
+  ctx.strokeStyle = 'rgba(235, 235, 240, 0.9)';
+  ctx.lineWidth = 2;
+  // Inside the box by the line's own half, so one that fills the frame has
+  // its outline on the canvas and not cut in half by its edge.
+  placed(ctx, (x, y) => ctx.strokeRect(x + 1, y + 1, d.dw - 2, d.dh - 2));
+}
+
+// ---- V4.12.1. The shapes a scrub draws for the files it is not seeking ----
+
+// How much of the frame a shape over the followed file may hide and still be
+// drawn black, and how dark the veil is that it is drawn as past that. The
+// user asked for black shapes with a small picture over a full one in mind,
+// where the shape is the point. A full picture over the chosen one, drawn
+// black, would leave nothing of what was chosen: the veil is my answer to it.
+const SHAPE_VEIL_ABOVE = 0.5;
+const SHAPE_VEIL = 0.45;
+
+let blackPictureCanvas = null;
+/** Two black pixels by two: the picture a shape is cut out of. */
+function blackPicture() {
+  if (!blackPictureCanvas) {
+    blackPictureCanvas = new OffscreenCanvas(2, 2);
+    const c = blackPictureCanvas.getContext('2d');
+    c.fillStyle = '#000';
+    c.fillRect(0, 0, 2, 2);
   }
-  ctx.save();
-  ctx.translate(d.dx + d.dw / 2, d.dy + d.dh / 2);
-  ctx.rotate(turn * Math.PI / 180);
-  ctx.drawImage(pic.el, ...pic.from, -d.dw / 2, -d.dh / 2, d.dw, d.dh);
-  ctx.restore();
+  return blackPictureCanvas;
+}
+
+let shapeProbe = null;
+/**
+ * How much of the canvas a drawing covers, 0 to 1, weighed by how solid it
+ * is. Measured and not worked out: the drawing is made by `draw` on a small
+ * copy of the canvas and its alpha added up, which takes a crop, a turn, a
+ * mask and a transition's cut as they come.
+ */
+function shapeCover(canvas, draw) {
+  const w = 32;
+  const h = Math.max(1, Math.round(w * canvas.height / canvas.width));
+  if (!shapeProbe) shapeProbe = new OffscreenCanvas(w, h).getContext('2d', { willReadFrequently: true });
+  if (shapeProbe.canvas.height !== h) shapeProbe.canvas.height = h;
+  shapeProbe.setTransform(1, 0, 0, 1, 0, 0);
+  shapeProbe.clearRect(0, 0, w, h);
+  shapeProbe.setTransform(w / canvas.width, 0, 0, h / canvas.height, 0, 0);
+  draw(shapeProbe);
+  const data = shapeProbe.getImageData(0, 0, w, h).data;
+  let sum = 0;
+  for (let i = 3; i < data.length; i += 4) sum += data[i];
+  return sum / (255 * w * h);
 }
 
 // ---- V3.6. Masked pictures ----
@@ -922,6 +995,9 @@ function clearPopoutPreview(owner) {
 function paintLayers(ctx, canvas, at, scrub, skip, drafts = null) {
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
+  // Whether the one file a scrub seeks has been drawn yet: what comes after it
+  // lies over it.
+  let passed = false;
   // Back to front, which is the order layersAt hands them back in, so index 0
   // is drawn last and Video 1 ends up on top.
   for (const l of timelineModel.layersAt(layers, at)) {
@@ -937,9 +1013,17 @@ function paintLayers(ctx, canvas, at, scrub, skip, drafts = null) {
     // top layer of any kind, and with a text clip on top that was the text:
     // nothing was seeked and the preview went black round the letters
     // (measured, 99.8% of it) for as long as the playhead moved.
+    //
+    // V4.12.1. Such a file is no longer left out. It is drawn as its shape,
+    // black where its picture would be: where it lies, how big, turned, cut
+    // by its mask and its transition, at its own alpha, all of which are
+    // known without a frame. The user's idea, "only the mask-cutout as
+    // black": the drag shows what covers what, and only the pictures wait.
+    let shape = null;
     if (scrub) {
       const entry = decoders.get(l.id);
-      if (entry && !entry.still && (!scrub.file || l.id !== scrub.file.id)) continue;
+      if (entry && !entry.still && (!scrub.file || l.id !== scrub.file.id)) shape = { over: passed };
+      else if (scrub.file && l.id === scrub.file.id) passed = true;
     }
     // The layer the position tab is drawing itself, from its draft. Left in, it
     // would be drawn twice and its stored position would show underneath.
@@ -965,7 +1049,7 @@ function paintLayers(ctx, canvas, at, scrub, skip, drafts = null) {
     // V3.3. The layer a crop window is editing, as its Accept would leave it.
     const draft = drafts && drafts.get(l.id);
     const shown = (draft && draft()) || l;
-    drawLayerInto(ctx, canvas, shown, undefined, undefined, at);
+    drawLayerInto(ctx, canvas, shown, undefined, undefined, at, shape);
     ctx.globalAlpha = 1;
   }
 }
@@ -1229,14 +1313,36 @@ function followPlayers(force) {
 function topCoveringFile() {
   const hits = timelineModel.layersAt(layers, compositeAt);
   for (let i = hits.length - 1; i >= 0; i -= 1) {
-    const l = hits[i];
-    if (l.type !== 'video') continue;
-    const entry = decoders.get(l.id);
-    if (!entry || entry.still || !entry.width) continue;
-    if (timelineModel.layerAlphaAt(l, compositeAt) <= 0) continue;
-    return l;
+    if (fileShowing(hits[i])) return hits[i];
   }
   return null;
+}
+
+/** Whether a layer is a picture out of a file, read and showing at the playhead. */
+function fileShowing(l) {
+  if (l.type !== 'video') return false;
+  const entry = decoders.get(l.id);
+  if (!entry || entry.still || !entry.width) return false;
+  return timelineModel.layerAlphaAt(l, compositeAt) > 0;
+}
+
+/**
+ * V4.12.1. The file the user has pointed the scrub at, or null: the selected
+ * clip when it is a video out of a file under the playhead, and once the
+ * playhead has left that clip, the video on the same row there, so that a
+ * drag across a cut stays on the row that was chosen. The user's idea: with a
+ * small picture lying over a full one, the full one is what a drag is usually
+ * looking for, and the top one is what it used to get.
+ *
+ * With several clips chosen it is the one clicked last, selectedLayerId.
+ */
+function chosenCoveringFile() {
+  const sel = selectedLayerId ? timelineModel.layerById(layers, selectedLayerId) : null;
+  if (!sel || sel.type !== 'video') return null;
+  const hits = timelineModel.layersAt(layers, compositeAt).filter(fileShowing);
+  return hits.find((l) => l.id === sel.id)
+    || hits.reverse().find((l) => l.lane === sel.lane)
+    || null;
 }
 
 /**
@@ -1253,13 +1359,16 @@ function topCoveringFile() {
  * pictures a second, both seeked give 2 each. So it is still one. With no
  * file under the playhead at all there is nothing to seek and nothing to
  * hold: every layer there is a still and the scrub draws the whole picture.
+ *
+ * V4.12.1. The one file is the selected video where there is one under the
+ * playhead, see chosenCoveringFile, and the top one otherwise.
  */
 function scrubPlan() {
-  const top = topCoveringFile();
-  if (!top) return { file: null, hold: false };
-  const entry = decoders.get(top.id);
+  const file = chosenCoveringFile() || topCoveringFile();
+  if (!file) return { file: null, hold: false };
+  const entry = decoders.get(file.id);
   if (entry.width * entry.height > SCRUB_PIXELS) return { file: null, hold: true };
-  return { file: top, hold: false };
+  return { file, hold: false };
 }
 
 /** Whether the playhead is being dragged and has not come to rest. */

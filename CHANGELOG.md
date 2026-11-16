@@ -6,8 +6,9 @@ The most important changes since 1.5.5, newest first.
 
 ## 4.x: the editor grows up (2026-11-07 to 2026-11-17)
 
-Current version: 4.12.0.
+Current version: 4.12.1.
 
+- **A drag follows the selected video (4.12.1).** While the playhead is dragged, the selected video is the one that moves, not the top one: select the full picture under a small one and the full picture is what the drag shows. The other videos appear as black shapes where they lie, cut by their masks; one that would hide most of the frame is shown see-through with an outline instead. Past the end of the selected clip the drag stays on its row. With nothing selected the top video moves, as before, and when the pointer rests every layer shows its frame.
 - **Faster, first round (4.12).** Dragging the playhead keeps texts, shapes and images on screen, and when the pointer rests for a moment, with the button still down, every layer shows its frame. A timeline with many clips reacts at once again: an edit at 120 clips took 1.4 seconds and now takes 0.05. Thumbnails of long clips appear several times sooner, and thumbnails and waveforms are kept between runs, so a project opened again shows them at once; Clear cache empties them. A waveform is no longer cut short when two clips are analysed at the same time. Exports with images, masks or Obscure and Pixelate areas are quicker, with the same picture as before. The preview is drawn once per picture instead of once per screen frame, which takes load off the graphics card while playing.
 - **One file to hand out, with the installer inside (4.11.2, 4.11.3).** `LWClipper v<version>.exe` asks on its first start whether to install LWClipper or to run it without installing. Installing puts it under Program Files, adds shortcuts and an uninstaller, and makes a double-click on a `.lwc` project open it. Running without installing registers nothing.
 - **Opens in advanced editing, maximized (4.11.2, 4.11.3).** Untick **Use advanced Editing** in the settings to get the simple trimmer back; the app then opens in whichever of the two it was left in.
