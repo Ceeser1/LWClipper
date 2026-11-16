@@ -954,7 +954,10 @@ async function openProjectPath(filePath) {
   // handing one to the app is asking for the mode it belongs to. It is a
   // visible setting and one click to put back.
   const wasSimple = !timelineDriving();
-  if (wasSimple) await setAdvancedEditing(true);
+  // V4.11.2. Without the maximizing that goes with the switch: it may be put
+  // back a few lines down, and a window that grew to the whole screen for a
+  // project that then did not open would stay that way in simple editing.
+  if (wasSimple) await setAdvancedEditing(true, { maximize: false });
   // Anything that ends without a project open puts the switch back, because
   // nothing else about the window changed either.
   // V3.8.4. With a project open, the Different LWC Project question instead:
@@ -979,6 +982,8 @@ async function openProjectPath(filePath) {
   // V3.6.1. Whether it opened, which the restore window needs to know.
   const opened = how === 'merge' ? await mergeProject(result) : await adoptProject(result);
   if (!opened && wasSimple) await setAdvancedEditing(false);
+  // V4.11.2. The switch is staying on, so now the window takes the screen.
+  if (opened && wasSimple) window.lwclipper.maximizeWindow();
   return opened;
 }
 

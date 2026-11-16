@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('lwclipper', {
   releaseWindowHeight: () => ipcRenderer.invoke('window:release'),
   // V4.11.1. View > Restore default layout.
   resetWindowSize: () => ipcRenderer.invoke('window:resetSize'),
+  // V4.11.2. Advanced editing switched on takes the screen the window is on.
+  maximizeWindow: () => ipcRenderer.invoke('window:maximize'),
   deleteAppFiles: () => ipcRenderer.invoke('app:deleteAppFiles'),
   clearCache: (ticked) => ipcRenderer.invoke('tools:clearCache', ticked),
   listClaims: () => ipcRenderer.invoke('tools:claims'),

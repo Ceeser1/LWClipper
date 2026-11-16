@@ -209,7 +209,8 @@ test('each effect is cut out of the source, filtered, and laid back where it cam
   assert.ok(parts.includes('[0:v]fps=30,format=yuv420p[cv0s]'), 'at the project\'s rate, before anything else');
   // Obscure: blurred at 4:4:4 with six steps, the measured way to a Gaussian.
   assert.ok(parts.includes('[cv0x0b]crop=300:200:100:200,format=yuv444p,gblur=sigma=16.2:steps=6[cv0x0c]'));
-  assert.ok(parts.includes('[1:v]fps=30,format=gray,scale=300:200[cv0x0m]'));
+  // V4.12. The one PNG is made grey and sized once, then held for the clip.
+  assert.ok(parts.includes('[1:v]format=gray,scale=300:200,loop=loop=-1:size=1:start=0,trim=duration=10.0,fps=30[cv0x0m]'));
   assert.ok(parts.includes('[cv0x0c][cv0x0m]alphamerge[cv0x0h]'));
   assert.ok(parts.includes('[cv0x0a][cv0x0h]overlay=x=100:y=200:format=yuv420[cv0x0o]'));
   // Pixelate, on what Obscure left.
@@ -239,11 +240,12 @@ test('a PNG with see-through parts is blended whole, its own alpha kept', () => 
   };
   const g = graphOf(buildComposeArgs({ layers: [img], project: HD, output: 'o.mp4', sources: { 'logo.png': { width: 640, height: 360 } } }));
   const parts = g.split(';');
-  assert.ok(parts.includes('[0:v]fps=30,format=yuva420p[cv0s]'));
+  // V4.12. The picture is one frame held for the clip, and so is where the effect acts.
+  assert.ok(parts.includes('[0:v]loop=loop=-1:size=1:start=0,trim=duration=5.0,fps=30,format=yuva420p[cv0s]'));
   assert.ok(parts.includes('[cv0s]format=yuva444p,split[cv0x0a][cv0x0b]'));
   // V4.8. Premultiplied round the filter, so see-through colour weighs what it shows.
   assert.ok(parts.includes('[cv0x0b]premultiply=inplace=1,gblur=sigma=16.2:steps=6,unpremultiply=inplace=1[cv0x0c]'), 'the whole picture');
-  assert.ok(parts.includes('[1:v]fps=30,format=gray,scale=300:200,pad=640:360:200:80:black,mergeplanes=0x00000000:yuva444p[cv0x0m]'));
+  assert.ok(parts.includes('[1:v]format=gray,scale=300:200,loop=loop=-1:size=1:start=0,trim=duration=5.0,fps=30,pad=640:360:200:80:black,mergeplanes=0x00000000:yuva444p[cv0x0m]'));
   assert.ok(parts.includes('[cv0x0a][cv0x0c][cv0x0m]maskedmerge,format=yuva420p[cv0x0o]'));
   assert.equal(g.includes('alphamerge'), false, 'not laid over itself, which would add the two alphas up');
 });

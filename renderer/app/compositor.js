@@ -60,6 +60,18 @@ let mixBus = null;
 const landing = new Set();
 let landingTimer = null;
 let compositeScrub = false;   // a drag on the stack is moving the playhead
+// V4.12. The pointer of that drag has held still for a moment, and every layer
+// has been brought onto the playhead's frame: the scrub is a whole picture
+// until it moves again. See restScrub.
+let scrubRested = false;
+let scrubRestTimer = null;
+// How long the pointer holds still before the scrub lands everything. Short
+// enough that pausing on a frame shows it, long enough that an ordinary drag,
+// which reports a move every few milliseconds, never pays for it.
+const SCRUB_REST_MS = 150;
+// V4.12. The project frame the preview was last drawn for while playing, so a
+// frame is drawn once and not once for every frame of the screen. -1 draws.
+let compositeDrawnFrame = -1;
 // Step 10e is holding the pool at a trim point, so nothing may draw the preview
 // from it. Declared here rather than beside the rest of 10e because
 // drawComposite reads it and is defined long before that block.
@@ -371,6 +383,18 @@ function addDecoder(layer) {
     if (landing.delete(layer.id)) refreshHints();
     if (!compositePlaying) drawComposite();
   });
+  // V4.12. Each new picture the element has is noted, which is what playback
+  // draws by, see compositeDrawDue. Asked for again from inside itself, since
+  // one request answers one picture, and for as long as the layer is here.
+  if (typeof v.requestVideoFrameCallback === 'function') {
+    const onPicture = () => {
+      if (decoders.get(layer.id) !== entry) return;
+      entry.fresh = true;
+      entry.pictures = (entry.pictures || 0) + 1;
+      v.requestVideoFrameCallback(onPicture);
+    };
+    v.requestVideoFrameCallback(onPicture);
+  }
   window.lwclipper.fileUrl(layer.src).then((url) => {
     // The row may have gone while the path was crossing to the main process.
     if (decoders.get(layer.id) !== entry) return;
@@ -404,7 +428,10 @@ function syncDecoders() {
  * the in point and the picture at the playhead cannot be composited by two
  * different pieces of arithmetic and disagree.
  *
- * `only` restricts it to a single layer, which is what a scrub draws.
+ * `scrub`, when given, is a playhead being dragged: `{ file }` is the one
+ * layer out of a file that is being seeked along, or null for none, and no
+ * other file's picture is drawn. V4.12: a text, a shape, a bar and an image
+ * are drawn all the same, having no frame to be on.
  */
 /**
  * One layer's picture, drawn where that layer goes.
@@ -892,18 +919,28 @@ function clearPopoutPreview(owner) {
   drawComposite();
 }
 
-function paintLayers(ctx, canvas, at, only, skip, drafts = null) {
+function paintLayers(ctx, canvas, at, scrub, skip, drafts = null) {
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   // Back to front, which is the order layersAt hands them back in, so index 0
   // is drawn last and Video 1 ends up on top.
   for (const l of timelineModel.layersAt(layers, at)) {
     if (l.type !== 'video') continue;
-    // Mid-scrub, only the layer that is actually on the playhead's frame. The
-    // others still hold whatever the last position decoded, and a frame from
-    // another moment drawn into the composite has nothing on it to say it is
-    // not the real one.
-    if (only && l.id !== only.id) continue;
+    // Mid-scrub, of the pictures that come out of a file only the one that is
+    // actually on the playhead's frame. The others still hold whatever the
+    // last position decoded, and a frame from another moment drawn into the
+    // composite has nothing on it to say it is not the real one.
+    //
+    // V4.12. Only of those. A text, a shape, a bar and an image have no
+    // moment to be wrong about: they are drawn from their settings at `at`,
+    // so they stay on through the drag. Until now the one layer drawn was the
+    // top layer of any kind, and with a text clip on top that was the text:
+    // nothing was seeked and the preview went black round the letters
+    // (measured, 99.8% of it) for as long as the playhead moved.
+    if (scrub) {
+      const entry = decoders.get(l.id);
+      if (entry && !entry.still && (!scrub.file || l.id !== scrub.file.id)) continue;
+    }
     // The layer the position tab is drawing itself, from its draft. Left in, it
     // would be drawn twice and its stored position would show underneath.
     if (skip && l.id === skip) continue;
@@ -955,11 +992,11 @@ function drawComposite() {
   // The pool is parked at a trim point rather than at the playhead, so whatever
   // it holds right now is not this canvas's picture. Step 10e.
   if (paintingFrames) return;
-  const only = compositeScrub ? scrubTarget() : null;
+  const scrub = scrubMoving() ? scrubPlan() : null;
   // A scrub above 1080p seeks nothing, so there is nothing new to draw and the
   // canvas keeps the last full composite. Clearing it to black instead would be
   // less use than the stale picture, not more.
-  if (compositeScrub && !only) return;
+  if (scrub && scrub.hold) return;
   // Each window's layer as its Accept would leave it, by the layer's id.
   const drafts = new Map();
   let frame = null;
@@ -967,7 +1004,7 @@ function drawComposite() {
     if (p.layerId) drafts.set(p.layerId, p.layerNow);
     if (p.frame) frame = p.frame;
   }
-  paintLayers(compositeCtx, compositeCanvas, compositeAt, only, null, drafts.size ? drafts : null);
+  paintLayers(compositeCtx, compositeCanvas, compositeAt, scrub, null, drafts.size ? drafts : null);
   if (frame) drawFrameDraft(compositeCtx, compositeCanvas, frame);
 }
 
@@ -975,15 +1012,16 @@ function drawComposite() {
 // paused. The tolerance is a thousandth of a second rather than the playing
 // one, because a still frame that is nearly right is simply the wrong frame.
 function parkDecoders() {
-  const only = compositeScrub ? scrubTarget() : null;
+  const moving = scrubMoving();
+  const only = moving ? scrubPlan().file : null;
   for (const l of layers) {
     if (l.type !== 'video') continue;
     const entry = decoders.get(l.id);
     if (!entry || entry.still) continue;
     if (!entry.el.paused) entry.el.pause();
-    // Mid-scrub, only the top covering layer moves, and above 1080p not even
-    // that. Everything else is landed by endScrub when the mouse comes up.
-    if (compositeScrub && (!only || l.id !== only.id)) continue;
+    // Mid-scrub, only the top covering file moves, and above 1080p not even
+    // that. Everything else is landed when the pointer rests or comes up.
+    if (moving && (!only || l.id !== only.id)) continue;
     if (!entry.width || !l.enabled || !timelineModel.covers(l, compositeAt)) continue;
     const want = timelineModel.sourceTimeFor(l, compositeAt);
     if (Math.abs(entry.el.currentTime - want) < 0.001) continue;
@@ -1178,33 +1216,55 @@ function followPlayers(force) {
 }
 
 /**
- * The topmost video layer covering the playhead. layersAt hands them back to
- * front so that drawing them in order works, which puts the top one last.
+ * The topmost layer covering the playhead whose picture comes out of a file,
+ * and so has a frame to be seeked to. layersAt hands them back to front so
+ * that drawing them in order works, which puts the top one last.
+ *
+ * V4.12. A file, not simply the top layer: a text, a shape, a bar or an image
+ * above it needs no seek and is drawn whatever the scrub does, so it is not
+ * what the scrub's one seek is spent on. One that is not showing at this
+ * moment (faded right out, or not read yet) is passed over for the same
+ * reason.
  */
-function topCovering() {
+function topCoveringFile() {
   const hits = timelineModel.layersAt(layers, compositeAt);
   for (let i = hits.length - 1; i >= 0; i -= 1) {
-    if (hits[i].type === 'video') return hits[i];
+    const l = hits[i];
+    if (l.type !== 'video') continue;
+    const entry = decoders.get(l.id);
+    if (!entry || entry.still || !entry.width) continue;
+    if (timelineModel.layerAlphaAt(l, compositeAt) <= 0) continue;
+    return l;
   }
   return null;
 }
 
 /**
- * The one layer a scrub may seek, or null for none at all.
+ * What a scrub does at the playhead: `file` is the one layer it may seek, or
+ * null for none, and `hold` says the preview keeps the picture it has.
  *
  * Step 0 measured seeking every layer at 0.8 to 1.2s at 1080p and 2.3 to 5.0s
  * at 4K, which is not a scrub, it is a wait. The top covering layer alone
  * settles in 120 to 200ms at 1080p, and that is a live scrub. At 4K even one
- * layer is about 450ms, so there the answer is to seek nothing until the mouse
- * comes up.
+ * layer is about 450ms, so there the answer is to seek nothing while the
+ * pointer moves, and to hold the last whole picture.
+ *
+ * V4.12. Measured again on two 1080p files: the one seeked gives about 7
+ * pictures a second, both seeked give 2 each. So it is still one. With no
+ * file under the playhead at all there is nothing to seek and nothing to
+ * hold: every layer there is a still and the scrub draws the whole picture.
  */
-function scrubTarget() {
-  const top = topCovering();
-  if (!top) return null;
+function scrubPlan() {
+  const top = topCoveringFile();
+  if (!top) return { file: null, hold: false };
   const entry = decoders.get(top.id);
-  if (!entry || !entry.width) return null;
-  if (entry.width * entry.height > SCRUB_PIXELS) return null;
-  return top;
+  if (entry.width * entry.height > SCRUB_PIXELS) return { file: null, hold: true };
+  return { file: top, hold: false };
+}
+
+/** Whether the playhead is being dragged and has not come to rest. */
+function scrubMoving() {
+  return compositeScrub && !scrubRested;
 }
 
 function beginScrub() {
@@ -1213,11 +1273,39 @@ function beginScrub() {
   // them fighting over the same clock.
   if (compositePlaying) pauseComposite();
   compositeScrub = true;
+  scrubRested = false;
 }
 
 function endScrub() {
   if (!compositeScrub) return;
   compositeScrub = false;
+  scrubRested = false;
+  clearTimeout(scrubRestTimer);
+  scrubRestTimer = null;
+  landDecoders();
+}
+
+/**
+ * V4.12. The playhead moved under a scrub: it is not at rest, and will be
+ * taken to be once it has stood still for SCRUB_REST_MS.
+ */
+function noteScrubMove() {
+  scrubRested = false;
+  clearTimeout(scrubRestTimer);
+  scrubRestTimer = setTimeout(restScrub, SCRUB_REST_MS);
+}
+
+/**
+ * V4.12. The pointer has held still with the button down. Every layer is
+ * brought onto the playhead's frame, as letting go would, and the preview
+ * shows the whole picture for as long as the pointer rests: a drag that stops
+ * to look at a frame sees all of it, a 4K project included, without having to
+ * let go. The next move is a scrub again.
+ */
+function restScrub() {
+  scrubRestTimer = null;
+  if (!compositeScrub || compositePlaying) return;
+  scrubRested = true;
   landDecoders();
 }
 
@@ -1421,6 +1509,9 @@ async function runTrimFrames() {
 /** Move the project's playhead, which is what the timeline seeks. */
 function seekComposite(at) {
   compositeAt = Math.min(Math.max(at, 0), compositeTotal());
+  // V4.12. A jump is drawn whatever frame was drawn last.
+  compositeDrawnFrame = -1;
+  if (compositeScrub) noteScrubMove();
   parkDecoders();
   // A seek is a jump, so the tolerance is skipped: the audio goes exactly where
   // the playhead went rather than up to a quarter second behind it.
@@ -1457,7 +1548,8 @@ function compositeTick() {
   // where they are rather than decoded for a canvas that is hidden.
   if (compositing()) followDecoders();
   followPlayers(false);
-  drawComposite();
+  // V4.12. Only when there is another picture to draw, see compositeDrawDue.
+  if (compositeDrawDue()) drawComposite();
   updatePlayhead();
   // Step 17. Play selection's stop point, which the media elements check in
   // their timeupdate and the compositor had nowhere to check at all. Ahead of
@@ -1474,6 +1566,71 @@ function compositeTick() {
   compositeRaf = requestAnimationFrame(compositeTick);
 }
 
+/**
+ * V4.12. Whether playback has anything new to draw on this frame of the
+ * screen.
+ *
+ * The tick runs once a screen frame, and it used to draw every time: 144
+ * composites a second on a 144 Hz screen for a project of 24 frames a second,
+ * each one the picture already there, masks and blurs and all. Measured, the
+ * GPU process spent 45% of a core on a clip with a soft mask and an Obscure
+ * area, and 25% drawing each picture once.
+ *
+ * What is new is a file's next picture, which its element reports (see
+ * addDecoder), so the preview is drawn when one arrives and shows it within
+ * a screen frame, as before. Drawing by the project's own clock instead
+ * would sample a 24 frame file 24 times a second at whatever phase the two
+ * happened to start in, and where they nearly coincide a picture is shown
+ * twice and the next one skipped.
+ *
+ * With no file running under the playhead (texts, shapes, images, or
+ * nothing) the clock is all there is, and a draw is due once a project
+ * frame, which is as often as a fade or a keyframe moves anything in the
+ * file. The same holds over a running file while something on the playhead
+ * moves by itself (see layerMovesAt): a text sliding over a file of fewer
+ * frames than the project would otherwise step at the file's rate, where the
+ * export steps at the project's. And a file that should be running but has
+ * gone quiet, seeking at a cut say, must not hold the picture still with it:
+ * two project frames without a draw are drawn regardless.
+ */
+function compositeDrawDue() {
+  const frame = Math.floor(compositeAt * projectFrame().fps + 1e-6);
+  let running = false;
+  let fresh = false;
+  // A window's draft is drawn as it is edited, so it counts as moving.
+  let moving = popoutPreviews.size > 0;
+  for (const l of layers) {
+    if (l.type !== 'video' || !l.enabled || !timelineModel.covers(l, compositeAt)) continue;
+    if (!moving && layerMovesAt(l, compositeAt)) moving = true;
+    const entry = decoders.get(l.id);
+    if (!entry || entry.still) continue;
+    // Only an element that has ever reported a picture can be waited on.
+    if (entry.pictures && !entry.el.paused) running = true;
+    if (entry.fresh) fresh = true;
+  }
+  const behind = frame - compositeDrawnFrame;
+  const due = fresh || behind < 0 || behind >= (running && !moving ? 2 : 1);
+  if (!due) return false;
+  compositeDrawnFrame = frame;
+  for (const entry of decoders.values()) entry.fresh = false;
+  return true;
+}
+
+/**
+ * V4.12. Whether a layer's picture changes from one project frame to the
+ * next at timeline second `at` for a reason other than its file's next
+ * picture: keyframes, a transition, a fade, or an Obscure or Pixelate area
+ * that moves. Generous rather than exact, a clip with keyframes counts for
+ * its whole length, since all it costs to be wrong that way is a draw.
+ */
+function layerMovesAt(l, at) {
+  if (timelineModel.keyframesFor(l).length > 1) return true;
+  if (timelineModel.transitionAt(l, at)) return true;
+  if (timelineModel.coverList(l).some((c) => timelineModel.coverMotion(l, c.cover))) return true;
+  const next = at + 1 / projectFrame().fps;
+  return timelineModel.layerAlphaAt(l, at) !== timelineModel.layerAlphaAt(l, next);
+}
+
 function playComposite() {
   if (compositePlaying) return;
   const total = compositeTotal();
@@ -1484,6 +1641,7 @@ function playComposite() {
   // V4.0. Every way of starting comes through here, Space, the Play button and
   // Play selection alike, so this is where the line is left behind.
   playStartAt = compositeAt;
+  compositeDrawnFrame = -1;
   // A context made before any click starts suspended, and this is a click.
   if (gainCtx && gainCtx.state === 'suspended') gainCtx.resume();
   compositePlaying = true;

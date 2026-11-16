@@ -316,13 +316,17 @@ const CLIP_KEY_REACH = 2;
  * the track's pixels. One trimmed off the clip is hidden and kept, the user's
  * rule.
  */
-function placeClipKeyframes(clip, layer) {
+//
+// V4.12. `box` is the clip's own box when the caller has measured it already
+// (positionLayerClips, for every clip before it writes anything); a keyframe
+// drag places one clip's diamonds and measures it here.
+function placeClipKeyframes(clip, layer, box = clipBoxOf(clip)) {
   const track = clip.parentElement;
   if (!track) return;
   const strip = Number(clip.dataset.keyStrip) || 0;
   // From point to point, the strip and the reach either side of it.
   const tall = strip + 2 * CLIP_KEY_REACH;
-  const middle = clip.offsetTop + CLIP_BORDER + clip.clientHeight - strip / 2;
+  const middle = box.top + CLIP_BORDER + box.inner - strip / 2;
   const mine = '.clip-key[data-layer-id="' + layer.id + '"]';
   for (const el of track.querySelectorAll(mine)) {
     const k = timelineModel.keyframesFor(layer).find((o) => o.id === el.dataset.keyId);

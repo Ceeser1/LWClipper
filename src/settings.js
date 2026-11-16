@@ -20,10 +20,13 @@ const DEFAULTS = {
   bestCompression: false,
   // Swaps the Trim frame for the layer timeline.
   //
-  // On while the timeline is being built, so a fresh profile opens straight
-  // into the thing under construction. It goes back to false before release:
-  // the simple window is what the app is for, and the timeline is the thing you
-  // go and ask for.
+  // On, so a fresh profile opens in advanced editing, and with that maximized
+  // (createWindow in main.js). It was on while the timeline was being built
+  // and meant to go back to false before release. The user settled it the
+  // other way on 2026-11-15: "the v4.11.3 standalone and installer both should
+  // open in Advanced editing mode in windowed-fullscreen from now on". Both
+  // builds are this one app, so the default is all there is to it. A default
+  // only: a profile left in simple editing still opens in simple editing.
   advancedEditing: true,
   // V3.3. Where each popped out editor window was last closed, by its name:
   // { x, y, width, height }. null until one has been.

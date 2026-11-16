@@ -257,11 +257,19 @@ bestCompressionToggle.addEventListener('change', async () => {
  * Pulled out of the listener because opening a project is the other thing that
  * needs it: the box has to follow, not only the setting, or the settings panel
  * shows the opposite of what the window is doing.
+ *
+ * V4.11.2. Switching it on maximizes the window on the screen it is on: "if
+ * advanced-editing mode gets toggled on, switch the window to
+ * windowed-fullscreen on the current screen". `maximize: false` is for a
+ * caller that may yet switch it back, which is opening a project: it does the
+ * maximizing itself once the project is really open. Switching it off leaves
+ * the window as it is.
  */
-async function setAdvancedEditing(on) {
+async function setAdvancedEditing(on, { maximize = true } = {}) {
   appSettings = (await window.lwclipper.setSettings({ advancedEditing: on })).settings;
   advancedEditingToggle.checked = !!appSettings.advancedEditing;
   applyAdvancedEditing();
+  if (maximize && appSettings.advancedEditing) window.lwclipper.maximizeWindow();
 }
 
 advancedEditingToggle.addEventListener('change', () => {

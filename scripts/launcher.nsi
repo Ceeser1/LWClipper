@@ -14,10 +14,20 @@
 ; A splash covers the whole wait, first run or not, and comes down when the app's
 ; own window appears. See ShowSplash for why it is built the way it is.
 ;
+; V4.11.3. It is also the installer: "LWC should have 2 options: Stand-alone
+; and installer .exe", in one file. electron-builder's Setup.exe rides inside
+; it, and the first start of a version that has no file to open asks which one
+; is wanted. See ChoicePage. Once this version's runtime is unpacked the
+; question has been answered with "run", so every start after that goes
+; straight to the app exactly as it did before there was a question.
+;
 ; Built by scripts/build-launcher.js, which supplies every define below.
 
 Unicode true
 !include "FileFunc.nsh"
+!include "LogicLib.nsh"
+!include "nsDialogs.nsh"
+!include "WinMessages.nsh"
 
 !ifndef VERSION
   !error "VERSION must be defined"
@@ -40,14 +50,20 @@ Unicode true
 !ifndef WINDOWTITLE
   !error "WINDOWTITLE must be defined"
 !endif
+!ifndef SETUP
+  !error "SETUP must be defined"
+!endif
 
 Name "LWClipper"
 OutFile "${OUTFILE}"
-!ifdef ICON
-  Icon "${ICON}"
-!endif
+Caption "LWClipper ${VERSION}"
+BrandingText " "
+; Common controls 6, which is what draws the two choices as command links.
+XPStyle on
 
-; No elevation: everything it writes is under the user's own profile.
+; No elevation: everything it writes is under the user's own profile. The
+; installer it carries asks for administrator rights itself, and only when
+; "Install" is picked.
 RequestExecutionLevel user
 ; Measured: with this on, every launch spends about 8 seconds CRC-checking the
 ; whole 146MB archive before it does anything, which swamped the saving from
@@ -55,10 +71,10 @@ RequestExecutionLevel user
 ; is read off local disk and a corrupt one fails at extraction anyway.
 ; electron-builder's own portable template turns it off for the same reason.
 CRCCheck off
-WindowIcon Off
 AutoCloseWindow True
-; No installer window of any kind: the splash below is the only thing shown.
-SilentInstall silent
+; No SilentInstall here: .onInit decides at run time. The window only ever
+; shows the question; on every other start the splash is the only thing seen.
+;
 ; Two decisions here, both measured on the same machine over the same 482MB of
 ; payload, timed from double-click to the app's window being on screen:
 ;
@@ -82,6 +98,39 @@ SilentInstall silent
 ; more to download. bzip2 is listed only to record that it is worse at both.
 SetCompressor /FINAL zlib
 
+; After SetCompressor, which has to come before anything that stores data.
+!ifdef ICON
+  !define MUI_ICON "${ICON}"
+!endif
+!include "MUI2.nsh"
+
+Page custom ChoicePage ChoiceLeave
+; Never reached: ChoiceLeave either quits or stays on its own page. MUI wants
+; one page of its own ahead of MUI_LANGUAGE and warns on every build without.
+!insertmacro MUI_PAGE_INSTFILES
+!insertmacro MUI_LANGUAGE "English"
+!insertmacro MUI_LANGUAGE "German"
+
+; The window speaks the language Windows does, German or else English. The app
+; has its own language setting, but that lives in a JSON file this has no way
+; to read before the app has ever run.
+LangString ChoiceTitle    ${LANG_ENGLISH} "How do you want to start LWClipper?"
+LangString ChoiceTitle    ${LANG_GERMAN}  "Wie soll LWClipper starten?"
+LangString ChoiceSubtitle ${LANG_ENGLISH} "Version ${VERSION} can be installed, or run straight from this file."
+LangString ChoiceSubtitle ${LANG_GERMAN}  "Version ${VERSION} kann installiert werden oder direkt aus dieser Datei laufen."
+LangString InstallLabel   ${LANG_ENGLISH} "Install LWClipper"
+LangString InstallLabel   ${LANG_GERMAN}  "LWClipper installieren"
+LangString InstallNote    ${LANG_ENGLISH} "Into Program Files unless you pick another folder, with Start menu and desktop shortcuts and an uninstaller. A double-click on a .lwc project opens it. Asks for administrator rights."
+LangString InstallNote    ${LANG_GERMAN}  "Nach Programme, wenn kein anderer Ordner gewählt wird, mit Verknüpfungen im Startmenü und auf dem Desktop und einem Deinstallationsprogramm. Ein Doppelklick auf ein .lwc-Projekt öffnet es. Fragt nach Administratorrechten."
+LangString RunLabel       ${LANG_ENGLISH} "Run without installing"
+LangString RunLabel       ${LANG_GERMAN}  "Ohne Installation starten"
+LangString RunNote        ${LANG_ENGLISH} "Starts LWClipper from this file. Nothing is installed and .lwc files are not registered. Asked only on the first start of this version; after that it goes straight to the app."
+LangString RunNote        ${LANG_GERMAN}  "Startet LWClipper aus dieser Datei. Es wird nichts installiert und .lwc-Dateien werden nicht registriert. Die Frage kommt nur beim ersten Start dieser Version, danach geht es direkt in die App."
+LangString Preparing      ${LANG_ENGLISH} "Preparing the installer..."
+LangString Preparing      ${LANG_GERMAN}  "Das Installationsprogramm wird vorbereitet..."
+LangString NotStarted     ${LANG_ENGLISH} "The installer did not start. Pick again, or close this window."
+LangString NotStarted     ${LANG_GERMAN}  "Das Installationsprogramm wurde nicht gestartet. Erneut wählen oder dieses Fenster schließen."
+
 VIProductVersion "${VERSION}.0"
 VIAddVersionKey "ProductName" "LWClipper"
 VIAddVersionKey "ProductVersion" "${VERSION}"
@@ -91,9 +140,10 @@ VIAddVersionKey "CompanyName" "Ceeser"
 VIAddVersionKey "LegalCopyright" ""
 
 ; Win32 names, so the System::Call lines below read as something other than
-; a wall of hex.
-!define GWL_STYLE        -16
-!define GWL_EXSTYLE      -20
+; a wall of hex. /ifndef because nsDialogs.nsh defines some of them already,
+; with the same values.
+!define /ifndef GWL_STYLE        -16
+!define /ifndef GWL_EXSTYLE      -20
 !define SPLASH_STYLE     0x90000000 ; WS_POPUP | WS_VISIBLE
 ; Topmost and nothing else. What a dialog carries otherwise is WS_EX_WINDOWEDGE
 ; and WS_EX_DLGMODALFRAME, which draw a raised white edge down the right and
@@ -102,13 +152,13 @@ VIAddVersionKey "LegalCopyright" ""
 !define PICTURE_STYLE    0x5000000E ; WS_CHILD | WS_VISIBLE | SS_BITMAP
 !define SWP_FRAME_SHOW   0x00000060 ; SWP_FRAMECHANGED | SWP_SHOWWINDOW
 !define SWP_FRAME_KEEPZ  0x00000024 ; SWP_FRAMECHANGED | SWP_NOZORDER
-!define HWND_TOPMOST     -1
-!define LR_LOADFROMFILE  0x00000010
-!define STM_SETIMAGE     0x00000172
-!define IMAGE_BITMAP     0
+!define /ifndef HWND_TOPMOST     -1
+!define /ifndef LR_LOADFROMFILE  0x00000010
+!define /ifndef STM_SETIMAGE     0x00000172
+!define /ifndef IMAGE_BITMAP     0
 !define IDC_STR          1030       ; the one control on Banner's dialog
-!define SM_CXSCREEN      0
-!define SM_CYSCREEN      1
+!define /ifndef SM_CXSCREEN      0
+!define /ifndef SM_CYSCREEN      1
 ; Corner rounding, as the width and height of the ellipse CreateRoundRectRgn
 ; draws the corners from, which is twice the radius. 80 is a 40px radius on a
 ; 400x280 card, which is plainly round rather than merely softened. Passing the
@@ -121,9 +171,134 @@ VIAddVersionKey "LegalCopyright" ""
 !define WAIT_TRIES       100
 !define WAIT_STEP        100
 
+!define /ifndef BS_COMMANDLINK   0x0000000E
+!define /ifndef BCM_SETNOTE      0x00001609
+!define /ifndef WM_NOTIFY_OUTER_NEXT 0x00000408
+
+Var ChoiceDialog
+Var InstallButton
+Var RunButton
+Var ChoiceStatus
+; "install", "run", or empty while nothing has been picked.
+Var Choice
+
+; The question is asked only when it can matter: not when this version is
+; already unpacked, since that means "run" was picked before, and not when the
+; app is being handed a file to open (a .lwc dropped on the exe, or a command
+; line), since that is somebody using the app rather than starting it fresh.
+Function .onInit
+  ${GetParameters} $R0
+  ${If} ${FileExists} "$LOCALAPPDATA\LWClipper\runtime-${VERSION}\.ready"
+  ${OrIf} $R0 != ""
+    SetSilent silent
+  ${Else}
+    SetSilent normal
+  ${EndIf}
+FunctionEnd
+
+; Only reached silently. A start that asks finishes inside ChoiceLeave.
+Section
+  Call StartApp
+SectionEnd
+
+; Two command links, the same kind of choice Windows itself offers, rather than
+; a Yes/No box whose buttons cannot say what they do. The Next button would only
+; repeat them, so it is hidden; Cancel stays as the way out.
+Function ChoicePage
+  !insertmacro MUI_HEADER_TEXT "$(ChoiceTitle)" "$(ChoiceSubtitle)"
+  nsDialogs::Create 1018
+  Pop $ChoiceDialog
+  ${If} $ChoiceDialog == error
+    Abort
+  ${EndIf}
+
+  GetDlgItem $0 $HWNDPARENT 1
+  ShowWindow $0 ${SW_HIDE}
+  GetDlgItem $0 $HWNDPARENT 3
+  ShowWindow $0 ${SW_HIDE}
+
+  nsDialogs::CreateControl BUTTON ${WS_CHILD}|${WS_VISIBLE}|${WS_TABSTOP}|${BS_COMMANDLINK} 0 \
+    0 2u 100% 50u "$(InstallLabel)"
+  Pop $InstallButton
+  SendMessage $InstallButton ${BCM_SETNOTE} 0 "STR:$(InstallNote)"
+  ; The shield says up front that this one asks for administrator rights.
+  SendMessage $InstallButton ${BCM_SETSHIELD} 0 1
+  ${NSD_OnClick} $InstallButton OnInstallClick
+
+  nsDialogs::CreateControl BUTTON ${WS_CHILD}|${WS_VISIBLE}|${WS_TABSTOP}|${BS_COMMANDLINK} 0 \
+    0 58u 100% 50u "$(RunLabel)"
+  Pop $RunButton
+  SendMessage $RunButton ${BCM_SETNOTE} 0 "STR:$(RunNote)"
+  ${NSD_OnClick} $RunButton OnRunClick
+
+  ${NSD_CreateLabel} 0 114u 100% 12u ""
+  Pop $ChoiceStatus
+
+  StrCpy $Choice ""
+  nsDialogs::Show
+FunctionEnd
+
+Function OnInstallClick
+  StrCpy $Choice "install"
+  SendMessage $HWNDPARENT ${WM_NOTIFY_OUTER_NEXT} 1 0
+FunctionEnd
+
+Function OnRunClick
+  StrCpy $Choice "run"
+  SendMessage $HWNDPARENT ${WM_NOTIFY_OUTER_NEXT} 1 0
+FunctionEnd
+
+; Enter on the page with nothing picked lands here too, and does nothing.
+Function ChoiceLeave
+  ${If} $Choice == "run"
+    HideWindow
+    Call StartApp
+    Quit
+  ${ElseIf} $Choice == "install"
+    Call RunSetup
+    ; Only back here when the installer never started, most likely because the
+    ; administrator prompt was turned down. The page stays so the other choice
+    ; is still there.
+    Abort
+  ${Else}
+    Abort
+  ${EndIf}
+FunctionEnd
+
+; electron-builder's installer, carried whole. It is a separate program with
+; its own pages, so it is unpacked to the plugins folder and run there, and this
+; waits for it: the folder is removed when this exits, and removing it under a
+; running installer would fail and leave 150MB behind in TEMP.
+;
+; Nothing is unpacked into the runtime folder on this path, so a later start of
+; this same file asks again, which is what makes a reinstall possible.
+Function RunSetup
+  EnableWindow $InstallButton 0
+  EnableWindow $RunButton 0
+  ${NSD_SetText} $ChoiceStatus "$(Preparing)"
+  System::Call 'user32::UpdateWindow(p $HWNDPARENT)'
+
+  InitPluginsDir
+  File "/oname=$PLUGINSDIR\LWClipper Setup.exe" "${SETUP}"
+
+  HideWindow
+  ClearErrors
+  ExecShellWait "open" "$PLUGINSDIR\LWClipper Setup.exe"
+  ${IfNot} ${Errors}
+    Quit
+  ${EndIf}
+
+  ShowWindow $HWNDPARENT ${SW_SHOW}
+  BringToFront
+  EnableWindow $InstallButton 1
+  EnableWindow $RunButton 1
+  ${NSD_SetText} $ChoiceStatus "$(NotStarted)"
+  StrCpy $Choice ""
+FunctionEnd
+
 ; $R1 the app's folder, $R2 this version's runtime inside it.
 ; $R3 the splash window, $R4 its bitmap, $R5 the control drawing it.
-Section
+Function StartApp
   Call ShowSplash
 
   StrCpy $R1 "$LOCALAPPDATA\LWClipper"
@@ -163,7 +338,7 @@ launch:
   Exec '"$R2\LWClipper.exe" $R0'
 
   Call HideSplash
-SectionEnd
+FunctionEnd
 
 ; A picture on screen for the whole wait, which on a first run is fifteen
 ; seconds of nothing at all otherwise.

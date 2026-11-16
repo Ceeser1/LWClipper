@@ -4,14 +4,17 @@ A lightweight clipper for local video and audio files and for links, built on
 Electron. Paste a link or open a file, trim it, crop it, replace or adjust its
 audio, and save it as MP4, WebM, MOV, MP3, WAV, OGG, AAC or FLAC.
 
-Switch on **Use advanced Editing** in the settings and the same window becomes a
-small multi-track editor instead: several video and audio layers on one
-timeline, each trimmed, moved, cropped and mixed on its own, composited into one
-file. A project is saved as a `.lwc` file, which holds the arrangement and
-references the media rather than copying it. Every three minutes the open
-project is also auto-saved, the last five copies kept in
-`%LOCALAPPDATA%\LWClipper\data\autosave`, and after a crash the next start
-offers to restore it.
+It opens in advanced editing, with the window maximized: a small multi-track
+editor, several video and audio layers on one timeline, each trimmed, moved,
+cropped and mixed on its own, composited into one file. A project is saved as a
+`.lwc` file, which holds the arrangement and references the media rather than
+copying it. Every three minutes the open project is also auto-saved, the last
+five copies kept in `%LOCALAPPDATA%\LWClipper\data\autosave`, and after a crash
+the next start offers to restore it.
+
+Switch off **Use advanced Editing** in the settings and the same window is the
+simple one-clip trimmer instead. The app opens in whichever of the two it was
+left in.
 
 Windows only. The interface is in English and German.
 
@@ -60,13 +63,36 @@ node scripts/check-locales.js
 npm run dist
 ```
 
-Runs electron-builder into `dist/win-unpacked`, then wraps it with
-`scripts/build-launcher.js` into `dist/LWClipper <version>.exe`, a single file of
-about 200MB that needs no installer. It unpacks itself once into
-`%LOCALAPPDATA%\LWClipper\runtime-<version>` and reuses that afterwards, which is
-what makes the first launch about 5 seconds and every one after it about half a
-second. A splash covers the first wait; redraw it with `npm run splash` if the
-icon or the wording ever change.
+Produces `dist/LWClipper v<version>.exe`, the one file to hand out. Its first
+start asks how LWClipper should run:
+
+- **Install LWClipper** runs the installer it carries,
+  `LWClipper v<version> Setup.exe`. That asks for administrator rights,
+  installs into `C:\Program Files\LWClipper` unless another folder is picked,
+  adds Start menu and desktop shortcuts and an uninstaller, and registers `.lwc`
+  so a double-click on a project opens it in LWClipper. The registration is
+  `build.win.fileAssociations` in `package.json` plus `scripts/installer.nsh`.
+- **Run without installing** installs nothing and registers nothing. It unpacks
+  the app once into `%LOCALAPPDATA%\LWClipper\runtime-<version>` and reuses
+  that afterwards, which is what makes the first launch about 5 seconds and
+  every one after it about half a second. A splash covers the wait; redraw it
+  with `npm run splash` if the icon or the wording ever change. It opens a
+  `.lwc` project through Open Project, by a drop on the window, or when the
+  file is named on its command line.
+
+The question comes once per version: after "Run without installing" every start
+goes straight to the app, and a start that is handed a file to open never asks.
+After "Install" the same file asks again, so it can also reinstall. The window
+is in German when Windows is, otherwise in English.
+
+How it is put together: electron-builder writes the app into `dist/win-unpacked`
+and the installer beside it (`LWClipper v<version> Setup.exe`, which stays in
+`dist` and works on its own too), then `scripts/build-launcher.js` wraps both
+into the one file with `scripts/launcher.nsi`. That makes it about 350MB, since
+the installer and the stand-alone payload each carry a copy of the app.
+
+Both ways keep their settings in the same place, so they are one app: starting
+one while the other is open brings the open window forward.
 
 ## Layout
 

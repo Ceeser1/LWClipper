@@ -86,6 +86,10 @@ let queue = Promise.resolve();
 
 function abort() {
   if (currentChild) {
+    // V4.12. Said on the process itself, for its own close handler to read:
+    // an extraction ended on purpose is answered as stopped, which is not
+    // the answer "this file has no video stream" and is not kept as it.
+    currentChild.lwcStopped = true;
     try {
       currentChild.kill();
     } catch {
@@ -109,9 +113,10 @@ function enqueue(job) {
   return mine;
 }
 
-// Swept at both ends like the waveform cache: on quit for the normal case, and
-// at startup because a crash never reaches the quit hook. Returns how many
-// files went.
+// V4.12. Kept from one run of the app to the next, like the waveforms, and
+// emptied by "Clear cache" (main.js). Until then both were swept at every
+// start and every quit, so each opening of a project decoded every source
+// again for thumbnails it had already made. Returns how many files went.
 function clearStrips() {
   abort();
   queue = Promise.resolve();
@@ -237,37 +242,101 @@ function sheetSize(file) {
   }
 }
 
-function extract(filePath, plan, dest) {
+// ---- V4.12. Thumbnails from keyframes ----
+//
+// One pass decoding forward costs the whole file, whatever the sheet holds:
+// 32 thumbnails of an 18 minute 1080p clip took 13.4 seconds here, the same
+// as 256 of them, and each zoom level is another sheet. A coarse sheet does
+// not need it. Its thumbnails stand for half a minute each, and a frame that
+// can be decoded on its own, a keyframe, comes round every few seconds, so
+// decoding only those gives every thumbnail a picture from inside its own
+// stretch. Measured on the same clip: 2.3 seconds, and 0.8 against 3.6 for a
+// 6 minute one.
+//
+// Only where a thumbnail stands for at least this many seconds. Real
+// downloads put a keyframe every 2 to 7 seconds; below this the pictures
+// would start repeating, and the dense sheets are decoded whole as before.
+const KEYFRAME_SECONDS = 8;
+
+/** Whether a sheet is coarse enough to be made from keyframes alone. */
+function keyframesWorth(plan) {
+  return plan.span / Math.max(1, plan.tiles) >= KEYFRAME_SECONDS;
+}
+
+/**
+ * How many frames ffmpeg decoded, read off the summary its verbose log ends
+ * with ("Input stream #0:0 (video): 8638 packets read (...); 89 frames
+ * decoded; 0 decode errors"). Null when the log does not say, which is taken
+ * as not knowing rather than as none.
+ */
+function framesDecoded(log) {
+  const m = /Input stream #\d+:\d+ \(video\):[^\n]*?(\d+) frames decoded/.exec(String(log || ''));
+  return m ? Number(m[1]) : null;
+}
+
+/**
+ * Whether a keyframe pass found enough to fill the sheet: at least one
+ * keyframe a thumbnail. A file with very few of them (a screen recording
+ * with one every minute, a stream that refreshes without any) would give a
+ * sheet of the same picture over and over, and is decoded whole instead.
+ */
+function keyframesEnough(decoded, tiles) {
+  return Number.isFinite(decoded) && decoded >= tiles;
+}
+
+/** The argv for one sheet, from keyframes alone or from every frame. */
+function extractArgs(filePath, plan, dest, keyframes) {
+  const { cols, rows } = gridFor(plan.tiles);
+
+  // fps rather than a seek per thumbnail: one pass decoding forward beats N
+  // passes each seeking to a keyframe and decoding from there. The rate is
+  // tiles per second of the window, so thumbnail i is the frame at
+  // start + i*span/tiles and covers from there to the next one.
+  //
+  // -an because there is no reason to decode the audio, and tile's own
+  // padding is left at zero so the grid arithmetic is a plain divide.
+  const rate = plan.tiles / Math.max(plan.span, 0.001);
+  // V4.12. The keyframe pass asks for the verbose log, whose last lines say
+  // how many frames were decoded.
+  const args = ['-hide_banner', '-loglevel', keyframes ? 'verbose' : 'error', '-nostdin', '-y'];
+  if (keyframes) args.push('-skip_frame', 'nokey');
+  // Step 21d. Seeking before -i is what makes a window cost a window rather
+  // than a file: ffmpeg jumps to the keyframe before the start and decodes
+  // from there, so the deeper the zoom the less there is to read. Left off
+  // the whole-clip sheet entirely, so that one stays the call it has always
+  // been rather than the same call with two arguments that do nothing.
+  if (plan.chunks > 1) args.push('-ss', plan.start.toFixed(3));
+  args.push('-i', filePath);
+  if (plan.chunks > 1) args.push('-t', plan.span.toFixed(3));
+  // V4.12. The last keyframe is held past the end of the file for two
+  // thumbnails' worth, or a file whose last keyframe stands well before its
+  // end would leave the last thumbnail of the sheet empty.
+  const hold = keyframes
+    ? 'tpad=stop_mode=clone:stop_duration=' + (2 * plan.span / Math.max(1, plan.tiles)).toFixed(3) + ','
+    : '';
+  args.push(
+    '-an',
+    '-vf', hold + 'fps=' + rate.toFixed(6) + ',scale=-2:' + TILE_HEIGHT
+      + ',tile=' + cols + 'x' + rows + ':padding=0:margin=0',
+    '-frames:v', '1', '-qscale:v', '4',
+    dest,
+  );
+  return args;
+}
+
+/** What an extraction stopped on purpose is answered with. */
+function stoppedError() {
+  const err = new Error('The thumbnail extraction was stopped.');
+  err.stopped = true;
+  return err;
+}
+
+/** One ffmpeg pass for one sheet. Resolves with how many frames it decoded, when it said. */
+function runExtract(filePath, plan, dest, keyframes) {
   return new Promise((resolve, reject) => {
     const ffmpeg = toolPaths.findFfmpeg();
     if (!ffmpeg) return reject(new Error('ffmpeg.exe was not found alongside the app.'));
-    const { cols, rows } = gridFor(plan.tiles);
-
-    // fps rather than a seek per thumbnail: one pass decoding forward beats N
-    // passes each seeking to a keyframe and decoding from there. The rate is
-    // tiles per second of the window, so thumbnail i is the frame at
-    // start + i*span/tiles and covers from there to the next one.
-    //
-    // -an because there is no reason to decode the audio, and tile's own
-    // padding is left at zero so the grid arithmetic is a plain divide.
-    const rate = plan.tiles / Math.max(plan.span, 0.001);
-    const args = ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y'];
-    // Step 21d. Seeking before -i is what makes a window cost a window rather
-    // than a file: ffmpeg jumps to the keyframe before the start and decodes
-    // from there, so the deeper the zoom the less there is to read. Left off
-    // the whole-clip sheet entirely, so that one stays the call it has always
-    // been rather than the same call with two arguments that do nothing.
-    if (plan.chunks > 1) args.push('-ss', plan.start.toFixed(3));
-    args.push('-i', filePath);
-    if (plan.chunks > 1) args.push('-t', plan.span.toFixed(3));
-    args.push(
-      '-an',
-      '-vf', 'fps=' + rate.toFixed(6) + ',scale=-2:' + TILE_HEIGHT
-        + ',tile=' + cols + 'x' + rows + ':padding=0:margin=0',
-      '-frames:v', '1', '-qscale:v', '4',
-      dest,
-    );
-    const child = spawn(ffmpeg, args, { windowsHide: true });
+    const child = spawn(ffmpeg, extractArgs(filePath, plan, dest, keyframes), { windowsHide: true });
     currentChild = child;
 
     const stderr = [];
@@ -275,12 +344,30 @@ function extract(filePath, plan, dest) {
     child.on('error', reject);
     child.on('close', (code) => {
       if (currentChild === child) currentChild = null;
+      if (child.lwcStopped) return reject(stoppedError());
       if (code !== 0 || !fs.existsSync(dest)) {
         return reject(new Error(stderr.join('').trim() || 'ffmpeg produced no thumbnails.'));
       }
-      resolve();
+      resolve({ decoded: framesDecoded(stderr.join('')) });
     });
   });
+}
+
+/**
+ * One sheet extracted to `dest`: from keyframes when it is coarse enough and
+ * the file has enough of them, from every frame otherwise.
+ */
+async function extract(filePath, plan, dest) {
+  if (keyframesWorth(plan)) {
+    try {
+      const { decoded } = await runExtract(filePath, plan, dest, true);
+      if (keyframesEnough(decoded, plan.tiles)) return;
+    } catch (e) {
+      if (e && e.stopped) throw e;
+      // Whatever went wrong with the short way, the long way says it properly.
+    }
+  }
+  await runExtract(filePath, plan, dest, false);
 }
 
 /**
@@ -408,9 +495,16 @@ module.exports = {
   posterFor,
   posterAt,
   stripFor,
+  stripPath,
   abort,
   enqueue,
   clearStrips,
+  keyframesWorth,
+  keyframesEnough,
+  framesDecoded,
+  extractArgs,
+  stoppedError,
+  KEYFRAME_SECONDS,
   tilesFor,
   chunksFor,
   maxChunks,

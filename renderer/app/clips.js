@@ -1829,11 +1829,31 @@ function renderLayerRows() {
   positionLayerClips();
 }
 
+/**
+ * V4.12. A clip's own box: its height inside its border, where it starts in
+ * its track, and its height with the border. All three come from the row the
+ * clip is on (the stylesheet holds a clip 4px off the top and the bottom of
+ * its track), so nothing positionLayerClips writes changes them.
+ */
+function clipBoxOf(clip) {
+  return { inner: clip.clientHeight, top: clip.offsetTop, outer: clip.offsetHeight };
+}
+
 /** Every clip placed against the same view the ruler is drawn against. */
 function positionLayerClips() {
   const trackW = timelineLane.clientWidth;
   // V2.9. Clip by clip rather than track by track, since a track holds several.
-  for (const clip of timelineStack.querySelectorAll('.layer-clip[data-layer-id]')) {
+  const clips = [...timelineStack.querySelectorAll('.layer-clip[data-layer-id]')];
+  // V4.12. Every clip measured first, and only then anything written. Read
+  // where it was needed, after the styles of the clip before had been
+  // written, each read made the browser lay the whole timeline out again:
+  // three times a clip, over a list as long as the clips. Measured, an edit
+  // with 120 clips on the timeline took 1.4 s, nearly all of it that, and
+  // 64 ms read this way, every clip and part landing where it did.
+  const boxes = clips.map(clipBoxOf);
+  for (let i = 0; i < clips.length; i += 1) {
+    const clip = clips[i];
+    const box = boxes[i];
     const layer = timelineModel.layerById(layers, clip.dataset.layerId);
     const track = clip.parentElement;
     if (!layer || !track) continue;
@@ -1865,21 +1885,21 @@ function positionLayerClips() {
     // picture above it and everything measured on the picture agree on where
     // it ends.
     const strip = clip.querySelector('.layer-clip__keys');
-    const stripH = strip ? keyStripHeight(clip.clientHeight) : 0;
+    const stripH = strip ? keyStripHeight(box.inner) : 0;
     clip.dataset.keyStrip = String(stripH);
     if (strip) {
       strip.style.height = stripH + 'px';
       clip.style.setProperty('--key-strip', stripH + 'px');
     }
-    art.style.height = stripH ? (clip.clientHeight - stripH) + 'px' : '';
+    art.style.height = stripH ? (box.inner - stripH) + 'px' : '';
     // Before the marks, which inset themselves past the fade handle once they
     // know whether it is on show.
     placeFadeGrips(clip, layer, x0, width, gripW);
-    placeClipKeyframes(clip, layer);
+    placeClipKeyframes(clip, layer, box);
     placeClipMarks(clip, width, from, visible, gripW);
-    placeAlphaLine(track, clip, layer, x0, from, visible, gripW);
+    placeAlphaLine(track, clip, layer, x0, from, visible, gripW, box);
     placeSpeedMark(clip, layer, from, visible);
-    drawClipArt(layer, art, x0 + from, visible, clip.clientHeight - stripH);
+    drawClipArt(layer, art, x0 + from, visible, box.inner - stripH);
   }
 }
 
@@ -1897,9 +1917,12 @@ function keyStripHeight(inner) {
  * are all measured on this, so at nothing they all stop on the picture's last
  * row and not on the strip.
  */
-function clipPictureHeight(clip) {
+//
+// V4.12. `outer` is the clip's height with its border when the caller has
+// already measured it (positionLayerClips, for every clip at once).
+function clipPictureHeight(clip, outer = clip.offsetHeight) {
   const strip = Number(clip.dataset.keyStrip) || 0;
-  return clip.offsetHeight - (strip ? strip + CLIP_BORDER : 0);
+  return outer - (strip ? strip + CLIP_BORDER : 0);
 }
 
 // The same measure from the art canvas's side, which is the clip's content
@@ -2030,13 +2053,15 @@ function placeClipMarks(clip, width, from, visible, gripW) {
  * V2.5. Both are placed in the track's pixels, which is why every measurement
  * here starts from the clip's own offset within it.
  */
-function placeAlphaLine(track, clip, layer, x0, from, visible, gripW) {
+function placeAlphaLine(track, clip, layer, x0, from, visible, gripW, box = clipBoxOf(clip)) {
   // By id, because the track holds a line and a bar for every video clip on it.
   const mine = '[data-layer-id="' + layer.id + '"]';
   const line = track.querySelector('.clip-alpha-line' + mine);
   if (!line) return;
   const alpha = timelineModel.alphaOf(layer);
-  const row = clip.offsetTop + layerGeometry.alphaRow(clipPictureHeight(clip), alpha);
+  // V4.12. From the clip's box as positionLayerClips measured it, not read
+  // here, where every read was a layout of the whole timeline.
+  const row = box.top + layerGeometry.alphaRow(clipPictureHeight(clip, box.outer), alpha);
 
   // V2.8. The line runs between the fades rather than under them: "Hide the max
   // alpha horizontal line inside the fade in/out areas, there is already the
@@ -2222,6 +2247,13 @@ async function ensureStrip(layer, want, at) {
     const result = await window.lwclipper
       .filmstrip(layer.src, layer.sourceDuration, ask, askAt);
     const now = stripCache.get(layer.src) || {};
+    if (result.stopped) {
+      // V4.12. Ended on purpose, by a clear say: not a file without a
+      // picture, so it is not written off, and it is asked for again.
+      stripCache.set(layer.src, { ...now, pending: false });
+      redrawTimelineSoon();
+      return;
+    }
     if (!result.ok || !result.data) {
       // No video stream, or ffmpeg could not read one. The clip keeps its plain
       // bar rather than the frame going quiet about it.
@@ -2245,6 +2277,18 @@ async function ensureStrip(layer, want, at) {
   }
 }
 
+// V4.12. The timeline drawn once more a moment after an extraction came back
+// stopped, which is what asks for it again: nothing else would until the
+// next pan or zoom.
+let timelineRedrawTimer = null;
+function redrawTimelineSoon() {
+  clearTimeout(timelineRedrawTimer);
+  timelineRedrawTimer = setTimeout(() => {
+    timelineRedrawTimer = null;
+    drawTimeline();
+  }, 300);
+}
+
 async function ensurePeaks(layer, want) {
   const entry = peakCache.get(layer.src);
   if (entry && entry.pending) return;
@@ -2252,6 +2296,14 @@ async function ensurePeaks(layer, want) {
   peakCache.set(layer.src, { ...(entry || {}), want, pending: true });
   try {
     const result = await window.lwclipper.audioPeaks(layer.src, layer.sourceDuration, want);
+    if (result.stopped) {
+      // V4.12. The analysis was ended on purpose. That used to be taken for
+      // a file with no sound and never asked about again; now the clip keeps
+      // whatever it drew before and asks once more.
+      peakCache.set(layer.src, { ...(entry || {}), pending: false });
+      redrawTimelineSoon();
+      return;
+    }
     if (!result.ok) {
       peakCache.set(layer.src, { want: Infinity, pending: false });
       return;

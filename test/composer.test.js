@@ -500,15 +500,20 @@ function inputFor(args, src) {
   return null;
 }
 
-test('a still is looped for its own length rather than seeked into', () => {
+// V4.12. A still is read once and its one frame held in the graph, where it
+// used to be `-loop 1 ... -t`, decoded again for every frame of the clip.
+test('a still is read once and held for its own length rather than seeked into', () => {
   const args = buildComposeArgs({
     layers: [still({ id: 's', duration: 4 })],
     project: HD, output: 'out.mp4', sources: IMG_SOURCES,
   });
   const flags = inputFor(args, 'shot.png');
-  assert.deepEqual(flags, ['-loop', '1', '-framerate', '30', '-t', '4.0']);
-  // -ss on a looped image would ask a one frame file to skip past its frame.
+  assert.deepEqual(flags, ['-framerate', '30']);
+  // -ss on an image would ask a one frame file to skip past its frame.
   assert.ok(!flags.includes('-ss'), flags.join(' '));
+  assert.ok(!args.includes('-loop'), 'not handed over again by the demuxer for every frame');
+  const graph = args[args.indexOf('-filter_complex') + 1];
+  assert.ok(graph.includes('loop=loop=-1:size=1:start=0,trim=duration=4.0,fps=30,'), graph);
 });
 
 test('a generated layer goes in as the PNG it was drawn into, whole frame at 0:0', () => {
@@ -518,20 +523,20 @@ test('a generated layer goes in as the PNG it was drawn into, whole frame at 0:0
   const gen = { ...T.createLayer({ kind: 'gen', gen: { form: 'bar' } }), src: 'g.png',
     sourceWidth: 1920, sourceHeight: 1080 };
   const args = buildComposeArgs({ layers: [gen], project: HD, output: 'out.mp4' });
-  assert.deepEqual(inputFor(args, 'g.png'), ['-loop', '1', '-framerate', '30', '-t', '10.0']);
+  assert.deepEqual(inputFor(args, 'g.png'), ['-framerate', '30']);
   const graph = args[args.indexOf('-filter_complex') + 1];
   assert.ok(!/scale=/.test(graph), graph);
   assert.match(graph, /overlay=0:0:/);
 });
 
-test('a still loops at the project rate, not at the demuxer default', () => {
+test('a still comes in at the project rate, not at the demuxer default', () => {
   const args = buildComposeArgs({
     layers: [still({ id: 's', duration: 2 })],
     project: { width: 1920, height: 1080, fps: 60 },
     output: 'out.mp4', sources: IMG_SOURCES,
   });
-  assert.deepEqual(inputFor(args, 'shot.png'),
-    ['-loop', '1', '-framerate', '60', '-t', '2.0']);
+  assert.deepEqual(inputFor(args, 'shot.png'), ['-framerate', '60']);
+  assert.ok(args[args.indexOf('-filter_complex') + 1].includes('loop=loop=-1:size=1:start=0,trim=duration=2.0,fps=60,'));
 });
 
 test('a still held longer than it opened at is written that long', () => {
@@ -541,7 +546,7 @@ test('a still held longer than it opened at is written that long', () => {
     layers: [still({ id: 's', duration: 45 })],
     project: HD, output: 'out.mp4', sources: IMG_SOURCES,
   });
-  assert.ok(inputFor(args, 'shot.png').includes('45.0'), args.join(' '));
+  assert.ok(args[args.indexOf('-filter_complex') + 1].includes('loop=loop=-1:size=1:start=0,trim=duration=45.0,'), args.join(' '));
 });
 
 test('a video beside a still keeps being seeked into', () => {
@@ -550,7 +555,7 @@ test('a video beside a still keeps being seeked into', () => {
     project: HD, output: 'out.mp4', sources: IMG_SOURCES,
   });
   assert.deepEqual(inputFor(args, 'a.mp4'), ['-ss', '12.0', '-t', '4.0']);
-  assert.deepEqual(inputFor(args, 'shot.png'), ['-loop', '1', '-framerate', '30', '-t', '4.0']);
+  assert.deepEqual(inputFor(args, 'shot.png'), ['-framerate', '30']);
 });
 
 test('a still is placed and cropped like any other picture', () => {

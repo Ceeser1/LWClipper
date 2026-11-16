@@ -171,9 +171,11 @@ test('a masked still picture takes its mask as an input, scaled to it and made i
   const l = { ...vid({ render: R, fadeIn: 1 }), maskFile: { src: 'C:/c/gen/m.png' } };
   const args = buildComposeArgs({ layers: [l], project: HD, output: 'o.mp4', sources: { 'a.mp4': { width: 1920, height: 1080 } } });
   const i = args.indexOf('C:/c/gen/m.png');
-  assert.deepEqual(args.slice(i - 7, i), ['-loop', '1', '-framerate', '30', '-t', '10.0', '-i']);
+  // V4.12. Read once, made grey and sized once, and then held for the clip.
+  assert.deepEqual(args.slice(i - 3, i), ['-framerate', '30', '-i']);
+  assert.ok(!args.includes('-loop'));
   const g = graphOf(args);
-  assert.match(g, /\[1:v\]fps=30,setpts=PTS-STARTPTS\+0\.0\/TB,format=gray,scale=640:360\[mk0\]/);
+  assert.ok(g.includes('[1:v]format=gray,scale=640:360,loop=loop=-1:size=1:start=0,trim=duration=10.0,fps=30,setpts=PTS-STARTPTS+0.0/TB[mk0]'), g);
   assert.match(g, /format=yuva420p\[mp0\]/);
   assert.match(g, /\[mp0\]\[mk0\]alphamerge,fade=t=in/);
   assert.doesNotMatch(g, /alphaextract/, 'a video has no alpha of its own to keep');
@@ -191,7 +193,7 @@ test('a masked picture that moves scales its mask on every frame in place of the
   const l = { ...vid({ keyframes: [{ t: 0, render: R }, { t: 2, render: { ...R, x: 0 } }] }), maskFile: { src: 'C:/c/gen/m.png' } };
   const g = graphOf(buildComposeArgs({ layers: [l], project: HD, output: 'o.mp4', sources: { 'a.mp4': { width: 1920, height: 1080 } } }));
   assert.doesNotMatch(g, /color=c=white/);
-  assert.match(g, /\[1:v\]fps=30,setpts=PTS-STARTPTS\+0\.0\/TB,format=gray,scale=w='max\(1\\,round\(/);
+  assert.ok(g.includes("[1:v]format=gray,loop=loop=-1:size=1:start=0,trim=duration=10.0,fps=30,setpts=PTS-STARTPTS+0.0/TB,scale=w='max(1\\,round("), g);
   const plain = graphOf(buildComposeArgs({ layers: [vid({ keyframes: [{ t: 0, render: R }, { t: 2, render: { ...R, x: 0 } }] })],
     project: HD, output: 'o.mp4', sources: { 'a.mp4': { width: 1920, height: 1080 } } }));
   assert.match(plain, /color=c=white:s=16x16/, 'without one, the white square as before');

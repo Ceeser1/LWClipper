@@ -201,13 +201,61 @@ function piecewise(times, values) {
 // every frame where the picture moves, and becomes the picture's alpha
 // before the turn, the fades and the ceiling, which all act on that alpha.
 
-/** The mask's input, on the timeline's clock and in grey, ready to scale. */
-function maskSource(l, input, fps) {
+// ---- V4.12. A still decoded once ----
+//
+// A still used to come in as `-loop 1 -framerate F -t D -i file`, which has
+// the demuxer hand the same file over for every frame of the clip, and the
+// decoder open and decode it every time: a text, which is a PNG the size of
+// the project, cost a PNG decode and a conversion out of RGBA for each frame
+// it was on screen. Measured with the bundled ffmpeg on 60 seconds of 1080p:
+// 5.9 s for the video alone, 10.1 s with one text over it.
+//
+// Now the file is read once (`-framerate F -i file`, one frame) and that one
+// frame is held for as long as the clip is by the loop filter, which keeps
+// the decoded picture and hands it on again. Everything that is the same on
+// every frame (the cut, the size, the pixel format) is done before the hold,
+// so it is done once as well. The same 60 seconds: 6.4 s, and the file frame
+// for frame the one the old graph wrote (PSNR infinite over 1440 frames).
+//
+// The three stills an export has all take it: a picture layer (an image, or
+// a text, shape or bar as the window drew it), a mask's PNG, and the PNG of
+// where an Obscure or Pixelate acts. A sequence of drawn frames is not a
+// still and comes in as it did.
+
+/** The input flags of a still: read once, its one frame at the project's rate. */
+function stillInput(src, fps) {
+  return ['-framerate', String(fps), '-i', src];
+}
+
+/** One decoded frame handed on again and again for `duration` seconds. */
+function holdStill(duration) {
+  return 'loop=loop=-1:size=1:start=0,trim=duration=' + fixed(duration);
+}
+
+/** Whether a layer's own input is one still picture (not a sequence of drawn frames). */
+function oneStill(l) {
+  return timeline.isStill(l) && !l.frames;
+}
+
+/**
+ * The mask's input, on the timeline's clock and in grey. `scale`, when given,
+ * is the filter that brings it to the picture's size where that size is the
+ * same the whole clip long.
+ *
+ * V4.12. A mask that is one PNG is made grey and sized once and then held;
+ * the frames of a mask that changes are converted one by one as before.
+ */
+function maskSource(l, input, fps, scale = null) {
+  const shift = 'setpts=PTS-STARTPTS+' + fixed(l.start) + '/TB';
+  if (!l.maskFile.frames) {
+    return '[' + input + ':v]' + chain(['format=gray', scale, holdStill(l.duration), 'fps=' + fps, shift]);
+  }
   return '[' + input + ':v]' + chain([
-    l.maskFile.frames ? holdFrames(l.maskFile.frames, fps) : null,
+    holdFrames(l.maskFile.frames, fps),
     'fps=' + fps,
-    'setpts=PTS-STARTPTS+' + fixed(l.start) + '/TB',
+    shift,
     'format=gray',
+    scale,
   ]);
 }
 
@@ -251,7 +299,8 @@ function ownAlpha(l) {
  */
 function coverHead(graph, l, n, input, fps, inputs, source) {
   // V4.11. At the layer's speed from the very start, covers and all.
-  const plain = '[' + input + ':v]' + speedHead(l, fps);
+  // V4.12. A still has no speed; it is its one frame, held for the clip.
+  const plain = '[' + input + ':v]' + (oneStill(l) ? holdStill(l.duration) + ',' : speedHead(l, fps));
   const files = (Array.isArray(l.coverFiles) && l.type === 'video' ? l.coverFiles : [])
     .map((f, i) => ({ ...f, input: inputs && inputs[i] }))
     .filter((f) => {
@@ -278,12 +327,11 @@ function coverHead(graph, l, n, input, fps, inputs, source) {
     // of the stretch where they do, held at either end like a moving mask's.
     // Both this and the picture count from the clip's first frame here, the
     // layer's place on the timeline being given to it further down.
-    const where = '[' + f.input + ':v]' + chain([
-      f.frames && f.frames.pattern ? holdFrames(f.frames, fps) : null,
-      'fps=' + fps,
-      'format=gray',
-      'scale=' + r.width + ':' + r.height,
-    ]);
+    // V4.12. The one PNG is made grey and sized once, and then held.
+    const moving = !!(f.frames && f.frames.pattern);
+    const where = '[' + f.input + ':v]' + chain(moving
+      ? [holdFrames(f.frames, fps), 'fps=' + fps, 'format=gray', 'scale=' + r.width + ':' + r.height]
+      : ['format=gray', 'scale=' + r.width + ':' + r.height, holdStill(l.duration), 'fps=' + fps]);
     if (blended) {
       graph.push('[' + cur + ']format=yuva444p,split[' + t + 'a][' + t + 'b]');
       // V4.8. Premultiplied round the filter, as the preview's canvas is: a
@@ -626,7 +674,8 @@ function buildComposeArgs({
     if (l.maskFile.frames) {
       args.push('-framerate', String(fps), '-start_number', '0', '-i', l.maskFile.frames.pattern);
     } else {
-      args.push('-loop', '1', '-framerate', String(fps), '-t', fixed(l.duration), '-i', l.maskFile.src);
+      // V4.12. Read once and held in the graph, see "A still decoded once".
+      args.push(...stillInput(l.maskFile.src, fps));
     }
   };
   // V4.7. And each Obscure or Pixelate's picture of where it acts, after those.
@@ -639,7 +688,7 @@ function buildComposeArgs({
       if (!f || (!f.src && !frames)) return undefined;
       inputs.push(null);
       if (frames) args.push('-framerate', String(fps), '-start_number', '0', '-i', frames.pattern);
-      else args.push('-loop', '1', '-framerate', String(fps), '-t', fixed(l.duration), '-i', f.src);
+      else args.push(...stillInput(f.src, fps));
       return inputs.length - 1;
     }));
   };
@@ -647,10 +696,12 @@ function buildComposeArgs({
     indexOf.set(l.id, inputs.length);
     inputs.push(l);
     // V2.3. A still is one frame, so there is nothing to seek into and nothing
-    // that runs out: -loop 1 makes the demuxer hand the same frame over for as
-    // long as it is asked, and -t is what stops it. -ss would be meaningless
-    // here and -framerate is set so the loop arrives at the project's rate
-    // rather than at the demuxer's own default of 25.
+    // that runs out. -ss would be meaningless here and -framerate is set so
+    // the frame arrives at the project's rate rather than at the demuxer's
+    // own default of 25.
+    // V4.12. It is read once and held in the graph for as long as the clip
+    // is (holdStill), where `-loop 1 ... -t` had it decoded again for every
+    // frame.
     //
     // V3. A generated layer arrives here as the PNG the window drew it into,
     // at the project's size, so it is a still like any image from this point.
@@ -661,7 +712,7 @@ function buildComposeArgs({
     if (l.frames) {
       args.push('-framerate', String(fps), '-start_number', '0', '-i', l.frames.pattern);
     } else if (timeline.isStill(l)) {
-      args.push('-loop', '1', '-framerate', String(fps), '-t', fixed(l.duration), '-i', l.src);
+      args.push(...stillInput(l.src, fps));
     } else {
       // V4.11. As much of the source as the layer shows, which at another
       // speed is not as long as the layer is.
@@ -762,8 +813,23 @@ function buildComposeArgs({
       // V3.6. A mask is a third.
       const maskInput = placement ? maskIndexOf.get(l.id) : undefined;
       const needsAlpha = fades.in > 0 || fades.out > 0 || alpha < 1 || !!rotate || maskInput !== undefined;
-      const picture = from
-        + chain([
+      // V4.12. A still with nothing laid on it is cut, sized and converted
+      // once, and only then held for the clip. The format is always said
+      // here: it is the one the overlay below takes a picture in anyway, and
+      // saying it before the hold is what makes that conversion happen once
+      // instead of on every frame.
+      const bare = '[' + indexOf.get(l.id) + ':v]';
+      const once = oneStill(l) && from === bare + holdStill(l.duration) + ',';
+      const picture = once
+        ? bare + chain([
+          parts && parts.crop,
+          parts && parts.scale,
+          'format=yuva420p',
+          holdStill(l.duration),
+          'fps=' + fps,
+          'setpts=PTS-STARTPTS+' + fixed(l.start) + '/TB',
+        ])
+        : from + chain([
           l.frames ? holdFrames(l.frames, fps) : null,
           'fps=' + fps,
           parts && parts.crop,
@@ -781,7 +847,7 @@ function buildComposeArgs({
       if (maskInput !== undefined) {
         const d = placement.dest;
         graph.push(picture + '[mp' + n + ']');
-        graph.push(maskSource(l, maskInput, fps) + ',scale=' + d.width + ':' + d.height + '[mk' + n + ']');
+        graph.push(maskSource(l, maskInput, fps, 'scale=' + d.width + ':' + d.height) + '[mk' + n + ']');
         if (ownAlpha(l)) {
           graph.push('[mp' + n + ']split[mq' + n + '][mr' + n + ']');
           graph.push('[mr' + n + ']alphaextract[ma' + n + ']');

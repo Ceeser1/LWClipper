@@ -267,7 +267,7 @@ test('a move that fills the clip needs no holding, and a still effect beside it 
   assert.deepEqual(inputs, ['a.mp4', 'C:/c/gen/seq-2/%05d.png', 'C:/c/gen/p.png']);
   const parts = graphOf(args).split(';');
   assert.ok(parts.includes('[1:v]fps=30,format=gray,scale=700:500[cv0x0m]'));
-  assert.ok(parts.includes('[2:v]fps=30,format=gray,scale=252:196[cv0x1m]'));
+  assert.ok(parts.includes('[2:v]format=gray,scale=252:196,loop=loop=-1:size=1:start=0,trim=duration=10.0,fps=30[cv0x1m]'));
   assert.equal(graphOf(args).includes('tpad'), false);
 });
 

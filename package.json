@@ -1,6 +1,6 @@
 {
   "name": "lwclipper",
-  "version": "4.11.1",
+  "version": "4.12.0",
   "description": "Lightweight clipper for local files and video links",
   "main": "main.js",
   "private": true,
@@ -46,10 +46,26 @@
       }
     ],
     "win": {
-      "target": "dir",
+      "target": "nsis",
       "icon": "icon.ico",
-      "signAndEditExecutable": false
-    }
+      "fileAssociations": [
+        {
+          "ext": "lwc",
+          "name": "LWClipper.Project",
+          "description": "LWClipper Project",
+          "icon": "icon.ico"
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "LWClipper v${version} Setup.${ext}",
+      "include": "scripts/installer.nsh",
+      "differentialPackage": false
+    },
+    "publish": null
   },
   "author": "Ceeser"
 }

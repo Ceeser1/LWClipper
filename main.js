@@ -161,8 +161,10 @@ function keptWindowSize() {
 }
 
 function createWindow() {
-  // Without this the taskbar and window show Electron's default icon, because
-  // signAndEditExecutable is off and rcedit never stamps the inner executable.
+  // Without this a development run shows Electron's default icon in the
+  // taskbar and on the window: it runs as plain electron.exe. A built
+  // executable has carried the icon itself since 4.11.2, when the installer
+  // needed it for its shortcuts and rcedit was let run again.
   const icon = toolPaths.appIconPath();
   // V4.11.1. At the size it was left at, when there is one.
   const kept = keptWindowSize();
@@ -226,6 +228,13 @@ function createWindow() {
   mainWindow.on('maximize', noteWindowSize);
   mainWindow.on('unmaximize', noteWindowSize);
   if (kept && kept.maximized) mainWindow.maximize();
+  // V4.11.2. Advanced editing opens maximized however the window was left:
+  // "if the app is in advanced editing mode, always open it in
+  // windowed-fullscreen", the user on 2026-11-14. Maximized is that: the whole
+  // of the screen's work area and still a window, where F11's fullscreen takes
+  // the title bar and the taskbar as well. On the screen openingSpot put the
+  // window on. Simple editing still opens the way it was left.
+  else if (settings.get('advancedEditing')) mainWindow.maximize();
 
   // Step 21c-2. The split is shared differently when the window is maximized,
   // and only the main process knows that it is. Both events fire after the
@@ -550,9 +559,8 @@ app.whenReady().then(() => {
   if (settings.isFirstRun()) {
     settings.set({ language: locales.matchSystem(app.getPreferredSystemLanguages()) });
   }
-  // Anything still here is left over from a run that never reached will-quit.
-  waveform.clearPeaks();
-  filmstrip.clearStrips();
+  // V4.12. The waveforms and thumbnails of the last run are no longer swept
+  // here: they are what a project opened again draws from, see will-quit.
   // V3.6.1. Before the window, so the page's first question finds the answer.
   startSession();
 
@@ -575,15 +583,44 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-// Waveforms and filmstrips are worth nothing once the app is closed, so the
-// folders go with it rather than growing across sessions.
+// V4.12. Waveforms and thumbnails stay when the app closes. They used to go
+// with it, at both ends of every run, on the reasoning that they are worth
+// nothing once the app is closed. That was true of a trimmer that held one
+// file; a project is opened again and again, and each opening read every
+// source through once more to draw what it had drawn the day before
+// (measured: 13 seconds of ffmpeg for the thumbnails of one 18 minute clip,
+// again at every zoom). Each entry is keyed by its file's path, size and
+// time, so a file that changed is extracted afresh, and "Clear cache" empties
+// both folders. What does still end here is an extraction in flight: left
+// running it would outlive the app and write a sheet nothing then describes.
 app.on('will-quit', () => {
-  // The running app's folders, not this one's.
+  // The running app's work, not this one's.
   if (!firstInstance) return;
-  waveform.clearPeaks();
-  filmstrip.clearStrips();
+  waveform.abort();
+  filmstrip.abort();
   endSession();
 });
+
+/** How much the waveforms and thumbnails take up on disk, in bytes. */
+function derivedCacheBytes() {
+  let total = 0;
+  for (const dir of [waveform.peaksPath(), filmstrip.stripPath()]) {
+    let names;
+    try {
+      names = fs.readdirSync(dir);
+    } catch {
+      continue; // Never created.
+    }
+    for (const name of names) {
+      try {
+        total += fs.statSync(path.join(dir, name)).size;
+      } catch {
+        // Gone since the listing.
+      }
+    }
+  }
+  return total;
+}
 
 function sendProgress(frac, text) {
   if (mainWindow) mainWindow.webContents.send('job:progress', { frac, text });
@@ -612,7 +649,15 @@ ipcMain.handle('tools:status', () => {
 ipcMain.handle('tools:clearCache', (_event, ticked) => {
   const claims = claimsOnDisk();
   const doomed = projectClaim.deletableFiles(claims, ticked, toolPaths.cacheFileNames());
-  const freed = toolPaths.clearCache(doomed);
+  let freed = toolPaths.clearCache(doomed);
+  // V4.12. And the waveforms and thumbnails, all of them, whichever projects
+  // were ticked: they are kept between runs now and this is what empties
+  // them. Nothing in them is anyone's work. They are drawn again from the
+  // files the next time a clip is shown, the open project's included.
+  const derived = derivedCacheBytes();
+  waveform.clearPeaks();
+  filmstrip.clearStrips();
+  freed += Math.max(0, derived - derivedCacheBytes());
   // After the delete rather than before: a claim is given up only once the
   // files it named are actually gone, so a clear that fails halfway leaves
   // every project still protecting whatever survived it.
@@ -839,11 +884,14 @@ ipcMain.handle('video:compose', async (_event, {
   }
 });
 
+// V4.12. `stopped` says the analysis was ended on purpose, by a newer request
+// for the same file or by a clear, which is not the same answer as a file
+// with no sound in it: the window may ask again, and does.
 ipcMain.handle('audio:peaks', async (_event, { filePath, duration, buckets }) => {
   try {
     return { ok: true, data: await waveform.peaksFor(filePath, duration, buckets) };
   } catch (e) {
-    return { ok: false, error: String(e.message || e) };
+    return { ok: false, error: String(e.message || e), stopped: !!(e && e.stopped) };
   }
 });
 
@@ -855,7 +903,8 @@ ipcMain.handle('video:filmstrip', async (_event, { filePath, duration, tiles, at
   try {
     return { ok: true, data: await filmstrip.stripFor(filePath, duration, tiles, at) };
   } catch (e) {
-    return { ok: false, error: String(e.message || e) };
+    // V4.12. Stopped on purpose is not "no video stream", see audio:peaks.
+    return { ok: false, error: String(e.message || e), stopped: !!(e && e.stopped) };
   }
 });
 
@@ -1619,6 +1668,19 @@ ipcMain.handle('window:toggleFullscreen', () => {
 ipcMain.handle('window:isMaximized', () =>
   !!(mainWindow && !mainWindow.isDestroyed()
     && (mainWindow.isMaximized() || mainWindow.isFullScreen())));
+
+// V4.11.2. Advanced editing switched on while the app is open: "if
+// advanced-editing mode gets toggled on, switch the window to
+// windowed-fullscreen on the current screen", the user on 2026-11-14.
+// maximize() acts on the screen the window is on, so the current screen needs
+// no working out. A fullscreen window already has that screen and is left as
+// it is.
+ipcMain.handle('window:maximize', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return false;
+  if (mainWindow.isFullScreen()) return false;
+  if (!mainWindow.isMaximized()) mainWindow.maximize();
+  return true;
+});
 
 // Step 21c. The splitter takes the height into the user's hands without
 // resizing the window, so the resize listener above cannot see it happen and

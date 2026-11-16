@@ -3,8 +3,15 @@
 // Wraps dist/win-unpacked in the caching launcher. Run it after electron-builder
 // has produced that folder:
 //
-//   npm run dist        (produces dist/win-unpacked)
-//   npm run launcher    (produces dist/LWClipper <version>.exe)
+//   npm run dist        (produces dist/win-unpacked and the installer,
+//                        dist/LWClipper v<version> Setup.exe, then runs this)
+//   npm run launcher    (produces dist/LWClipper v<version>.exe)
+//
+// The launcher is the one file to hand out. Since 4.11.3 it carries the
+// installer as well, and its first start asks which of the two is wanted:
+// "Run without installing" installs nothing and registers nothing, "Install"
+// runs the Setup.exe it carries, which is the only thing that puts .lwc in the
+// registry. The Setup.exe stays in dist on its own as well.
 //
 // The splash it shows comes from assets/splash.bmp, which is drawn separately by
 // "npm run splash" and only needs redrawing when the icon or the wording change.
@@ -20,7 +27,8 @@ const { execFileSync } = require('child_process');
 const ROOT = path.join(__dirname, '..');
 const version = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
 const appDir = path.join(ROOT, 'dist', 'win-unpacked');
-const outFile = path.join(ROOT, 'dist', `LWClipper ${version}.exe`);
+const outFile = path.join(ROOT, 'dist', `LWClipper v${version}.exe`);
+const setupFile = path.join(ROOT, 'dist', `LWClipper v${version} Setup.exe`);
 const icon = path.join(ROOT, 'icon.ico');
 const splash = path.join(ROOT, 'assets', 'splash.bmp');
 const script = path.join(__dirname, 'launcher.nsi');
@@ -75,6 +83,12 @@ if (!fs.existsSync(path.join(appDir, 'LWClipper.exe'))) {
   console.error('dist/win-unpacked is not there. Run "npm run dist" first.');
   process.exit(1);
 }
+// The name carries the version, so a Setup.exe left over from an older build
+// can never be the one wrapped.
+if (!fs.existsSync(setupFile)) {
+  console.error('dist/LWClipper v' + version + ' Setup.exe is not there. Run "npm run dist" first.');
+  process.exit(1);
+}
 if (!fs.existsSync(splash)) {
   console.error('assets/splash.bmp is not there. Run "npm run splash" to draw it.');
   process.exit(1);
@@ -94,6 +108,7 @@ if (!title) {
 const before = fs.existsSync(outFile) ? fs.statSync(outFile).size : 0;
 console.log('makensis : ' + makensis);
 console.log('payload  : ' + appDir);
+console.log('installer: ' + setupFile);
 console.log('output   : ' + outFile);
 console.log('version  : ' + version);
 console.log('splash   : ' + size.width + 'x' + size.height);
@@ -109,9 +124,13 @@ if (!/^\d+\.\d+\.\d+$/.test(version)) {
 try {
   const out = execFileSync(makensis, [
     '/V2',
+    // The German strings have umlauts, and without this makensis reads the
+    // script in the system's ANSI code page.
+    '/INPUTCHARSET', 'UTF8',
     '/DVERSION=' + version,
     '/DAPPDIR=' + appDir,
     '/DOUTFILE=' + outFile,
+    '/DSETUP=' + setupFile,
     '/DICON=' + icon,
     '/DSPLASH=' + splash,
     '/DSPLASH_W=' + size.width,

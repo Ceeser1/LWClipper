@@ -45,12 +45,37 @@ function cachePathFor(filePath, buckets) {
   return path.join(peaksDir(), key + '.json');
 }
 
-// Only one analysis is ever useful at a time: loading another file makes the
-// one in flight pointless, so it gets killed rather than left to finish.
+// One analysis at a time, in the order they were asked for.
+//
+// V4.12. Until now every request began by killing whatever was in flight, on
+// the reasoning that only one analysis is ever useful: loading another file
+// makes the one in flight pointless. That is true of simple editing's one
+// file and of nothing else. On a timeline with two sound sources the second
+// clip's request killed the first clip's, and what came of that was worse
+// than a missing waveform: killed before any sound had been read it came
+// back as a failure, which the window takes as "this file has no sound" and
+// never asks about again; killed part of the way through it came back as the
+// part read so far, was written to the cache as the whole of it, and the
+// clip drew a waveform that stops where the other file arrived. Measured on
+// two real files: sound in 10% of the first half and none in the last
+// quarter, of a file that has it in 98% and 94%.
+//
+// The thumbnails had the same fault and the same answer (filmstrip.js): the
+// requests queue, and only a newer request for the same file takes the place
+// of an older one, the coarse result being about to be thrown away.
 let currentChild = null;
+let currentFile = null;
+let queue = Promise.resolve();
 
+/**
+ * Stop the analysis in flight. What it had read so far is thrown away: the
+ * request it belonged to is answered as stopped, never with part of a
+ * waveform.
+ */
 function abort() {
   if (currentChild) {
+    // Said on the process itself, for its own close handler to read.
+    currentChild.lwcStopped = true;
     try {
       currentChild.kill();
     } catch {
@@ -60,13 +85,22 @@ function abort() {
   }
 }
 
-// An entry is only ever read again for a file that is being loaded, and the
-// renderer keeps the peaks of the loaded file in memory, so nothing in here
-// survives usefully past a run of the app. Swept at both ends: on quit for the
-// normal case, and at startup because a crash or a kill from Task Manager never
-// reaches the quit hook. Returns how many entries went.
+/** Run one analysis after whatever is already queued, a failure or not. */
+function enqueue(job) {
+  const mine = queue.then(job, job);
+  queue = mine.catch(() => {});
+  return mine;
+}
+
+// V4.12. Kept from one run of the app to the next: a project opened again
+// finds the waveforms it drew last time, where it used to read every sound
+// file through once more. An entry is keyed by the file's path, size and
+// time, so one for a file that has changed is simply never found again.
+// "Clear cache" is what empties the folder (main.js). Returns how many
+// entries went.
 function clearPeaks() {
   abort();
+  queue = Promise.resolve();
   const dir = peaksPath();
   let names;
   try {
@@ -142,6 +176,9 @@ function decodePeaks(filePath, duration, buckets) {
     child.on('error', reject);
     child.on('close', (code) => {
       if (currentChild === child) currentChild = null;
+      // V4.12. Stopped on purpose: whatever was read is the start of a
+      // waveform and not a waveform, so nothing is handed back or cached.
+      if (child.lwcStopped) return reject(stoppedError());
       if (code !== 0 && index === 0) {
         return reject(new Error(stderr.join('').trim() || 'ffmpeg could not read any audio.'));
       }
@@ -173,8 +210,11 @@ function bucketsFor(duration, want) {
  * drawing would like; the count actually used comes back with the peaks. Returns
  * { peaks: number[], buckets } or throws when there is no readable audio.
  */
+//
+// V4.12. A request that was stopped, by a newer one for the same file or by
+// abort(), throws an error whose `stopped` is true. That is not "no sound":
+// the caller may ask again.
 async function peaksFor(filePath, duration, want = 0) {
-  abort();
   const buckets = bucketsFor(duration, want);
   const cacheFile = cachePathFor(filePath, buckets);
   try {
@@ -186,7 +226,13 @@ async function peaksFor(filePath, duration, want = 0) {
     // No usable cache entry; fall through and decode.
   }
 
-  const peaks = await decodePeaks(filePath, duration, buckets);
+  // A finer waveform of this same file makes the one being read pointless.
+  // Any other file is another clip's and is wanted as much as this one.
+  if (currentChild && currentFile === filePath) abort();
+  const peaks = await enqueue(() => {
+    currentFile = filePath;
+    return decodePeaks(filePath, duration, buckets);
+  });
   try {
     fs.writeFileSync(cacheFile, JSON.stringify({ buckets, rate: RATE, peaks }));
   } catch {
@@ -195,4 +241,13 @@ async function peaksFor(filePath, duration, want = 0) {
   return { peaks, buckets, cached: false };
 }
 
-module.exports = { peaksFor, abort, clearPeaks, bucketsFor, BUCKETS, MAX_BUCKETS };
+/** What a request stopped on purpose is answered with. */
+function stoppedError() {
+  const err = new Error('The audio analysis was stopped.');
+  err.stopped = true;
+  return err;
+}
+
+module.exports = {
+  peaksFor, peaksPath, abort, enqueue, clearPeaks, bucketsFor, stoppedError, BUCKETS, MAX_BUCKETS,
+};
