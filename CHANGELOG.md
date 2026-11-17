@@ -6,8 +6,12 @@ The most important changes since 1.5.5, newest first.
 
 ## 5.x: VFX (2026-11-17)
 
-Current version: 5.1.4.
+Current version: 5.1.5.
 
+- **A small image stays small, and Crop and Mask has its settings on top (5.1.5).**
+  - **An image no bigger than the frame is shown at its actual size**, centred, when it is added, instead of being blown up to fill the frame: a 256 x 256 picture in a 1080p project is 256 x 256 pixels in the middle. An image bigger than the frame is still fitted down, and a video still fills the frame. In **Render Position** such an image reads "Centred at actual size", its **Scale** of 100% is its own pixels, and **Reset Position** brings it back there. Images already on a timeline, and projects saved before, stay exactly as they were.
+  - **Crop and Mask** has each view's settings over the picture and the keyframes under it, as the other windows have them. **Video Frame:** the shape buttons, the size in pixels, the Zoom slider, the picture, the keyframes. **Render Position:** the size and place, the Scale slider, the picture, the keyframes.
+  - **Fixed:** dragging the playhead on the keyframe bar of Render Position, between two keyframes where the picture differs in size, left a new keyframe at every step of the drag. Moving the playhead makes none now; changing something between two keyframes still makes one there.
 - **A crosshair for Bulge, Swirl and Kaleidoscope (5.1.4).** These three bend the picture about a point, and a Bulge and a Swirl already say how far they reach with their Radius, so a box on top of that was a second way to say the same. They now show a crosshair on the picture: drag it to where the effect should sit. It lands on the picture's middle and edges, stays on the picture, and is also there as two figures, **Center X** and **Center Y**. With keyframes the point travels like any other setting. One that was saved with an area stays about that area's middle.
 - **Each VFX only has the area settings that make sense for it (5.1.3).** Until now every VFX had an area of any of the eight shapes with a soft edge, also where a part of the effect means nothing. Now:
   - **The whole picture, nothing to place:** Cinema Bars, Border, Old TV, Lens Distortion, Flip and Mirror, Rotate, Offset, Perspective, Shake, Tile. What they do is told by the picture's own frame.

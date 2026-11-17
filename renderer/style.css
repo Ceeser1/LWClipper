@@ -2823,6 +2823,8 @@ body.lane-lifting * {
 .place-panel {
   display: flex;
   justify-content: center;
+  /* V5.1.5. The readout and the Scale slider are over the stage now. */
+  margin-top: 10px;
 }
 
 .place-stage {
@@ -3080,7 +3082,8 @@ body.lane-lifting * {
 /* The shared hint style pushes itself right inside a flex row; here it is a
    block of its own under the frame, so that has to go. */
 .crop-size {
-  margin-top: 4px;
+  /* V5.1.5. Over the stage, under the shape buttons or the menu. */
+  margin-top: 8px;
   font-size: 15px;
   font-weight: bold;
   color: #ebebf0;
@@ -3269,7 +3272,7 @@ body.lane-lifting * {
 }
 
 .crop-note {
-  margin-top: 4px;
+  margin-top: 8px;
   font-size: 12px;
   color: #d8a860;
 }
@@ -3278,12 +3281,14 @@ body.lane-lifting * {
   display: none;
 }
 
+/* V5.1.5. The first row of Video Frame, under the menu, which keeps its own
+   gap; in simple editing under the title. */
 .crop-presets {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
   gap: 6px;
-  margin-top: 10px;
+  margin-top: 2px;
 }
 
 /* V3.7.1. The user: "Left-bottom: Remove-buttons (for Crop, render position,

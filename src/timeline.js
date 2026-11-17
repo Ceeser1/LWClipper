@@ -1364,6 +1364,13 @@ const timelineModel = (() => {
       // away: every undo and every project reopened would have quietly put the
       // layer back in the middle of the frame.
       render: kind === 'gen' ? null : (props.render || null),
+      // V5.1.5. What "no position" means for this layer: false is centre and
+      // fit, which is every layer written before this and every video; true is
+      // centred at its own pixel size where that fits the frame, which an
+      // image gets when it is added (geometry.js ownSizeRect). Declared here
+      // for the reason render is: a field createLayer does not name is a field
+      // the project open path drops.
+      ownSize: kind !== 'gen' && props.type !== 'audio' && props.ownSize === true,
       // V2.2's fades, in seconds in from each end of the layer. Zero is no
       // fade, which is what every layer and every project file written before
       // this existed reads as, so nothing old changes.

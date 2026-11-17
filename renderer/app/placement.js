@@ -48,6 +48,21 @@ let placeTouched = false;
  */
 let placeCentre = null;
 let placeScalePct = 100;
+/**
+ * V5.1.5. The rectangle the scale and the centre were last taken from, with
+ * the fit, the scale and the centre it was taken at.
+ *
+ * The scale is a whole percentage, so a rectangle rebuilt from it is not the
+ * rectangle it was taken from: 437 wide on a fit of 1920 reads 23% and comes
+ * back 442. For a placement the user set that is nothing. For the blend
+ * between two keyframes it was a bug the user met on 2026-11-17: the Render
+ * Position view rebuilt the blend a few pixels off, the window took that for
+ * an edit, and a drag of the strip's playhead between two keyframes that
+ * differ in size left a new keyframe at every step. So while the fit, the
+ * scale and the centre are what they were when the rectangle came in,
+ * rebuildPlaceDraft hands that rectangle back as it was.
+ */
+let placeHeld = null;
 
 // V2.8 took the ceiling from 400% to 1000% and the floor from 10% to 1%, and
 // put the bend between them in geometry beside the rest of the placement sums.
@@ -146,6 +161,8 @@ function placeFitRect(layer) {
     source,
     crop: cropDraft,
     project: projectFrame(),
+    // V5.1.5. An image added since stands at its own size, so that is its 100%.
+    ownSize: !!layer.ownSize,
   });
   return placement ? { ...placement.dest } : null;
 }
@@ -386,6 +403,12 @@ function rebuildPlaceDraft() {
     placeScalePct = 100;
     return;
   }
+  // V5.1.5. Nothing has asked for another size or place: as it came in.
+  if (placeHeld && sameRect(fit, placeHeld.fit) && placeScalePct === placeHeld.pct
+    && placeCentre.cx === placeHeld.cx && placeCentre.cy === placeHeld.cy) {
+    placeDraft = { ...placeHeld.rect };
+    return;
+  }
   holdPlaceAnchor(fit);
   const { width, height } = placeDraftSize(fit);
   placeDraft = {
@@ -496,12 +519,16 @@ function adoptPlaceRect(rect, fit) {
   if (!rect) {
     placeCentre = null;
     placeScalePct = 100;
+    placeHeld = null;
     return;
   }
   placeCentre = { cx: rect.x + rect.width / 2, cy: rect.y + rect.height / 2 };
   placeScalePct = (fit && fit.width)
     ? clamp(Math.round((rect.width / fit.width) * 100), PLACE_SCALE_MIN, PLACE_SCALE_MAX)
     : 100;
+  placeHeld = fit
+    ? { rect: { ...rect }, fit: { ...fit }, pct: placeScalePct, cx: placeCentre.cx, cy: placeCentre.cy }
+    : null;
 }
 
 /** The draft's size as a percentage of the fit, which is what 100% means. */
@@ -783,7 +810,14 @@ function drawPlaceBox() {
   //
   // Two calls rather than one with a ternary in it, for the reason spelled out
   // over setProjectError: the checker sees a literal after t( and nothing else.
-  if (sameRect(d, placeFitRect(target))) {
+  // V5.1.5. Three calls now: an image standing at its own pixels says that.
+  const fit = placeFitRect(target);
+  const own = !!(target && target.ownSize) && !!cropDraft && sameRect(d, fit)
+    && d.width === cropDraft.width && d.height === cropDraft.height;
+  if (own) {
+    placeSize.textContent = t('Centred at actual size, {w} x {h}',
+      { w: d.width, h: d.height });
+  } else if (sameRect(d, fit)) {
     placeSize.textContent = t('Centred and fitted, {w} x {h}',
       { w: d.width, h: d.height });
   } else {

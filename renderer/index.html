@@ -646,6 +646,42 @@
         <button class="crop-cycle__item" data-tab="place">Render Position</button>
         <button id="cropCycleNext" class="crop-cycle__arrow" data-no-translate>&gt;</button>
       </div>
+      <!-- V5.1.5. The user: "the keyframes sit above the settings that can be
+           modified by keyframes. Move Keyframes to the bottom like on every
+           other window and the settings above the preview. For Video Frame it
+           should be Aspect Ratio buttons row, then pixel values, then zoom
+           slider, then preview, then keyframes." So each view's settings are
+           here, over its stage, and the strip is the last thing before the
+           buttons. Layer Mask has had its settings over its stage all along. -->
+      <div class="crop-presets" id="cropPresets"></div>
+      <!-- V3.7.1. The readout, and beside it what a drag is doing while it
+           does something other than the plain move: mirrored, diagonal, or
+           held to a preset's shape. -->
+      <div class="crop-size-row">
+        <div id="cropSize" class="crop-size"></div>
+        <div id="placeSize" class="crop-size" hidden></div>
+        <div id="cropMode" class="crop-mode" hidden></div>
+      </div>
+      <!-- The same row the crop zoom uses, so the two tabs put their one slider
+           in the same place. 100% is centre and fit, which is what the layer
+           gets with no position at all: below it the picture shrinks into the
+           frame, above it it overflows. V5.1.5: for an image added since, no
+           position is its own pixel size where that fits, so 100% is that. -->
+      <div id="placeScaleRow" class="crop-zoom" hidden>
+        <span class="crop-zoom__caption">Scale:</span>
+        <!-- The value is a position on the bend in geometry.scaleFromSlider,
+             not a percentage: 1 to 200 are the percentages themselves and 200
+             to 400 carry 200% to 1000% in steps that grow. -->
+        <input id="placeScaleSlider" class="crop-zoom__slider crop-zoom__slider--long"
+               type="range" min="1" max="400" step="1" value="100" />
+        <span id="placeScaleValue" class="crop-zoom__value">100%</span>
+      </div>
+      <div id="cropZoomRow" class="crop-zoom">
+        <span class="crop-zoom__caption">Zoom:</span>
+        <input id="cropZoomSlider" class="crop-zoom__slider" type="range"
+               min="100" max="400" step="1" value="100" />
+        <span id="cropZoomValue" class="crop-zoom__value">100%</span>
+      </div>
       <!-- The frame is a snapshot of whatever the preview is showing, painted
            into a canvas rather than a second <video>: it holds no file open and
            cannot drift off the position the preview is parked at. -->
@@ -809,37 +845,9 @@
         <div id="cropKeysReadout" class="crop-keys__readout"></div>
         <canvas id="cropKeysCanvas" class="crop-keys__canvas"></canvas>
       </div>
-      <!-- V3.7.1. The readout, and beside it what a drag is doing while it
-           does something other than the plain move: mirrored, diagonal, or
-           held to a preset's shape. -->
-      <div class="crop-size-row">
-        <div id="cropSize" class="crop-size"></div>
-        <div id="placeSize" class="crop-size" hidden></div>
-        <div id="cropMode" class="crop-mode" hidden></div>
-      </div>
-      <!-- The same row the crop zoom uses, so the two tabs put their one slider
-           in the same place. 100% is centre and fit, which is what the layer
-           gets with no position at all: below it the picture shrinks into the
-           frame, above it it overflows. -->
-      <div id="placeScaleRow" class="crop-zoom" hidden>
-        <span class="crop-zoom__caption">Scale:</span>
-        <!-- The value is a position on the bend in geometry.scaleFromSlider,
-             not a percentage: 1 to 200 are the percentages themselves and 200
-             to 400 carry 200% to 1000% in steps that grow. -->
-        <input id="placeScaleSlider" class="crop-zoom__slider crop-zoom__slider--long"
-               type="range" min="1" max="400" step="1" value="100" />
-        <span id="placeScaleValue" class="crop-zoom__value">100%</span>
-      </div>
-      <div id="cropZoomRow" class="crop-zoom">
-        <span class="crop-zoom__caption">Zoom:</span>
-        <input id="cropZoomSlider" class="crop-zoom__slider" type="range"
-               min="100" max="400" step="1" value="100" />
-        <span id="cropZoomValue" class="crop-zoom__value">100%</span>
-      </div>
       <div id="cropEncodeNote" class="crop-note" hidden>
         Frame-accurate cut is off, but a crop cannot ride a stream copy, so saving re-encodes anyway.
       </div>
-      <div class="crop-presets" id="cropPresets"></div>
       <div class="crop-actions">
         <!-- V3.6.2. Reset Crop, Reset Position or Remove Mask, by the view. -->
         <button id="cropRemoveBtn" class="crop-remove-btn">Reset Crop</button>

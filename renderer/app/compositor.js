@@ -522,6 +522,7 @@ function drawLayerInto(ctx, canvas, layer, crop = layer.crop, render = layer.ren
       // disagree, which is the rule the whole of Step 4 existed to establish.
       render,
       project: frame,
+      ownSize: !!layer.ownSize,
     });
   const d = layerGeometry.drawImageArgs(placement, frame, canvas);
   if (!d) return;

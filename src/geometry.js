@@ -98,6 +98,28 @@ const layerGeometry = (() => {
   }
 
   /**
+   * V5.1.5. Centred at its own size: a picture that is no bigger than the
+   * project frame either way sits in the middle of it pixel for pixel, and one
+   * that is bigger is fitted down as fitRect would. The user, 2026-11-17: "A
+   * smaller picture should be displayed center at its actual size when added /
+   * not modified yet." What a layer marked `ownSize` gets with no position.
+   */
+  function ownSizeRect(width, height, project) {
+    const projW = evenDown(Math.max(0, finite(project && project.width, 0)));
+    const projH = evenDown(Math.max(0, finite(project && project.height, 0)));
+    const w = evenDown(Math.max(0, finite(width, 0)));
+    const h = evenDown(Math.max(0, finite(height, 0)));
+    if (projW < 2 || projH < 2 || w < 2 || h < 2) return fitRect(width, height, project);
+    if (w > projW || h > projH) return fitRect(width, height, project);
+    return {
+      x: evenDown(Math.round((projW - w) / 2)),
+      y: evenDown(Math.round((projH - h) / 2)),
+      width: w,
+      height: h,
+    };
+  }
+
+  /**
    * A typed resolution turned into one an encoder will take, or null.
    *
    * Even, because H.264 refuses odd dimensions, and evenDown rather than
@@ -500,7 +522,7 @@ const layerGeometry = (() => {
    * and the canvas clips it, both without complaint, and refusing it here would
    * make "slide a layer out of shot" impossible later.
    */
-  function placeLayer({ source, crop = null, render = null, project }) {
+  function placeLayer({ source, crop = null, render = null, project, ownSize = false }) {
     const src = sourceRect(source, crop);
     if (!src) return null;
 
@@ -515,7 +537,7 @@ const layerGeometry = (() => {
         height: h,
       };
     } else {
-      dest = cropInPlace(source, src, project);
+      dest = cropInPlace(source, src, project, ownSize);
     }
     if (!dest) return null;
     return { src, dest };
@@ -534,10 +556,11 @@ const layerGeometry = (() => {
    * filled stays black." Until then a crop was refitted to the frame on its
    * own, so cropping a strip off the side zoomed the rest up to fill it.
    */
-  function cropInPlace(source, src, project) {
+  function cropInPlace(source, src, project, ownSize = false) {
     const srcW = evenDown(Math.max(0, finite(source && source.width, 0)));
     const srcH = evenDown(Math.max(0, finite(source && source.height, 0)));
-    const full = fitRect(srcW, srcH, project);
+    // V5.1.5. A layer marked `ownSize` stands at its own pixels where it fits.
+    const full = ownSize ? ownSizeRect(srcW, srcH, project) : fitRect(srcW, srcH, project);
     if (!full || srcW < 2 || srcH < 2) return null;
     if (src.x === 0 && src.y === 0 && src.width >= srcW && src.height >= srcH) return full;
     const sx = full.width / srcW;
@@ -606,7 +629,7 @@ const layerGeometry = (() => {
     const list = layer && Array.isArray(layer.keyframes) ? layer.keyframes : [];
     const out = [];
     for (const k of list) {
-      const p = placeLayer({ source, crop: k.crop, render: k.render, project });
+      const p = placeLayer({ source, crop: k.crop, render: k.render, project, ownSize: !!layer.ownSize });
       if (p) out.push({ t: k.t, src: p.src, dest: p.dest, rotation: turnOf(k.rotation) });
     }
     return out;
@@ -621,7 +644,9 @@ const layerGeometry = (() => {
   function placementAt(layer, t, source, project) {
     const keyed = keyedPlacements(layer, source, project);
     if (!keyed.length) {
-      const p = placeLayer({ source, crop: layer && layer.crop, render: layer && layer.render, project });
+      const p = placeLayer({
+        source, crop: layer && layer.crop, render: layer && layer.render, project, ownSize: !!(layer && layer.ownSize),
+      });
       return p ? { ...p, rotation: turnOf(layer && layer.rotation) } : null;
     }
     const at = finite(t, 0);
@@ -1269,6 +1294,7 @@ const layerGeometry = (() => {
     FRAME_MIN,
     FRAME_MAX,
     fitRect,
+    ownSizeRect,
     frameSize,
     rescaleRender,
     ratioResize,

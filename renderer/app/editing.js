@@ -1084,7 +1084,7 @@ function fitMergedLayer(layer, from, to) {
   const carry = (crop, render) => {
     if (!render && (sameShape || !source)) return render;
     const p = source
-      ? layerGeometry.placeLayer({ source, crop, render, project: from })
+      ? layerGeometry.placeLayer({ source, crop, render, project: from, ownSize: !!layer.ownSize })
       : { dest: render };
     if (!p || !p.dest) return render;
     return {

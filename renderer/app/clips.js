@@ -239,6 +239,10 @@ function addLayerFromMedia(type, data, lane, start = 0) {
     // Step 15. The project's rate is seeded from its first source, and the
     // export is written at the project's rate.
     sourceFps: data.fps,
+    // V5.1.5. The user: "A smaller picture should be displayed center at its
+    // actual size when added / not modified yet." An image with no position
+    // stands at its own pixels; a video goes on filling the frame.
+    ownSize: image,
     groupId,
     // V2.9.1. The row it was dropped or opened into, when there was one. None
     // is a new row below the others, which is also where its sound goes.

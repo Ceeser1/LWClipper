@@ -105,6 +105,7 @@ function renderPinOf(layer) {
     crop: layer.crop,
     render: layer.render,
     project: renderFromFrame,
+    ownSize: !!layer.ownSize,
   });
   return placement ? { ...placement.dest } : null;
 }
