@@ -1341,7 +1341,7 @@
           <div class="hint-label">Scroll to zoom, drag empty space or with the middle button to pan, double-click empty space to fit the frame</div>
           <div class="hint-label">Keyframes: click one to edit it, drag one to move it, press or drag the bar to move the playhead, double-click the bar to add one, right-click one to delete it</div>
           <div class="hint-label">Each VFX has its own keyframes. Once it has one, a change to its area or to a white setting sets the keyframe at the playhead or adds one there. The green settings are the same the whole clip long. A Strength of 0 switches the VFX off</div>
-          <div class="hint-label">Mix is how much of a VFX shows over the picture as it was, and a Mix of 0 switches it off. A VFX for the whole picture can be held to a part of it: size its area, pick a shape, soften its edge or invert it</div>
+          <div class="hint-label">Mix is how much of a VFX shows over the picture as it was, and a Mix of 0 switches it off. A VFX with a box on the picture can be held to a part of it: size the box, soften its edge or invert it, and for some pick a rectangle or a circle. Some VFX have a crosshair to drag instead, and some act on the whole picture only</div>
         </div>
       </div>
       <div class="vfx-body">
@@ -1384,6 +1384,8 @@
                 <div class="shape-rotor-line"></div>
                 <div id="vfxRotor" class="shape-rotor text-rotor"></div>
               </div>
+              <!-- V5.1.4. The point of a VFX that bends the picture about one: a crosshair to drag. -->
+              <div id="vfxPointEl" class="vfx-point" hidden></div>
               <div id="vfxAngle" class="text-angle" data-no-translate hidden></div>
             </div>
           </div>

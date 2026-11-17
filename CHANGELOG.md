@@ -6,7 +6,16 @@ The most important changes since 1.5.5, newest first.
 
 ## 5.x: VFX (2026-11-17)
 
-Current version: 5.1.2.
+Current version: 5.1.4.
+
+- **A crosshair for Bulge, Swirl and Kaleidoscope (5.1.4).** These three bend the picture about a point, and a Bulge and a Swirl already say how far they reach with their Radius, so a box on top of that was a second way to say the same. They now show a crosshair on the picture: drag it to where the effect should sit. It lands on the picture's middle and edges, stays on the picture, and is also there as two figures, **Center X** and **Center Y**. With keyframes the point travels like any other setting. One that was saved with an area stays about that area's middle.
+- **Each VFX only has the area settings that make sense for it (5.1.3).** Until now every VFX had an area of any of the eight shapes with a soft edge, also where a part of the effect means nothing. Now:
+  - **The whole picture, nothing to place:** Cinema Bars, Border, Old TV, Lens Distortion, Flip and Mirror, Rotate, Offset, Perspective, Shake, Tile. What they do is told by the picture's own frame.
+  - **A box** to move, size and turn, with Invert Area and Soft Edge, and no choice of shape: the looks and tints (Black and White, Sepia, Colorize, Duotone, Split Toning, Color Pass, Film Look, Apply LUT, Channel Swap, Invert Colors, Glow, Dream, Film Grain, Old Film, VHS, Comic, Scanlines, RGB Split, Posterize, Threshold, Solarize, Edge Detect, Emboss, Night Vision, Thermal Camera) and Wave and Glitch.
+  - **A rectangle or a circle:** the VFX one aims at a thing in the picture, a face, a sign, a fire: Brightness and Contrast, Exposure and Gamma, Levels, Shadows and Highlights, Hue and Saturation, Temperature and Tint, RGB Balance, Sharpen, Clarity, Vignette, Directional Blur, Tilt-Shift, Zoom, Ripple, Heat Haze.
+  - **Every shape:** only Obscure and Pixelate, which cover a thing up.
+  - **Soft Edge** is gone from Zoom and Glitch: both move the picture far, and a fade between moved and unmoved showed the thing twice.
+  - A project saved before keeps its VFX: a shape a VFX no longer offers becomes the one it starts with, and an area a VFX no longer has is dropped, so it acts on the whole picture.
 
 - **Switch a VFX off and on (5.1.2).** Each VFX a track has shows a checkbox in front of its name. Untick it and the VFX is off, in the preview and in the export, without removing it or changing its place, so the picture can be compared with and without it; its name is struck through meanwhile. Ticking it again brings it back as it was. Like every change in the window it reaches the track with Apply, is kept with the project and goes along with Copy VFX.
 - **The VFX window, rearranged (5.1.1).**

@@ -35,6 +35,12 @@
 // picture, dragged, sized and turned like a shape in Shape Settings. The
 // chosen VFX's has the grips, the others' are outlines to click.
 //
+// V5.1.3. Not every kind has one (timeline.js `where`): a kind for the whole
+// picture has nothing on the picture to place, a kind with a box and no
+// choice of shape has no Shape row, and a kind's Shape row has only the
+// shapes the kind offers. V5.1.4: a kind about a point has a crosshair on
+// the picture to drag instead of a box, and the point as two figures.
+//
 // The draft is the whole list, in the picture's own whole pixels, and what
 // the layer keeps is in fractions of it (timeline.js vfxOf). Nothing reaches
 // the track before Apply ("VFX only get finalized applied to the track on
@@ -56,6 +62,7 @@ const vfxCanvas = el('vfxCanvas');
 const vfxOthers = el('vfxOthers');
 const vfxBoxEl = el('vfxBoxEl');
 const vfxRotor = el('vfxRotor');
+const vfxPointEl = el('vfxPointEl');
 const vfxAngle = el('vfxAngle');
 const vfxGuideX = el('vfxGuideX');
 const vfxGuideY = el('vfxGuideY');
@@ -125,14 +132,14 @@ const VFX_UI = {
   zoom: { name: () => t('Zoom'), about: () => t('Enlarges a part of the picture, with a round area a magnifying glass') },
   wave: { name: () => t('Wave'), about: () => t('Waves that run through the picture') },
   ripple: { name: () => t('Ripple'), about: () => t('Rings that spread from the middle, as on water') },
-  swirl: { name: () => t('Swirl'), about: () => t('Twists the picture about its middle') },
+  swirl: { name: () => t('Swirl'), about: () => t('Twists the picture about a point') },
   shake: { name: () => t('Shake'), about: () => t('Shakes the picture like a hand-held camera') },
   glitch: { name: () => t('Glitch'), about: () => t('Pushes slices of the picture aside, again and again') },
   haze: { name: () => t('Heat Haze'), about: () => t('A restless shimmer, like hot air') },
   tile: { name: () => t('Tile'), about: () => t('The picture several times side by side and one above the other') },
   kaleido: { name: () => t('Kaleidoscope'), about: () => t('Mirrors a wedge of the picture all the way round') },
   perspective: { name: () => t('Perspective'), about: () => t('Tilts the picture away from the viewer') },
-  bulge: { name: () => t('Bulge'), about: () => t('Blows up what is under its area like a bump, or pinches it together') },
+  bulge: { name: () => t('Bulge'), about: () => t('Blows up the picture round a point like a bump, or pinches it together') },
   lut: { name: () => t('Apply LUT'), about: () => t('Colours from a LUT file (.cube), as colour grading tools write them') },
 };
 
@@ -201,6 +208,9 @@ const VFX_SETTING_LABELS = {
   size: () => t('Size:'),
   x: () => t('Horizontal:'),
   y: () => t('Vertical:'),
+  // V5.1.4. The point a kind bends the picture about.
+  cx: () => t('Center X:'),
+  cy: () => t('Center Y:'),
 };
 
 // V5.1. What a figure is counted in, where that says something: shown after
@@ -311,7 +321,7 @@ function vfxValuesIn(def, o) {
     out.box = { x: Math.round(b.x * W), y: Math.round(b.y * H), w: Math.max(1, Math.round(b.w * W)), h: Math.max(1, Math.round(b.h * H)) };
     out.rotation = Math.round(o.rotation) || 0;
   }
-  for (const s of def.keyed) out[s.id] = s.of === 'height' ? Math.round(o[s.id] * H) : o[s.id];
+  for (const s of def.keyed) out[s.id] = s.of ? Math.round(o[s.id] * (s.of === 'width' ? W : H)) : o[s.id];
   return out;
 }
 
@@ -325,7 +335,7 @@ function vfxValuesOut(def, o) {
     out.box = { x: b.x / W, y: b.y / H, w: b.w / W, h: b.h / H };
     out.rotation = o.rotation;
   }
-  for (const s of def.keyed) out[s.id] = s.of === 'height' ? o[s.id] / H : o[s.id];
+  for (const s of def.keyed) out[s.id] = s.of ? o[s.id] / (s.of === 'width' ? W : H) : o[s.id];
   return out;
 }
 
@@ -358,7 +368,8 @@ function vfxListOfDraft(draft) {
 
 /** A setting's range in the window's units: [lowest, highest]. */
 function vfxSettingRange(s) {
-  const k = s.of === 'height' ? (vfxPic ? vfxPic.height : 720) : 1;
+  // A fraction of the picture's height, or of its width, is in its pixels here.
+  const k = !s.of ? 1 : (s.of === 'width' ? (vfxPic ? vfxPic.width : 1280) : (vfxPic ? vfxPic.height : 720));
   return [Math.round(s.min * k), Math.max(1, Math.round(s.max * k))];
 }
 
@@ -437,7 +448,7 @@ function vfxNew(kind) {
   const def = timelineModel.vfxKind(kind);
   const v = { id: timelineModel.newVfxId(), kind };
   for (const s of def.statics) v[s.id] = s.def;
-  for (const s of def.keyed) v[s.id] = s.of === 'height' ? Math.round(s.def * vfxPic.height) : s.def;
+  for (const s of def.keyed) v[s.id] = s.of ? Math.round(s.def * (s.of === 'width' ? vfxPic.width : vfxPic.height)) : s.def;
   if (!def.area) return v;
   v.rotation = 0;
   // V5.1. A kind for the whole picture starts on all of it, and Tilt-Shift
@@ -546,6 +557,7 @@ function closeVfx() {
   vfxGuideX.hidden = true;
   vfxGuideY.hidden = true;
   vfxAngle.hidden = true;
+  vfxPointEl.hidden = true;
   vfxOthers.replaceChildren();
   vfxChain.replaceChildren();
   vfxStatics.replaceChildren();
@@ -1069,7 +1081,8 @@ function vfxField(doc, make, s, text, keyed) {
   if (s.type === 'shape') {
     row.appendChild(make('div', 'vfx-field__caption', text));
     const kinds = make('div', 'gen-choice shape-kinds vfx-shapes');
-    for (const kind of timelineModel.SHAPE_KINDS) {
+    // V5.1.3. The shapes the kind offers: all of them, or a rectangle and a circle.
+    for (const kind of s.options || timelineModel.SHAPE_KINDS) {
       const b = make('button', '', shapeName(kind));
       b.type = 'button';
       b.dataset.kind = kind;
@@ -1163,7 +1176,7 @@ function vfxField(doc, make, s, text, keyed) {
   box.maxLength = 5;
   line.append(slider, box);
   // A unit's room after every figure, named or not, so the sliders line up.
-  line.appendChild(make('span', 'gen-field__unit', s.of === 'height' ? 'px' : (VFX_SETTING_UNITS[s.id] || '')));
+  line.appendChild(make('span', 'gen-field__unit', s.of ? 'px' : (VFX_SETTING_UNITS[s.id] || '')));
   row.appendChild(line);
   const field = {
     s,
@@ -1321,22 +1334,41 @@ function placeVfxNode(node, area, r) {
   node.style.transform = area.rotation ? 'rotate(' + area.rotation + 'deg)' : '';
 }
 
-/** The chosen VFX's area with its grips, and the others' as outlines. */
+/** A crosshair on the stage: on a point of the picture, in its pixels. */
+function placeVfxPoint(node, now, r) {
+  node.style.left = (r.left + now.cx * r.s) + 'px';
+  node.style.top = (r.top + now.cy * r.s) + 'px';
+}
+
+/**
+ * The chosen VFX's area with its grips, and the others' as outlines. V5.1.4:
+ * a kind about a point has a crosshair on its point instead, the chosen
+ * one's to drag and the others' fainter, to click. A kind for the whole
+ * picture has nothing here.
+ */
 function placeVfxBoxes() {
   if (!vfxDraft) return;
   const r = stageFrameRect(vfxStage);
   const chosen = vfxCurrent();
   const hasArea = (v) => !!v && timelineModel.vfxKind(v.kind).area;
+  const hasPoint = (v) => !!v && timelineModel.vfxKind(v.kind).where === 'point';
   vfxBoxEl.hidden = !hasArea(chosen);
+  vfxPointEl.hidden = !hasPoint(chosen);
   // Each where it is at the playhead.
   if (hasArea(chosen)) placeVfxNode(vfxBoxEl, vfxShown(chosen, false), r);
+  if (hasPoint(chosen)) placeVfxPoint(vfxPointEl, vfxShown(chosen, false), r);
   const doc = vfxOthers.ownerDocument;
   vfxOthers.replaceChildren(...vfxDraft.map((v, i) => {
-    if (i === vfxSel || !hasArea(v)) return null;
+    if (i === vfxSel || !(hasArea(v) || hasPoint(v))) return null;
     const node = doc.createElement('div');
-    node.className = 'vfx-area';
     node.dataset.index = String(i);
     node.title = vfxLabel(i);
+    if (hasPoint(v)) {
+      node.className = 'vfx-point vfx-point--other';
+      placeVfxPoint(node, vfxShown(v, false), r);
+      return node;
+    }
+    node.className = 'vfx-area';
     placeVfxNode(node, vfxShown(v, false), r);
     return node;
   }).filter(Boolean));
@@ -1573,12 +1605,55 @@ vfxBoxEl.addEventListener('pointerdown', (evt) => {
 });
 
 // Another VFX's area pressed: it is the chosen one from then on, and the
-// same press goes on to move it.
+// same press goes on to move it. Its crosshair the same.
 vfxOthers.addEventListener('pointerdown', (evt) => {
-  const node = evt.target.closest && evt.target.closest('.vfx-area');
+  const node = evt.target.closest && evt.target.closest('.vfx-area, .vfx-point');
   if (evt.button !== 0 || !node || !vfxDraft) return;
   selectVfx(Number(node.dataset.index));
-  dragVfxArea(evt);
+  if (node.classList.contains('vfx-point')) dragVfxPoint(evt);
+  else dragVfxArea(evt);
+});
+
+// ---- V5.1.4. the chosen VFX's point: a crosshair, in the picture's pixels ----
+
+/** The chosen VFX's point as it is at the playhead, { cx, cy } in whole pixels, or null. */
+function vfxPointNow() {
+  const v = vfxCurrent();
+  if (!v || timelineModel.vfxKind(v.kind).where !== 'point') return null;
+  const now = vfxShown(v);
+  return { cx: now.cx, cy: now.cy };
+}
+
+/**
+ * The chosen VFX's point moved by a drag that began at `evt`. It stays on
+ * the picture and lands on its middle and its edges, as a box does. With
+ * keyframes it is changed at the playhead, like every setting a keyframe
+ * holds.
+ */
+function dragVfxPoint(evt) {
+  const start = vfxPointNow();
+  if (!start) return;
+  const s = stageFrameRect(vfxStage).s;
+  const x0 = evt.clientX;
+  const y0 = evt.clientY;
+  const reach = TEXT_BOX_SNAP / s;
+  const land = (at, size) => {
+    const held = Math.min(size, Math.max(0, at));
+    const line = [0, size / 2, size].find((to) => Math.abs(held - to) <= reach);
+    return line === undefined ? { at: Math.round(held), snap: null } : { at: Math.round(line), snap: line };
+  };
+  beginDrag(vfxPointEl, evt, (ev) => {
+    const x = land(start.cx + (ev.clientX - x0) / s, vfxPic.width);
+    const y = land(start.cy + (ev.clientY - y0) / s, vfxPic.height);
+    showVfxGuides(x.snap, y.snap);
+    const now = vfxPointNow();
+    if (now && (now.cx !== x.at || now.cy !== y.at)) changeVfxKeyed({ cx: x.at, cy: y.at });
+  }, () => showVfxGuides(null, null));
+}
+
+vfxPointEl.addEventListener('pointerdown', (evt) => {
+  if (evt.button !== 0) return;
+  dragVfxPoint(evt);
 });
 
 // The dot turns the area about its box's centre, by as far as the pointer

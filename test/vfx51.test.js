@@ -57,17 +57,22 @@ test('every kind drawn from ops has its row of ops, and no row is left over', ()
   assert.deepEqual(O.opsOf('nothing', {}, 10, 10), []);
 });
 
-test('every later kind has an area, its own settings first and numbers a keyframe holds', () => {
+test('every later kind has its own settings first and numbers a keyframe holds', () => {
   for (const kind of LATER) {
     const def = T.vfxKind(kind);
-    assert.equal(def.area, true, kind);
-    // Its own first, the area's shape and Invert after them.
-    assert.deepEqual(def.statics.slice(-2).map((s) => s.id), ['shape', 'invert'], kind);
+    // V5.1.3. Its own first, then what its area has: the shape for a kind
+    // with two, Invert for every kind with an area, nothing for one without.
+    const tail = def.where === 'two' ? ['shape', 'invert'] : (def.area ? ['invert'] : []);
+    assert.deepEqual(def.statics.slice(def.statics.length - tail.length).map((s) => s.id), tail, kind);
+    const own = def.statics.slice(0, def.statics.length - tail.length);
+    assert.equal(own.some((s) => s.id === 'shape' || s.id === 'invert'), false, kind);
     // A number among its own is a speed: it cannot blend, so no keyframe holds it.
     assert.ok(def.statics.every((s) => ['shape', 'check', 'choice', 'color', 'number', 'file'].includes(s.type)), kind);
     assert.ok(def.statics.every((s) => s.type !== 'number' || ['speed', 'count', 'segments'].includes(s.id)), kind);
     assert.ok(def.keyed.every((s) => s.type === 'number' && (s.in === 'mask' || s.in === 'filter')), kind);
-    assert.equal(def.keyed[def.keyed.length - 1].id, 'soft', kind);
+    // The soft edge last where the kind has one, and only with an area.
+    const soft = def.keyed.findIndex((s) => s.id === 'soft');
+    assert.ok(soft < 0 || (def.area && soft === def.keyed.length - 1), kind);
     const ids = [...def.statics, ...def.keyed].map((s) => s.id);
     assert.equal(new Set(ids).size, ids.length, kind + ': no setting twice');
     // A new one does something as it is added, or nobody would see it was.
@@ -75,10 +80,10 @@ test('every later kind has an area, its own settings first and numbers a keyfram
   }
 });
 
-test('every kind for the whole picture starts on all of it and has Mix; Mix 0 is off', () => {
+test('every kind with an area starts on all of the picture and every one has Mix; Mix 0 is off', () => {
   for (const kind of OPS) {
     const def = T.vfxKind(kind);
-    assert.equal(def.fill, true, kind);
+    assert.equal(def.fill, def.area ? true : undefined, kind);
     const mix = def.keyed.find((s) => s.id === 'mix');
     assert.ok(mix && mix.in === 'mask' && mix.def === 100 && mix.min === 0 && mix.max === 100, kind);
     assert.equal(now(kind, { mix: 0 }).off, true, kind);
@@ -153,12 +158,18 @@ test('a VFX covers all of the picture alike when it is a plain square over every
   assert.equal(T.vfxCoversAll(now('sepia', { mix: 40 })), true, 'Mix takes all of it down alike');
   assert.equal(T.vfxCoversAll(now('sepia', { box: { x: -0.1, y: -0.1, w: 1.5, h: 1.5 } })), true);
   assert.equal(T.vfxCoversAll(now('sepia', { box: { x: 0.1, y: 0, w: 0.9, h: 1 } })), false);
-  assert.equal(T.vfxCoversAll(now('sepia', { shape: 'circle' })), false);
+  assert.equal(T.vfxCoversAll(now('brightness')), true);
+  assert.equal(T.vfxCoversAll(now('brightness', { shape: 'circle' })), false);
+  // V5.1.3. A kind with a box and no choice of shape is a square whatever it is handed.
+  assert.equal(T.vfxCoversAll(now('sepia', { shape: 'circle' })), true);
   assert.equal(T.vfxCoversAll(now('sepia', { invert: true })), false);
   assert.equal(T.vfxCoversAll(now('sepia', { soft: 0.1 })), false);
   assert.equal(T.vfxCoversAll(now('sepia', { rotation: 30 })), false);
   assert.equal(T.vfxCoversAll(now('sepia', { rotation: 180 })), true);
   assert.equal(T.vfxCoversAll(now('vignette')), false, 'a vignette starts as a soft circle turned round');
+  // V5.1.3. A kind with no area is all of the picture wherever a box is handed to it.
+  assert.equal(T.vfxCoversAll(now('bars', { box: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 }, rotation: 30 })), true);
+  assert.equal(T.vfxCoversAll(now('swirl', { box: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 } })), true);
 });
 
 // ---- the expressions ----
@@ -549,22 +560,32 @@ test('a VFX that moves by itself keeps a still picture being drawn', () => {
   assert.ok(comp.includes('vfxDrawnAt = at - layer.start;'), 'the clip\'s own time, as the encoder counts it');
 });
 
-test('a kind that bends the picture about a point bends it about the middle of its own area', () => {
+test('a kind that bends the picture about a point bends it about the middle of its own area, or about its own point', () => {
   const spot = { x: 0.5, y: 0, w: 0.5, h: 0.5 };
   // All of the picture: its middle, which is what a new one starts with.
   assert.deepEqual(O.midOf(now('zoom'), 1920, 1080), { cx: 959.5, cy: 539.5 });
   assert.deepEqual(O.midOf(now('zoom', { box: spot }), 1920, 1080), { cx: 1439.5, cy: 269.5 });
   assert.deepEqual(O.midOf(null, 1920, 1080), { cx: 959.5, cy: 539.5 });
-  for (const kind of ['zoom', 'swirl', 'ripple', 'kaleido', 'bulge']) {
+  for (const kind of ['zoom', 'ripple']) {
     const o = opsOf(kind, { box: spot })[0];
     assert.equal(o.cx, 1439.5, kind);
     assert.equal(o.cy, 269.5, kind);
     assert.equal(T.vfxKind(kind).centred, true, kind);
   }
-  // The lens filter takes its middle as a share of the picture.
-  assert.deepEqual(opsOf('lens', { box: spot, amount: 40 }), [{ op: 'lens', k1: -0.2, cx: 0.75, cy: 0.25 }]);
-  assert.ok(O.filtersOfOp(opsOf('lens', { box: spot })[0])[0].startsWith('lenscorrection=cx=0.75:cy=0.25:k1='));
-  assert.equal(T.vfxKind('lens').centred, true);
+  // V5.1.4. A kind with a point of its own says it, and has no area to say it by.
+  for (const kind of ['swirl', 'kaleido', 'bulge']) {
+    assert.equal(T.vfxKind(kind).where, 'point', kind);
+    assert.equal(T.vfxKind(kind).centred, undefined, kind);
+    const mid = opsOf(kind)[0];
+    assert.deepEqual([mid.cx, mid.cy], [959.5, 539.5], kind + ' starts on the picture\'s middle');
+    const o = opsOf(kind, { cx: 0.75, cy: 0.25 })[0];
+    assert.deepEqual([o.cx, o.cy], [1439.5, 269.5], kind);
+  }
+  // The lens filter takes its middle as a share of the picture. V5.1.3: a
+  // lens bends the frame it took, so that is the picture's middle, always.
+  assert.deepEqual(opsOf('lens', { box: spot, amount: 40 }), [{ op: 'lens', k1: -0.2, cx: 0.5, cy: 0.5 }]);
+  assert.ok(O.filtersOfOp(opsOf('lens', { box: spot })[0])[0].startsWith('lenscorrection=cx=0.5:cy=0.5:k1='));
+  assert.equal(T.vfxKind('lens').centred, undefined);
   assert.equal(T.vfxKind('wave').centred, undefined, 'a wave runs through the whole picture');
   // So where its area is is one of the figures its filter takes: an area
   // that moves makes a figure for every place, where another kind has one.

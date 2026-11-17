@@ -319,13 +319,19 @@ const vfxOps = (() => {
    * area that is all of it, which is what a new one starts as. So a Zoom in
    * a small circle is a magnifying glass over what the circle is on, and a
    * Swirl on a face turns about the face.
+   *
+   * V5.1.4. A kind about a point of its own (timeline.js `where: 'point'`)
+   * says the point itself, `cx` and `cy` as fractions of the picture.
    */
   function midOf(v, W, H) {
     const a = v && Array.isArray(v.areas) ? v.areas[0] : null;
     const b = a && a.box ? a.box : { x: 0, y: 0, w: 1, h: 1 };
+    const own = !!v && Number.isFinite(v.cx) && Number.isFinite(v.cy);
+    const x = own ? v.cx : b.x + b.w / 2;
+    const y = own ? v.cy : b.y + b.h / 2;
     return {
-      cx: Math.round(((b.x + b.w / 2) * W - 0.5) * 2) / 2,
-      cy: Math.round(((b.y + b.h / 2) * H - 0.5) * 2) / 2,
+      cx: Math.round((x * W - 0.5) * 2) / 2,
+      cy: Math.round((y * H - 0.5) * 2) / 2,
     };
   }
 

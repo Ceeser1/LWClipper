@@ -4744,6 +4744,56 @@ button.vfx-chip__x:hover:not(:disabled) {
   cursor: pointer;
 }
 
+/* V5.1.4. The point of a VFX that bends the picture about one (Bulge, Swirl,
+   Kaleidoscope): a ring with a cross through it, its middle on the point.
+   Light with a dark rim, so it shows on any picture. */
+.vfx-point {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6), inset 0 0 0 1px rgba(0, 0, 0, 0.6);
+  cursor: move;
+}
+
+.vfx-point::before,
+.vfx-point::after {
+  content: '';
+  position: absolute;
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
+}
+
+.vfx-point::before {
+  left: 50%;
+  top: -9px;
+  bottom: -9px;
+  width: 1px;
+  margin-left: -0.5px;
+}
+
+.vfx-point::after {
+  top: 50%;
+  left: -9px;
+  right: -9px;
+  height: 1px;
+  margin-top: -0.5px;
+}
+
+.vfx-point[hidden] {
+  display: none;
+}
+
+/* Another VFX's point, not the chosen one: fainter, to click. */
+.vfx-point--other {
+  opacity: 0.55;
+  border-style: dashed;
+  cursor: pointer;
+}
+
 /* C: the chosen VFX's settings a keyframe holds, scrollable. V5.1.1: its
    name and the settings for the whole clip moved to the centre. */
 .vfx-side {
