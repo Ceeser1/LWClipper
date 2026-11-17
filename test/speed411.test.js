@@ -291,6 +291,10 @@ test('the speed is written beside the pointer while dragging and stays in the cl
 });
 
 test('the preview plays each clip at its speed, a sound with its pitch kept', () => {
-  assert.match(COMPOSITOR, /const rate = timelineModel\.speedOf\(l\);\s+if \(v\.playbackRate !== rate\) v\.playbackRate = rate;/);
-  assert.match(COMPOSITOR, /a\.preservesPitch = true;\s+a\.playbackRate = rate;/);
+  // V4.13. Through holdToClock, which sets the element's rate to the layer's
+  // speed, bent a little toward the clock while it is off it.
+  assert.match(COMPOSITOR, /holdToClock\(v, timelineModel\.sourceTimeFor\(l, compositeAt\), timelineModel\.speedOf\(l\), COMPOSITE_SLACK, VIDEO_BEND\);/);
+  assert.match(COMPOSITOR, /const next = by \? rate \* \(1 \+ by\) : rate;\s+if \(el\.playbackRate !== next\) el\.playbackRate = next;/);
+  assert.match(COMPOSITOR, /const rate = timelineModel\.speedOf\(l\);\s+if \(!a\.preservesPitch\) a\.preservesPitch = true;/);
+  assert.match(COMPOSITOR, /holdToClock\(a, want, rate, AUDIO_SYNC_SLACK, AUDIO_BEND\);/);
 });

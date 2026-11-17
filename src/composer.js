@@ -29,6 +29,7 @@ const {
 const geometry = require('./geometry');
 const timeline = require('./timeline');
 const toolPaths = require('./toolPaths');
+const exportWindow = require('./exportWindow');
 const progress = require('./progress');
 const { runProcess, ProcessCancelledError } = require('./processRunner');
 
@@ -245,10 +246,14 @@ function oneStill(l) {
  * V4.12. A mask that is one PNG is made grey and sized once and then held;
  * the frames of a mask that changes are converted one by one as before.
  */
-function maskSource(l, input, fps, scale = null) {
-  const shift = 'setpts=PTS-STARTPTS+' + fixed(l.start) + '/TB';
+//
+// V4.13. `k`, when given, is how many frames of the clip are left out at its
+// start (see "A selection without what is before it"): a mask that is one PNG
+// is held from there, as its picture is.
+function maskSource(l, input, fps, scale = null, k = 0) {
+  const shift = 'setpts=PTS-STARTPTS+' + (k ? k + '+' : '') + fixed(l.start) + '/TB';
   if (!l.maskFile.frames) {
-    return '[' + input + ':v]' + chain(['format=gray', scale, holdStill(l.duration), 'fps=' + fps, shift]);
+    return '[' + input + ':v]' + chain(['format=gray', scale, holdStill(l.duration - k / fps), 'fps=' + fps, shift]);
   }
   return '[' + input + ':v]' + chain([
     holdFrames(l.maskFile.frames, fps),
@@ -609,6 +614,52 @@ function movingTurnedLayer(graph, l, n, motion, prev, { input, fps, source, mask
   return next;
 }
 
+// ---- V4.13. A selection without what is before it ----
+//
+// exportWindow.js says how much of the project before the selection can be
+// left out, and why that takes the file's real frame times. Here is what the
+// graph does with it, each piece so that the frames from the selection on
+// carry the timestamps and the pictures they did the long way:
+//
+//   the black frame is made from frame `cut` on and its frames are numbered
+//   from there (setpts=PTS+cut);
+//
+//   a still is held for `k` frames less, and its first frame is stamped `k`
+//   frames into the clip;
+//
+//   a file is read from `ss`, its first frame is put where it stood on the
+//   old count (`raw` seconds after the old start of reading, to the tick),
+//   so the frame rate filter sorts every frame into the slot it had, the
+//   slots before `k` are cut off, and the clip's start is taken off by the
+//   number the old first slot had (`q0`) where STARTPTS used to stand.
+//
+// The sums are written so that ffmpeg adds the same numbers in the same order
+// as it did: `PTS-STARTPTS+k+start/TB` and not a start moved by k frames,
+// which as floating point can fall a frame the other side of a whole number.
+//
+// Proved on real files, old graph against new, frame for frame, see
+// memory.md "V4.13.0".
+
+/**
+ * The skip a layer takes from the window's plan, or null: only a picture that
+ * is placed once and whose every frame is its own, since anything counted
+ * from the clip's first frame (drawn frames, a mask or areas that move, a
+ * transition, keyframes, a curved fade's ramp) would have to be counted from
+ * somewhere else, and that is not done here.
+ */
+function windowSkip(l, win, sources, project) {
+  const skip = win && win.skips && win.skips[l.id];
+  if (!skip || !(skip.k >= 1) || l.type !== 'video' || l.frames) return null;
+  if (Array.isArray(l.coverFiles) && l.coverFiles.length) return null;
+  if (l.maskFile && l.maskFile.frames) return null;
+  if (hasCurvedFade(l)) return null;
+  if (l.kind !== 'gen' && timeline.transitionSteps(l).length) return null;
+  if (geometry.motionOf(l, sources[l.src] || null, project)) return null;
+  if (timeline.isStill(l)) return { k: skip.k, still: true };
+  if (timeline.speedOf(l) !== 1 || !(skip.ss > l.sourceIn) || typeof skip.raw !== 'string') return null;
+  return skip;
+}
+
 /**
  * Works out the span of timeline the output covers. `trim` is the project's in
  * and out markers; without them the output is everything up to the last layer's
@@ -648,12 +699,29 @@ function buildComposeArgs({
   compression = null,
   sources = {},
   encoder = 'cpu',
+  window = null,
 }) {
-  const live = layers.filter((l) => l.enabled && l.src && l.duration > 0);
+  const all = layers.filter((l) => l.enabled && l.src && l.duration > 0);
+  const span = outputSpan(all, trim);
+  const fps = Math.max(1, Number(project && project.fps) || 30);
+  // V4.13. What is left out before a selection, see windowSkip. Without a
+  // plan, and for a selection from the very start, the graph is the one it
+  // always was.
+  const win = window && window.cut >= 1 && span.start > 0 ? window : null;
+  const left = new Set(win && Array.isArray(win.drop) ? win.drop : []);
+  const live = all.filter((l) => !(l.type === 'video' && left.has(l.id)));
   const videoLayers = live.filter((l) => l.type === 'video');
   const audioLayers = live.filter((l) => l.type === 'audio');
-  const span = outputSpan(live, trim);
-  const fps = Math.max(1, Number(project && project.fps) || 30);
+  // Whether the file has a picture, which a layer being left out does not
+  // change: a selection in a gap is still black frames.
+  const hasVideo = all.some((l) => l.type === 'video');
+  const skipOf = new Map();
+  if (win) {
+    for (const l of videoLayers) {
+      const skip = windowSkip(l, win, sources, project);
+      if (skip) skipOf.set(l.id, skip);
+    }
+  }
 
   // The same flags the trim opens with, for the same reasons: errors only, no
   // stdin to block on, and overwrite because the dialog already asked.
@@ -716,7 +784,13 @@ function buildComposeArgs({
     } else {
       // V4.11. As much of the source as the layer shows, which at another
       // speed is not as long as the layer is.
-      args.push('-ss', fixed(l.sourceIn), '-t', fixed(l.duration * timeline.speedOf(l)), '-i', l.src);
+      const skip = skipOf.get(l.id);
+      if (skip) {
+        // V4.13. From just before the selection, to where the clip ends.
+        args.push('-ss', fixed(skip.ss), '-t', fixed(l.sourceIn + l.duration - skip.ss), '-i', l.src);
+      } else {
+        args.push('-ss', fixed(l.sourceIn), '-t', fixed(l.duration * timeline.speedOf(l)), '-i', l.src);
+      }
     }
     addMask(l);
     addCovers(l);
@@ -725,14 +799,17 @@ function buildComposeArgs({
   const graph = [];
   const maps = [];
 
-  if (videoLayers.length) {
+  if (hasVideo) {
     const projW = Number(project.width);
     const projH = Number(project.height);
 
     // A black frame the length of the output, which every layer is composited
     // onto. Without an explicit duration this source never ends.
+    // V4.13. From just before a selection where there is a plan for one, its
+    // frames numbered as they were.
+    const cut = win ? win.cut : 0;
     graph.push('color=c=black:s=' + projW + 'x' + projH + ':r=' + fps
-      + ':d=' + fixed(span.end) + '[base]');
+      + ':d=' + fixed(span.end - cut / fps) + (cut ? ',setpts=PTS+' + cut : '') + '[base]');
 
     // Back to front. The layer array is top first, so Video 1 is composited
     // last and lands on top.
@@ -820,14 +897,28 @@ function buildComposeArgs({
       // instead of on every frame.
       const bare = '[' + indexOf.get(l.id) + ':v]';
       const once = oneStill(l) && from === bare + holdStill(l.duration) + ',';
+      // V4.13. Read or held from just before the selection, see windowSkip.
+      const skip = skipOf.get(l.id) || null;
       const picture = once
         ? bare + chain([
           parts && parts.crop,
           parts && parts.scale,
           'format=yuva420p',
-          holdStill(l.duration),
+          holdStill(l.duration - (skip ? skip.k / fps : 0)),
           'fps=' + fps,
-          'setpts=PTS-STARTPTS+' + fixed(l.start) + '/TB',
+          'setpts=PTS-STARTPTS+' + (skip ? skip.k + '+' : '') + fixed(l.start) + '/TB',
+        ])
+        : skip && !skip.still
+        ? bare + chain([
+          // Where this frame stood on the count from the old start of reading.
+          "setpts='PTS-STARTPTS+round(" + skip.raw + "/TB)'",
+          'fps=' + fps,
+          // The slots before the first one kept, half a slot of room.
+          'trim=start=' + fixed((skip.k + skip.q0 - 0.5) / fps),
+          parts && parts.crop,
+          parts && parts.scale,
+          'setpts=PTS-' + skip.q0 + '+' + fixed(l.start) + '/TB',
+          needsAlpha ? 'format=yuva420p' : null,
         ])
         : from + chain([
           l.frames ? holdFrames(l.frames, fps) : null,
@@ -847,7 +938,7 @@ function buildComposeArgs({
       if (maskInput !== undefined) {
         const d = placement.dest;
         graph.push(picture + '[mp' + n + ']');
-        graph.push(maskSource(l, maskInput, fps, 'scale=' + d.width + ':' + d.height) + '[mk' + n + ']');
+        graph.push(maskSource(l, maskInput, fps, 'scale=' + d.width + ':' + d.height, skip ? skip.k : 0) + '[mk' + n + ']');
         if (ownAlpha(l)) {
           graph.push('[mp' + n + ']split[mq' + n + '][mr' + n + ']');
           graph.push('[mr' + n + ']alphaextract[ma' + n + ']');
@@ -960,7 +1051,7 @@ function buildComposeArgs({
   args.push('-filter_complex', graph.join(';'));
   args.push(...maps);
 
-  if (videoLayers.length) {
+  if (hasVideo) {
     args.push(...videoTrackArgs(format, compression, encoder));
     args.push('-r', String(fps));
   } else {
@@ -969,7 +1060,7 @@ function buildComposeArgs({
   if (audioLayers.length) {
     // With no picture the output is an audio file, and an audio file wants the
     // codec for its own container. videoAudioTrackArgs would put aac in an mp3.
-    args.push(...(videoLayers.length
+    args.push(...(hasVideo
       ? videoAudioTrackArgs(format)
       : audioFileArgs(format, compression)));
   } else {
@@ -1069,8 +1160,18 @@ async function render({
   if (span.duration < MIN_SPAN) throw new Error('The selected range is empty.');
 
   fs.mkdirSync(path.dirname(out), { recursive: true });
+  // V4.13. What can be left out before the selection. Anything going wrong
+  // in working that out means the long way, which is always right.
+  let window = null;
+  try {
+    window = exportWindow.plan({
+      layers: live, span, fps: Math.max(1, Number(project && project.fps) || 30), probe: exportWindow.probeFrames,
+    });
+  } catch {
+    window = null;
+  }
   const built = buildComposeArgs({
-    layers, project, trim, output: out, format, compression, sources, encoder,
+    layers, project, trim, output: out, format, compression, sources, encoder, window,
   });
   // V4.10. A graph too long for a command line is read from a file.
   const graphFile = path.join(os.tmpdir(), 'lwclipper-graph-' + process.pid + '-' + Date.now() + '.txt');
@@ -1111,5 +1212,5 @@ async function render({
 }
 
 module.exports = {
-  buildComposeArgs, outputSpan, enableExpr, sourceSizes, render, spillGraph, GRAPH_ARG_MAX, tempoFilters,
+  buildComposeArgs, outputSpan, enableExpr, sourceSizes, render, spillGraph, GRAPH_ARG_MAX, tempoFilters, windowSkip,
 };

@@ -41,6 +41,28 @@ const COMPOSITE_FALLBACK = { width: 1280, height: 720, fps: 30 };
 // never comes near this wall.
 const COMPOSITE_SLACK = 0.25;
 
+// V4.13. Holding the elements to the clock, see holdToClock and rollPhase.
+//
+// A clip's element is placed this long before the clip starts, so that at the
+// cut its frame is decoded and waiting. A seek is 120 to 200ms at 1080p and
+// about 450 at 4K, which this has to cover with room.
+const PREROLL_S = 1.5;
+// And set running this long before, silent and unseen, where the file has
+// that much before the clip's in point: an element that is already running
+// at the cut is on the clock at the cut, where one started there begins some
+// tens of milliseconds late. Measured: a picture set running is about 50ms
+// behind at first, and this is the time it has to make that up in.
+const ROLL_S = 0.4;
+// How an element's rate is bent toward the clock: left alone within `dead`
+// seconds of it, and past that by the drift times `gain`, held to `most`. A
+// picture has no pitch to hear, so it is bent a good deal and brought close;
+// sound is bent only a little, and it keeps its pitch.
+const VIDEO_BEND = { gain: 3, most: 0.15, dead: 0.008 };
+const AUDIO_BEND = { gain: 1.5, most: 0.04, dead: 0.015 };
+// How long Play waits for the first element to actually start before the
+// clock runs without it.
+const START_HOLD_MS = 600;
+
 // Above 1080p even the top layer alone costs about 450ms to seek, which is not
 // a live scrub by any reading, so a project that size holds its picture through
 // the drag and lands everything when the mouse comes up. Counted in pixels
@@ -81,6 +103,9 @@ let compositeAt = 0;          // where the playhead is, in timeline seconds
 let compositePlaying = false;
 let compositeRaf = null;
 let compositeLast = 0;
+// V4.13. The clock held at a start or a jump until what it is anchored to has
+// begun to run: { el, from, rate, at, since }, or null. See beginStartHold.
+let startHold = null;
 // V4.0. Where the playhead was when playback last started, the grey line it
 // leaves behind on the timeline, and what Shift+Left goes back to. Null until
 // anything has played.
@@ -259,6 +284,9 @@ function addGenDecoder(layer) {
     // A font that was still loading when the first picture was drawn was drawn
     // in the fallback, so draw it again now that it is here.
     entry.key = null;
+    // V4.13. And the trim frames it is in, which go by this, see trimFrameKey.
+    entry.fonts = true;
+    renderTrimFrames();
     drawComposite();
     drawTimeline();
   });
@@ -540,7 +568,7 @@ function drawLayerInto(ctx, canvas, layer, crop = layer.crop, render = layer.ren
     c.restore();
   };
   const veil = !!shape && shape.over
-    && shapeCover(canvas, (c) => placed(c, (x, y) => c.drawImage(pic.el, ...pic.from, x, y, d.dw, d.dh))) > SHAPE_VEIL_ABOVE;
+    && shapeHides(layer, canvas, keyed || !!going, (c) => placed(c, (x, y) => c.drawImage(pic.el, ...pic.from, x, y, d.dw, d.dh)));
   const alpha = ctx.globalAlpha;
   if (veil) ctx.globalAlpha = alpha * SHAPE_VEIL;
   placed(ctx, (x, y) => ctx.drawImage(pic.el, ...pic.from, x, y, d.dw, d.dh));
@@ -573,6 +601,32 @@ function blackPicture() {
     c.fillRect(0, 0, 2, 2);
   }
   return blackPictureCanvas;
+}
+
+// Whether each layer's shape hides most of the frame, by the layer object,
+// which is a new one whenever anything about the layer changes.
+const shapeHidden = new WeakMap();
+/**
+ * Whether a shape lying over the followed file covers more of the frame than
+ * SHAPE_VEIL_ABOVE, and so is drawn as a veil.
+ *
+ * Measured once a layer and kept: reading the measure back waits for the
+ * graphics card, 2 to 4ms as a rule and 25 to 30 one draw in ten (measured
+ * over a drag), which is too much to pay on every picture of a scrub for an
+ * answer that does not change. A layer whose shape moves, by keyframes or a
+ * transition under way, is measured each time, and so is one whose custom
+ * mask is still being read.
+ */
+function shapeHides(layer, canvas, moving, draw) {
+  const mask = layer.mask && layer.mask.kind === 'custom' ? maskPictures.get(layer.mask.src + '|' + layer.mask.by) : null;
+  const keep = !moving && (!layer.mask || layer.mask.kind !== 'custom' || !!(mask && mask.canvas));
+  const frame = projectFrame();
+  const key = canvas.width + 'x' + canvas.height + ':' + frame.width + 'x' + frame.height;
+  const kept = keep ? shapeHidden.get(layer) : null;
+  if (kept && kept.key === key) return kept.hides;
+  const hides = shapeCover(canvas, draw) > SHAPE_VEIL_ABOVE;
+  if (keep) shapeHidden.set(layer, { key, hides });
+  return hides;
 }
 
 let shapeProbe = null;
@@ -967,6 +1021,8 @@ function maskPicture(mask) {
   if (!kept && !maskPictureFailed(mask)) {
     loadMaskPicture(mask).then(() => {
       if (!compositePlaying) drawComposite();
+      // V4.13. A trim frame drawn while it was on its way has no mask on it.
+      renderTrimFrames();
     }, () => {});
   }
   return null;
@@ -1103,6 +1159,15 @@ function parkDecoders() {
     const entry = decoders.get(l.id);
     if (!entry || entry.still) continue;
     if (!entry.el.paused) entry.el.pause();
+    // V4.13. While the Start and End frames are being built the pool is
+    // theirs, parked on a trim point, and it comes back to the playhead when
+    // they are done, see runTrimFrames. One change to the document comes
+    // through here several times, and each time used to pull the decoders
+    // back from under the frame being built: the frame was then drawn from
+    // the playhead's picture, and three seeks of one element inside a
+    // millisecond (here, the trim point, here again) left Chromium seeking
+    // for good about one time in two, which was the ten second hold.
+    if (framesRunning) continue;
     // Mid-scrub, only the top covering file moves, and above 1080p not even
     // that. Everything else is landed when the pointer rests or comes up.
     if (moving && (!only || l.id !== only.id)) continue;
@@ -1117,6 +1182,10 @@ function parkDecoders() {
 // are genuinely lost, since every re-seek is a decode. A layer the playhead has
 // left, or one that has been switched off, stops rather than playing on unseen
 // behind the others.
+//
+// V4.13. Inside that, an element that has slipped is bent back to the clock
+// by its rate, see holdToClock, and a clip the playhead is about to reach is
+// made ready before it gets there, see rollPhase.
 function followDecoders() {
   for (const l of layers) {
     if (l.type !== 'video') continue;
@@ -1125,18 +1194,86 @@ function followDecoders() {
     // moment of the layer, playing or not.
     if (!entry || entry.still) continue;
     const v = entry.el;
-    if (l.enabled && timelineModel.covers(l, compositeAt)) {
-      const want = timelineModel.sourceTimeFor(l, compositeAt);
+    const phase = rollPhase(l);
+    if (phase === 'on' || phase === 'roll') {
       // V4.11. At the layer's speed, and lost by as much more of the source
       // as goes by in the same time at it.
-      const rate = timelineModel.speedOf(l);
-      if (v.playbackRate !== rate) v.playbackRate = rate;
-      if (Math.abs(v.currentTime - want) > COMPOSITE_SLACK * Math.max(0.2, rate)) v.currentTime = want;
+      holdToClock(v, timelineModel.sourceTimeFor(l, compositeAt), timelineModel.speedOf(l), COMPOSITE_SLACK, VIDEO_BEND);
       if (v.paused) v.play().catch(() => {});
-    } else if (!v.paused) {
-      v.pause();
+    } else {
+      if (!v.paused) v.pause();
+      if (phase === 'ready') placeElement(v, readyPlace(l));
     }
   }
+}
+
+/**
+ * V4.13. Where a layer's element stands against the playhead while the
+ * project runs:
+ *
+ *   'on'     the playhead is on the clip, the element runs and is seen or heard;
+ *   'roll'   the clip starts within ROLL_S and the file has that much before
+ *            its in point: the element runs already, unseen and silent, so
+ *            that it is on the clock when the cut comes;
+ *   'ready'  the clip starts within PREROLL_S: the element is placed where it
+ *            will start from and waits there;
+ *   'off'    none of these, the element stands still.
+ *
+ * Until this a clip's element was looked at when the playhead reached it. It
+ * was seeked then, so at every cut the picture stood 200 to 250ms on whatever
+ * frame that element had been left on, the sound was silent as long, and the
+ * clip ran up to a quarter second behind from there on (measured).
+ */
+function rollPhase(l) {
+  if (!l.enabled) return 'off';
+  if (timelineModel.covers(l, compositeAt)) return 'on';
+  const ahead = l.start - compositeAt;
+  if (!(ahead > 0) || ahead > PREROLL_S) return 'off';
+  return ahead <= ROLL_S && rollsEarly(l) ? 'roll' : 'ready';
+}
+
+/** Whether the file has ROLL_S of itself before the clip's in point. */
+function rollsEarly(l) {
+  return timelineModel.sourceTimeFor(l, l.start - ROLL_S) >= 0;
+}
+
+/** Where in its file a clip that is about to start waits. */
+function readyPlace(l) {
+  return timelineModel.sourceTimeFor(l, rollsEarly(l) ? l.start - ROLL_S : l.start);
+}
+
+/** Put a standing element on a place in its file, unless it is there. */
+function placeElement(el, want) {
+  // Assigning the position it already holds is a seek all the same.
+  if (Math.abs(el.currentTime - want) > 0.001) el.currentTime = want;
+}
+
+/**
+ * V4.13. Keep one running element where the clock says it should be.
+ *
+ * `want` is that place in its file and `rate` the layer's speed. Further off
+ * than `slack` it is lost and is seeked, as it always was. Nearer than that
+ * it used to be left alone, so whatever an element lost in starting, 50 to
+ * 240ms measured, it stayed behind for as long as it ran, each element by its
+ * own amount, and the sound by a different one than its picture. Now its
+ * rate is bent toward the clock in proportion to how far off it is, and is
+ * the layer's own again once it is within `bend.dead`.
+ */
+function holdToClock(el, want, rate, slack, bend) {
+  const unit = Math.max(0.2, rate);
+  const drift = (el.currentTime - want) / unit;
+  if (Math.abs(drift) > slack) {
+    el.currentTime = want;
+    if (el.playbackRate !== rate) el.playbackRate = rate;
+    return;
+  }
+  // In hundredths, so the rate is set a few times on the way in and not on
+  // every frame of the screen.
+  const by = Math.abs(drift) > bend.dead
+    ? Math.round(Math.max(-bend.most, Math.min(bend.most, -drift * bend.gain)) * 100) / 100
+    : 0;
+  const next = by ? rate * (1 + by) : rate;
+  if (el.playbackRate !== next) el.playbackRate = next;
 }
 
 /**
@@ -1249,13 +1386,24 @@ function syncPlayers() {
   }
 }
 
-// Standing still is silence, and nothing is seeked to get there. A scrub calls
-// this on every pointer move, and placing every audio layer on every move would
-// be a decode each for sound nobody can hear while the mouse is down. Where
-// they resume from is settled by followPlayers when the transport starts again.
+// Standing still is silence. A scrub calls this on every pointer move, and
+// placing every audio layer on every move would be a decode each for sound
+// nobody can hear while the mouse is down, so while the playhead is being
+// dragged nothing is seeked.
+//
+// V4.13. Otherwise each covering layer is put where the playhead is. It used
+// to be left wherever it had stopped and placed when the transport started,
+// which is the seek that made the sound begin 130 to 180ms after the picture.
 function parkPlayers() {
-  for (const entry of players.values()) {
+  const place = !scrubMoving();
+  for (const l of layers) {
+    if (l.type !== 'audio') continue;
+    const entry = players.get(l.id);
+    if (!entry) continue;
     if (!entry.el.paused) entry.el.pause();
+    if (place && l.enabled && timelineModel.covers(l, compositeAt)) {
+      placeElement(entry.el, timelineModel.sourceTimeFor(l, compositeAt));
+    }
   }
 }
 
@@ -1266,6 +1414,10 @@ function parkPlayers() {
  *
  * force skips that tolerance, for the moments where the playhead jumps rather
  * than advances and any leftover drift would be plainly audible.
+ *
+ * V4.13. Held to the clock inside the tolerance and made ready before its
+ * clip starts, like the pictures, see holdToClock and rollPhase. A layer
+ * running ahead of its clip is silent until the playhead is on it.
  */
 function followPlayers(force) {
   for (const l of layers) {
@@ -1273,30 +1425,41 @@ function followPlayers(force) {
     const entry = players.get(l.id);
     if (!entry) continue;
     const a = entry.el;
-    if (l.enabled && timelineModel.covers(l, compositeAt)) {
+    const phase = rollPhase(l);
+    if (phase === 'on' || phase === 'roll') {
       const want = timelineModel.sourceTimeFor(l, compositeAt);
       // V4.11. At the layer's speed, its pitch kept, which is what the file's
       // atempo does too.
       const rate = timelineModel.speedOf(l);
-      if (a.playbackRate !== rate) {
-        a.preservesPitch = true;
-        a.playbackRate = rate;
+      if (!a.preservesPitch) a.preservesPitch = true;
+      if (force) {
+        placeElement(a, want);
+        if (a.playbackRate !== rate) a.playbackRate = rate;
+      } else {
+        holdToClock(a, want, rate, AUDIO_SYNC_SLACK, AUDIO_BEND);
       }
-      if (force || Math.abs(a.currentTime - want) > AUDIO_SYNC_SLACK * Math.max(0.2, rate)) a.currentTime = want;
       // V2.2. Every tick, because the fade is a function of where the playhead
       // is and this is the only thing that runs as it moves. A layer with no
       // fades gets its own volume back, so this is not a special case for
       // faded layers, it is the gain being kept current.
-      applyPlayerGain(l);
+      if (phase === 'on') applyPlayerGain(l);
+      else silencePlayer(entry);
       // A play() interrupted by the next seek rejects; that is not a failure.
       if (a.paused) a.play().catch(() => {});
-    } else if (!a.paused) {
+    } else {
       // Past its end, before its start, or switched off. Stopped rather than
       // left running silently, so it is not still going when the playhead comes
       // back to it.
-      a.pause();
+      if (!a.paused) a.pause();
+      if (phase === 'ready') placeElement(a, readyPlace(l));
     }
   }
+}
+
+/** V4.13. A player running ahead of its clip, not to be heard yet. */
+function silencePlayer(entry) {
+  if (entry.gain) entry.gain.gain.value = 0;
+  else entry.el.volume = 0;
 }
 
 /**
@@ -1392,6 +1555,8 @@ function endScrub() {
   clearTimeout(scrubRestTimer);
   scrubRestTimer = null;
   landDecoders();
+  // V4.13. And the sound, which a moving scrub leaves where it was.
+  parkPlayers();
 }
 
 /**
@@ -1416,6 +1581,7 @@ function restScrub() {
   if (!compositeScrub || compositePlaying) return;
   scrubRested = true;
   landDecoders();
+  parkPlayers();
 }
 
 /**
@@ -1424,6 +1590,9 @@ function restScrub() {
  * the composite on its own seeked.
  */
 function landDecoders() {
+  // V4.13. Not while the trim frames have the pool, see parkDecoders: they
+  // put every layer on the playhead's frame themselves when they are done.
+  if (framesRunning) return;
   landing.clear();
   for (const l of timelineModel.layersAt(layers, compositeAt)) {
     if (l.type !== 'video') continue;
@@ -1473,6 +1642,47 @@ let framesWanted = null;
 let trimDragGen = 0;
 // A rebuild asked for while the transport was running, to be done when it stops.
 let trimFramesStale = false;
+// V4.13. What each frame was last built from, see trimFrameKey, or null when
+// it has never been built or was built from something that changed under it.
+const trimFrameBuilt = { start: null, end: null };
+
+/**
+ * V4.13. Everything the picture at timeline second `at` is made from, as a
+ * list to be compared entry by entry: the moment, the project's size, and
+ * each covering layer with what its decoder has to give.
+ *
+ * A layer is a new object whenever anything about it changes, so the layer
+ * itself stands for its settings. What it does not carry is what arrives
+ * later by itself: the file being read (its width), a text's fonts, a custom
+ * mask's picture.
+ *
+ * Every change to the document used to rebuild both frames, three rounds of
+ * seeks and the preview held about 0.8 seconds each time, though most edits
+ * touch neither point. With this an edit elsewhere costs a comparison.
+ */
+function trimFrameKey(at) {
+  const frame = projectFrame();
+  const key = [at, frame.width, frame.height];
+  for (const l of timelineModel.layersAt(layers, at)) {
+    if (l.type !== 'video') continue;
+    const entry = decoders.get(l.id);
+    const mask = l.mask && l.mask.kind === 'custom' ? maskPictures.get(l.mask.src + '|' + l.mask.by) : null;
+    key.push(l, entry ? entry.width : 0, (entry && entry.fonts) || 0, !!(mask && mask.canvas));
+  }
+  return key;
+}
+
+function sameTrimFrameKey(a, b) {
+  return !!a && !!b && a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
+/** Which of the frames asked for is not a picture of what is there now. */
+function trimFramesNeeded(which) {
+  const start = which !== 'end' && !sameTrimFrameKey(trimFrameBuilt.start, trimFrameKey(slider.start));
+  const end = which !== 'start' && !sameTrimFrameKey(trimFrameBuilt.end, trimFrameKey(trimFrameOutAt()));
+  if (start && end) return 'both';
+  return start ? 'start' : end ? 'end' : null;
+}
 
 /**
  * Where the End frame is actually painted.
@@ -1535,9 +1745,16 @@ function seekDecodersTo(at) {
       const done = () => {
         entry.el.removeEventListener('seeked', done);
         clearTimeout(timer);
+        clearTimeout(kick);
         resolve();
       };
       const timer = setTimeout(done, 10000);
+      // V4.13. A seek Chromium has let go of is seen to stay `seeking` for
+      // good, and asking again is what gets it out. Two seconds is past any
+      // real seek measured here (450ms at 4K).
+      const kick = setTimeout(() => {
+        if (entry.el.seeking) entry.el.currentTime = want;
+      }, 2000);
       entry.el.addEventListener('seeked', done);
       entry.el.currentTime = want;
     }));
@@ -1577,7 +1794,15 @@ function renderTrimFrames(which) {
     return;
   }
   trimFramesStale = false;
-  framesWanted = mergeWhich(framesWanted, which || 'both');
+  // V4.13. Only what is no longer a picture of this project. With nothing to
+  // do the pool is left alone and the preview is not held; a spinner a marker
+  // put up on its press comes down, unless a pass still running will do that.
+  const need = trimFramesNeeded(which || 'both');
+  if (!need) {
+    if (!framesRunning) trimFramesBusy(false);
+    return;
+  }
+  framesWanted = mergeWhich(framesWanted, need);
   trimFramesBusy(true, framesWanted);
   if (!framesRunning) runTrimFrames();
 }
@@ -1590,19 +1815,44 @@ async function runTrimFrames() {
   paintingFrames = true;
   try {
     while (framesWanted) {
-      const which = framesWanted;
+      // V4.13. Asked again here: two requests for the same change, made
+      // before the first pass had drawn, are one pass and not two.
+      const which = trimFramesNeeded(framesWanted);
       framesWanted = null;
+      if (!which) {
+        trimFramesBusy(false);
+        break;
+      }
       // Which drag this pass belongs to. If the markers move while it is being
       // built it is out of date before it lands, and the spinner has to stay up
       // for the pass that will replace it rather than being cleared here.
       const gen = trimDragGen;
       sizeTrimFrameCanvases();
       const jobs = [];
-      if (which !== 'end') jobs.push([startFrameCtx, startFrameCanvas, slider.start]);
-      if (which !== 'start') jobs.push([endFrameCtx, endFrameCanvas, trimFrameOutAt()]);
-      for (const [ctx, canvas, at] of jobs) {
+      if (which !== 'end') jobs.push(['start', startFrameCtx, startFrameCanvas, slider.start]);
+      if (which !== 'start') jobs.push(['end', endFrameCtx, endFrameCanvas, trimFrameOutAt()]);
+      for (const [name, ctx, canvas, at] of jobs) {
+        // V4.13. What it is about to be a picture of, taken before the wait:
+        // the document can change while the decoders are on their way, and
+        // then the pool was placed for layers that are no longer the ones
+        // drawn. Such a frame is not kept as built, and is asked for again.
+        const key = trimFrameKey(at);
         await seekDecodersTo(at);
+        // Play was pressed meanwhile and has the pool now. The frame waits
+        // for the transport to stop, like any asked for while it runs.
+        if (compositePlaying) {
+          trimFrameBuilt[name] = null;
+          trimFramesStale = true;
+          break;
+        }
         paintLayers(ctx, canvas, at, null);
+        const held = sameTrimFrameKey(key, trimFrameKey(at));
+        trimFrameBuilt[name] = held ? key : null;
+        if (!held) framesWanted = mergeWhich(framesWanted, name);
+      }
+      if (compositePlaying) {
+        framesWanted = null;
+        break;
       }
       // Back to the playhead before anything else can look at the pool.
       await seekDecodersTo(compositeAt);
@@ -1611,6 +1861,9 @@ async function runTrimFrames() {
   } finally {
     framesRunning = false;
     paintingFrames = false;
+    // V4.13. The playhead may have moved since the pool was sent back to it,
+    // and nothing was allowed to follow it meanwhile.
+    if (!compositePlaying) parkDecoders();
     drawComposite();
   }
 }
@@ -1624,9 +1877,64 @@ function seekComposite(at) {
   parkDecoders();
   // A seek is a jump, so the tolerance is skipped: the audio goes exactly where
   // the playhead went rather than up to a quarter second behind it.
-  if (compositePlaying) followPlayers(true);
-  else parkPlayers();
+  if (compositePlaying) {
+    followPlayers(true);
+    // V4.13. Everything was just placed anew, so the clock waits for it to
+    // run again, as it does at Play.
+    if (compositing()) followDecoders();
+    beginStartHold();
+  } else {
+    parkPlayers();
+  }
   drawComposite();
+}
+
+/**
+ * V4.13. Hold the clock until the project is actually running.
+ *
+ * Play used to start the clock at once and the elements when they got round
+ * to it: the sound began 126 to 184ms after the clock (968 the first time)
+ * and, inside the tolerance, was never brought back. Now the clock stands at
+ * where Play was pressed until one element has begun to move, and starts from
+ * how far that one has got. The sound is what it is anchored to where there
+ * is some, a file's picture otherwise: a picture can be bent to the clock
+ * unnoticed, see VIDEO_BEND, and sound less so. With neither, texts and
+ * images alone, there is nothing to wait for.
+ *
+ * Called after the elements have been placed and told to play, at Play and
+ * at every jump while running (a click in the timeline, the loop coming
+ * round).
+ */
+function beginStartHold() {
+  startHold = null;
+  const pick = (type, pool) => {
+    for (const l of layers) {
+      if (l.type !== type || !l.enabled || !timelineModel.covers(l, compositeAt)) continue;
+      const entry = pool.get(l.id);
+      if (!entry || entry.still) continue;
+      return { el: entry.el, rate: timelineModel.speedOf(l) };
+    }
+    return null;
+  };
+  const anchor = pick('audio', players) || (compositing() ? pick('video', decoders) : null);
+  if (!anchor) return;
+  startHold = { ...anchor, from: anchor.el.currentTime, at: compositeAt, since: performance.now() };
+}
+
+/**
+ * V4.13. Whether the clock may run: at once with nothing held, and otherwise
+ * when the anchor has moved, from where it has got to, or when it has been
+ * waited for long enough.
+ */
+function startHeld(now) {
+  if (!startHold) return false;
+  const moved = (startHold.el.currentTime - startHold.from) / startHold.rate;
+  if (!(moved > 0.003) && now - startHold.since < START_HOLD_MS) return true;
+  if (moved > 0.003) compositeAt = Math.min(compositeTotal(), startHold.at + moved);
+  startHold = null;
+  // The clock counts from here, not from the last screen frame it was held on.
+  compositeLast = now;
+  return false;
 }
 
 // The clock is the wall clock rather than any one element's. With N elements
@@ -1636,6 +1944,12 @@ function seekComposite(at) {
 function compositeTick() {
   if (!compositePlaying) return;
   const now = performance.now();
+  // V4.13. Not yet: what the clock is anchored to has not begun to run.
+  if (startHeld(now)) {
+    compositeLast = now;
+    compositeRaf = requestAnimationFrame(compositeTick);
+    return;
+  }
   const total = compositeTotal();
   const was = compositeAt;
   compositeAt = Math.min(total, compositeAt + (now - compositeLast) / 1000);
@@ -1755,6 +2069,10 @@ function playComposite() {
   if (gainCtx && gainCtx.state === 'suspended') gainCtx.resume();
   compositePlaying = true;
   compositeLast = performance.now();
+  // V4.13. Everything set going now, and the clock held until it runs.
+  if (compositing()) followDecoders();
+  followPlayers(true);
+  beginStartHold();
   updateCompositeUi();
   // The same kick the media elements give it through their play listeners.
   startSpectrum();
@@ -1767,6 +2085,7 @@ function pauseComposite() {
     compositeRaf = null;
   }
   compositePlaying = false;
+  startHold = null;
   // Stopped where they are rather than parked exactly. They are already within
   // a couple of milliseconds of the playhead, and re-seeking all of them would
   // cost a decode each to land on the frame that is already on screen.

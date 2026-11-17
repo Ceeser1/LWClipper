@@ -325,7 +325,11 @@ test('a shape is the layer\'s own cut-out made of a black picture, veiled when i
   // and no Obscure or Pixelate.
   assert.match(draw, /shape \? blackPicture\(\) : entry\.el,/);
   assert.match(draw, /shape \? null : \{ x: d\.sx, y: d\.sy/);
-  assert.match(draw, /const veil = !!shape && shape\.over\s+&& shapeCover\(canvas, [^\n]+\) > SHAPE_VEIL_ABOVE;/);
+  assert.match(draw, /const veil = !!shape && shape\.over\s+&& shapeHides\(layer, canvas, keyed \|\| !!going, /);
+  // Measured once a layer, by the layer object, unless its shape moves.
+  const hides = fn(COMPOSITOR, 'shapeHides');
+  assert.match(hides, /const kept = keep \? shapeHidden\.get\(layer\) : null;/);
+  assert.match(hides, /const hides = shapeCover\(canvas, draw\) > SHAPE_VEIL_ABOVE;\s+if \(keep\) shapeHidden\.set\(layer, \{ key, hides \}\);/);
   assert.match(draw, /if \(veil\) ctx\.globalAlpha = alpha \* SHAPE_VEIL;/);
   assert.match(fn(COMPOSITOR, 'paintLayers'), /drawLayerInto\(ctx, canvas, shown, undefined, undefined, at, shape\);/);
 });
