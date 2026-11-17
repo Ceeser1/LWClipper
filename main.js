@@ -949,6 +949,29 @@ ipcMain.handle('dialog:openMaskImage', async () => {
   return { ok: true, path: result.filePaths[0] };
 });
 
+// V5.1. Apply LUT: a colour table of the user's own, a .cube file.
+ipcMain.handle('dialog:openLut', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: 'Choose a LUT file',
+    properties: ['openFile'],
+    filters: [{ name: 'LUT (.cube)', extensions: ['cube'] }],
+  });
+  if (result.canceled || !result.filePaths.length) return { ok: false, cancelled: true };
+  return { ok: true, path: result.filePaths[0] };
+});
+
+// Its text, which the preview makes its own table of. Not ok when the file is
+// gone, is no file, or is larger than any colour table is.
+ipcMain.handle('lut:read', async (_event, filePath) => {
+  try {
+    const stat = fs.statSync(String(filePath));
+    if (!stat.isFile() || stat.size > 64 * 1024 * 1024) return { ok: false };
+    return { ok: true, text: fs.readFileSync(String(filePath), 'utf8') };
+  } catch {
+    return { ok: false };
+  }
+});
+
 // `steps` is what the compression slider reads at each of its four positions,
 // or null for a format with nothing to compress, which is how WAV switches the
 // control off without the renderer needing its own list of special cases.

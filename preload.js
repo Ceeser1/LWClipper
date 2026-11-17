@@ -40,6 +40,9 @@ contextBridge.exposeInMainWorld('lwclipper', {
   openAudioTrack: () => ipcRenderer.invoke('dialog:openAudio'),
   // V3.6. Edit Mask's Custom.
   openMaskImage: () => ipcRenderer.invoke('dialog:openMaskImage'),
+  // V5.1. Apply LUT: the file picked, and a file's text read.
+  openLut: () => ipcRenderer.invoke('dialog:openLut'),
+  readLut: (filePath) => ipcRenderer.invoke('lut:read', filePath),
   saveAsDialog: (title, isAudio, format, isProject) =>
     ipcRenderer.invoke('dialog:saveAs', { title, isAudio, format, isProject }),
   quickSaveTarget: (title, isAudio, format) =>

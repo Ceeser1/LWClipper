@@ -53,6 +53,48 @@ const GEN_KINDS = {
 };
 
 // Written out one by one, so check-locales finds every name.
+// ---- V5.1. Copy VFX and Paste VFX, on a track's right click ----
+//
+// Here and not in the VFX window's file: the window writes to a track at
+// Apply and nowhere else, and this is not the window.
+
+// The VFX last copied, as the track kept them, or null. Kept while the app
+// runs, so they can be pasted into another project too. An area is in
+// fractions of the picture and a keyframe in the clip's own seconds, so they
+// fit a track of any size.
+let vfxCopied = null;
+
+function copyVfx(layerId) {
+  const layer = timelineModel.layerById(layers, layerId);
+  const list = layer ? timelineModel.vfxList(layer) : [];
+  if (!list.length) return;
+  vfxCopied = JSON.parse(JSON.stringify(list));
+}
+
+/** Whether the VFX window is open on a track: its draft would not know of a paste. */
+function vfxOpenOn(layerId) {
+  return !vfxModal.hidden && vfxLayerId === layerId;
+}
+
+/**
+ * The copied VFX onto a track, in place of the ones it has: paste again after
+ * a change to the first track and the others follow. One step to undo. Each
+ * gets an id of its own, and each keyframe too.
+ */
+function pasteVfx(layerId) {
+  const layer = timelineModel.layerById(layers, layerId);
+  if (!layer || !vfxCopied || busy || vfxOpenOn(layerId)) return;
+  if (layer.kind === 'gen' || layer.type !== 'video') return;
+  const list = timelineModel.vfxListOf(vfxCopied.map((v) => {
+    const { id: _id, ...rest } = v;
+    return rest.keys ? { ...rest, keys: rest.keys.map(({ id: _key, ...k }) => k) } : rest;
+  }));
+  if (JSON.stringify(list.map(({ id: _a, ...v }) => v)) === JSON.stringify(timelineModel.vfxList(layer).map(({ id: _b, ...v }) => v))
+    && !list.some((v) => v.keys)) return;
+  setLayers(timelineModel.setLayer(layers, layerId, { vfx: list }));
+  commitHistory();
+}
+
 function shapeName(kind) {
   const names = {
     circle: () => t('Circle'),
@@ -210,6 +252,11 @@ function openClipMenu(evt, track) {
     // Two calls, so check-locales sees both literals.
     if (timelineModel.vfxList(layer).length) item(t('Edit VFX'), true, () => openVfx(layer.id, at));
     else item(t('Add VFX'), true, () => openVfx(layer.id, at));
+    // V5.1. A track's VFX taken along to another: the same look on several
+    // clips without making it again on each. Copy on a track that has some,
+    // Paste once some were copied.
+    if (timelineModel.vfxList(layer).length) item(t('Copy VFX'), true, () => copyVfx(layer.id));
+    if (vfxCopied) item(t('Paste VFX'), !vfxOpenOn(layer.id), () => pasteVfx(layer.id));
   }
   // V3.3. Keyframes, on a clip that can have them and within it. On anything
   // else they are there and greyed, so the menu keeps its shape.

@@ -11,18 +11,22 @@
 // the menu, the settings and the keyframes are made from those.
 //
 // Three parts, the user's layout. Left, a quarter of the window: every VFX
-// there is, added to the end of the track's by its [+] or a double click ("A
-// click on a menu vfx does nothing"). Centre, half: the track's VFX as
-// buttons in the order they are processed, clicked to choose the one edited,
-// dragged to change the order, each with a red X that takes it off; the line
-// "Editing [name] (number)"; the track's whole picture at the playhead with
-// every VFX on it; and the chosen VFX's keyframes. Right, a quarter: the
-// chosen VFX's name and its settings.
+// there is, under a search, added to the end of the track's by its + or a
+// double click; since V5.1.1 a single click previews one with its defaults,
+// added only by Add. Centre, half: the track's VFX as buttons in the order
+// they are processed, an arrow between each two, clicked to choose the one
+// edited, dragged to change the order, each with a red X that takes it off;
+// the line "Editing [name] (number)" or "Previewing [name]" and Add, what
+// the kind does, and the settings that are the same the whole clip long; the
+// track's whole picture at the playhead with every VFX on it; and the chosen
+// VFX's keyframes. Right, a quarter: the settings a keyframe holds.
 //
 // The settings are of two sorts, the user's rule for this and every later
 // VFX: the ones that cannot blend between keyframes are the VFX's own and
 // come first, "slightly greenish (like 222, 255, 222)", then "a divider
-// line", then the ones a keyframe holds, in white. A VFX without keyframes
+// line", then the ones a keyframe holds, in white. Since V5.1.1 the first
+// are in the centre and the others on the right, the column between them the
+// line. A VFX without keyframes
 // is the same the whole clip long, and all its settings are simply its own.
 // Once it has one, a change to its area or to a white setting is made at the
 // playhead: to the keyframe there, or to a new one made there.
@@ -58,7 +62,10 @@ const vfxGuideY = el('vfxGuideY');
 const vfxKeys = el('vfxKeys');
 const vfxKeysReadout = el('vfxKeysReadout');
 const vfxKeysCanvas = el('vfxKeysCanvas');
-const vfxName = el('vfxName');
+const vfxMenuSearch = el('vfxMenuSearch');
+const vfxPreviewAddBtn = el('vfxPreviewAddBtn');
+const vfxAbout = el('vfxAbout');
+const vfxStatics = el('vfxStatics');
 const vfxSettings = el('vfxSettings');
 const vfxRemoveAllBtn = el('vfxRemoveAllBtn');
 const vfxCancelBtn = el('vfxCancelBtn');
@@ -66,9 +73,75 @@ const vfxApplyBtn = el('vfxApplyBtn');
 
 // What each kind is called. Written out one by one, so check-locales finds
 // every name. A new kind is a row here and a row in timeline.js VFX_KINDS.
+// V5.1. `about` says in a line what it does: the menu shows it when the
+// pointer rests on a row, and the settings column under the VFX's name.
 const VFX_UI = {
-  obscure: { name: () => t('Obscure') },
-  pixelate: { name: () => t('Pixelate') },
+  obscure: { name: () => t('Obscure'), about: () => t('Blurs an area, to make it unreadable') },
+  pixelate: { name: () => t('Pixelate'), about: () => t('Turns an area into coarse blocks') },
+  // V5.1.
+  dirblur: { name: () => t('Directional Blur'), about: () => t('Blurs in one direction only, like fast movement') },
+  tiltshift: { name: () => t('Tilt-Shift'), about: () => t('Keeps a band sharp and blurs the rest, for a miniature look') },
+  brightness: { name: () => t('Brightness and Contrast'), about: () => t('Makes the picture brighter or darker and its contrast stronger or weaker') },
+  exposure: { name: () => t('Exposure and Gamma'), about: () => t('Brightens like a longer exposure, Gamma lifts or lowers the middle tones') },
+  levels: { name: () => t('Levels'), about: () => t('Sets which tone becomes black and which white, and how bright the output may get') },
+  huesat: { name: () => t('Hue and Saturation'), about: () => t('Turns all colours round the colour wheel and makes them stronger or paler') },
+  temperature: { name: () => t('Temperature and Tint'), about: () => t('Makes the picture warmer or cooler, Tint shifts between green and magenta') },
+  rgb: { name: () => t('RGB Balance'), about: () => t('Raises or lowers red, green and blue on their own') },
+  mono: { name: () => t('Black and White'), about: () => t('Black and white, with the share of each colour in the grey') },
+  sepia: { name: () => t('Sepia'), about: () => t('The brown tone of old photographs') },
+  colorize: { name: () => t('Colorize'), about: () => t('Paints the whole picture in one hue') },
+  duotone: { name: () => t('Duotone'), about: () => t('Two colours instead of all: one for the dark parts, one for the bright') },
+  colorpass: { name: () => t('Color Pass'), about: () => t('Keeps one colour and turns everything else grey') },
+  look: { name: () => t('Film Look'), about: () => t('Ready-made colour looks, from Teal and Orange to Noir') },
+  invert: { name: () => t('Invert Colors'), about: () => t('The negative: bright becomes dark and every colour its opposite') },
+  glow: { name: () => t('Glow'), about: () => t('Lets the bright parts shine into their surroundings') },
+  sharpen: { name: () => t('Sharpen'), about: () => t('Makes fine detail crisper') },
+  vignette: { name: () => t('Vignette'), about: () => t('Darkens or brightens the corners') },
+  grain: { name: () => t('Film Grain'), about: () => t('Fine grain that changes with every frame') },
+  scanlines: { name: () => t('Scanlines'), about: () => t('Dark lines across the picture') },
+  rgbsplit: { name: () => t('RGB Split'), about: () => t('Pulls red and blue apart, for coloured fringes') },
+  posterize: { name: () => t('Posterize'), about: () => t('Reduces every colour to a few levels') },
+  threshold: { name: () => t('Threshold'), about: () => t('Pure black and white, split at one brightness') },
+  solarize: { name: () => t('Solarize'), about: () => t('Turns the bright tones round, like an overexposed film') },
+  edges: { name: () => t('Edge Detect'), about: () => t('Shows only the outlines') },
+  emboss: { name: () => t('Emboss'), about: () => t('Makes the picture look pressed into metal') },
+  nightvision: { name: () => t('Night Vision'), about: () => t('Green and bright, like a night-vision device') },
+  thermal: { name: () => t('Thermal Camera'), about: () => t('Brightness shown as heat colours') },
+  lens: { name: () => t('Lens Distortion'), about: () => t('Bulges the middle outward or pulls the edges in') },
+  flip: { name: () => t('Flip and Mirror'), about: () => t('Flips the picture or mirrors one half onto the other') },
+  shadows: { name: () => t('Shadows and Highlights'), about: () => t('Brightens or darkens only the dark parts or only the bright parts') },
+  splittone: { name: () => t('Split Toning'), about: () => t('Tints the dark parts with one colour and the bright parts with another') },
+  channels: { name: () => t('Channel Swap'), about: () => t('Swaps red, green and blue with each other') },
+  clarity: { name: () => t('Clarity'), about: () => t('Strengthens or softens the larger detail, for punch or for smooth skin') },
+  dream: { name: () => t('Dream'), about: () => t('A soft, bright haze over the whole picture') },
+  oldfilm: { name: () => t('Old Film'), about: () => t('Faded, brownish and grainy, like an old film') },
+  vhs: { name: () => t('VHS'), about: () => t('Colour fringes, soft lines and noise, like a video tape') },
+  crt: { name: () => t('Old TV'), about: () => t('Picture lines and a curved screen, like an old television') },
+  bars: { name: () => t('Cinema Bars'), about: () => t('Black bars at the top and bottom, or at the sides') },
+  offset: { name: () => t('Offset'), about: () => t('Shifts the picture, what leaves one edge comes in at the other') },
+  comic: { name: () => t('Comic'), about: () => t('Few flat colours with dark outlines') },
+  border: { name: () => t('Border'), about: () => t('A frame of one colour along the edges') },
+  rotate: { name: () => t('Rotate'), about: () => t('Turns the picture about its middle') },
+  zoom: { name: () => t('Zoom'), about: () => t('Enlarges a part of the picture, with a round area a magnifying glass') },
+  wave: { name: () => t('Wave'), about: () => t('Waves that run through the picture') },
+  ripple: { name: () => t('Ripple'), about: () => t('Rings that spread from the middle, as on water') },
+  swirl: { name: () => t('Swirl'), about: () => t('Twists the picture about its middle') },
+  shake: { name: () => t('Shake'), about: () => t('Shakes the picture like a hand-held camera') },
+  glitch: { name: () => t('Glitch'), about: () => t('Pushes slices of the picture aside, again and again') },
+  haze: { name: () => t('Heat Haze'), about: () => t('A restless shimmer, like hot air') },
+  tile: { name: () => t('Tile'), about: () => t('The picture several times side by side and one above the other') },
+  kaleido: { name: () => t('Kaleidoscope'), about: () => t('Mirrors a wedge of the picture all the way round') },
+  perspective: { name: () => t('Perspective'), about: () => t('Tilts the picture away from the viewer') },
+  bulge: { name: () => t('Bulge'), about: () => t('Blows up what is under its area like a bump, or pinches it together') },
+  lut: { name: () => t('Apply LUT'), about: () => t('Colours from a LUT file (.cube), as colour grading tools write them') },
+};
+
+// V5.1. The headings the menu puts the kinds under (timeline.js VFX_GROUPS).
+const VFX_GROUP_NAMES = {
+  hide: () => t('Blur and Hide'),
+  color: () => t('Color'),
+  stylize: () => t('Stylize'),
+  distort: () => t('Distort'),
 };
 
 // What each setting is called, by its id, for every kind that has it.
@@ -77,6 +150,119 @@ const VFX_SETTING_LABELS = {
   invert: () => t('Invert Area'),
   strength: () => t('Strength:'),
   soft: () => t('Soft Edge:'),
+  // V5.1.
+  mix: () => t('Mix:'),
+  vertical: () => t('Vertical'),
+  brightness: () => t('Brightness:'),
+  contrast: () => t('Contrast:'),
+  exposure: () => t('Exposure:'),
+  gamma: () => t('Gamma:'),
+  black: () => t('Black Point:'),
+  white: () => t('White Point:'),
+  outBlack: () => t('Output Black:'),
+  outWhite: () => t('Output White:'),
+  hue: () => t('Hue:'),
+  saturation: () => t('Saturation:'),
+  temperature: () => t('Temperature:'),
+  tint: () => t('Tint:'),
+  red: () => t('Red:'),
+  green: () => t('Green:'),
+  blue: () => t('Blue:'),
+  shadows: () => t('Shadows:'),
+  highlights: () => t('Highlights:'),
+  color: () => t('Color:'),
+  range: () => t('Range:'),
+  softness: () => t('Softness:'),
+  look: () => t('Look:'),
+  threshold: () => t('Threshold:'),
+  radius: () => t('Radius:'),
+  intensity: () => t('Intensity:'),
+  amount: () => t('Amount:'),
+  spacing: () => t('Spacing:'),
+  thickness: () => t('Thickness:'),
+  darkness: () => t('Darkness:'),
+  angle: () => t('Angle:'),
+  levels: () => t('Levels:'),
+  level: () => t('Level:'),
+  style: () => t('Style:'),
+  gain: () => t('Gain:'),
+  palette: () => t('Palette:'),
+  mode: () => t('Mode:'),
+  order: () => t('Order:'),
+  edges: () => t('Outlines:'),
+  file: () => t('LUT file:'),
+  speed: () => t('Speed:'),
+  length: () => t('Wavelength:'),
+  zoom: () => t('Zoom:'),
+  count: () => t('Tiles:'),
+  segments: () => t('Segments:'),
+  tiltx: () => t('Tilt Horizontal:'),
+  tilty: () => t('Tilt Vertical:'),
+  size: () => t('Size:'),
+  x: () => t('Horizontal:'),
+  y: () => t('Vertical:'),
+};
+
+// V5.1. What a figure is counted in, where that says something: shown after
+// it. A length is in the picture's pixels and says so by itself.
+const VFX_SETTING_UNITS = {
+  mix: '%',
+  angle: '°',
+  hue: '°',
+  zoom: '%',
+  thickness: '%',
+  darkness: '%',
+  x: '%',
+  y: '%',
+  black: '%',
+  white: '%',
+  outBlack: '%',
+  outWhite: '%',
+};
+
+// V5.1. What each option of a choice is called, by the setting's id.
+const VFX_CHOICE_LABELS = {
+  look: {
+    tealorange: () => t('Teal and Orange'),
+    bleach: () => t('Bleach Bypass'),
+    vintage: () => t('Vintage'),
+    cross: () => t('Cross Process'),
+    cool: () => t('Cool'),
+    warm: () => t('Warm'),
+    noir: () => t('Noir'),
+    faded: () => t('Faded'),
+    matrix: () => t('Matrix'),
+    sunset: () => t('Sunset'),
+    moon: () => t('Moonlight'),
+    pastel: () => t('Pastel'),
+  },
+  order: {
+    rbg: () => 'R B G',
+    grb: () => 'G R B',
+    gbr: () => 'G B R',
+    brg: () => 'B R G',
+    bgr: () => 'B G R',
+  },
+  style: {
+    neon: () => t('Neon'),
+    sketch: () => t('Sketch'),
+    mono: () => t('White on Black'),
+  },
+  palette: {
+    iron: () => t('Iron'),
+    rainbow: () => t('Rainbow'),
+    ice: () => t('Ice'),
+  },
+  mode: {
+    across: () => t('Flip Horizontal'),
+    down: () => t('Flip Vertical'),
+    both: () => t('Flip Both'),
+    left: () => t('Mirror Left'),
+    right: () => t('Mirror Right'),
+    top: () => t('Mirror Top'),
+    bottom: () => t('Mirror Bottom'),
+    quad: () => t('Mirror Four Ways'),
+  },
 };
 
 // Held to this many pixels on its longer side, like the mask view's stage.
@@ -95,6 +281,12 @@ let vfxPic = null;         // the source picture's size, { width, height }
 // pixels; `keys` the same.
 let vfxDraft = null;
 let vfxSel = -1;           // the chosen VFX's place in the draft, or -1
+// V5.1.1. The id of the VFX a click in the menu previews, or null. It is
+// the last of the draft and the chosen one while it is previewed, so the
+// picture, its area and its keyframes work as for any other, but it has no
+// button in the line and Apply leaves it out: only Add, its + or a double
+// click keeps it. Another VFX previewed or chosen drops it.
+let vfxPreviewId = null;
 // Where the clip started and ended when last looked at, so a trim of its
 // start in the main window can be carried into the draft's keyframes.
 let vfxClip = null;
@@ -142,6 +334,7 @@ function vfxDraftOf(list) {
   return list.map((v) => {
     const def = timelineModel.vfxKind(v.kind);
     const d = { id: v.id, kind: v.kind };
+    if (v.disabled) d.disabled = true;
     for (const s of def.statics) d[s.id] = v[s.id];
     Object.assign(d, vfxValuesIn(def, v));
     const keys = timelineModel.vfxKeysFor(v);
@@ -155,6 +348,7 @@ function vfxListOfDraft(draft) {
   return timelineModel.vfxListOf(draft.map((d) => {
     const def = timelineModel.vfxKind(d.kind);
     const v = { id: d.id, kind: d.kind };
+    if (d.disabled) v.disabled = true;
     for (const s of def.statics) v[s.id] = d[s.id];
     Object.assign(v, vfxValuesOut(def, d));
     if (d.keys) v.keys = d.keys.map((k) => ({ id: k.id, t: k.t, ...vfxValuesOut(def, k) }));
@@ -245,6 +439,18 @@ function vfxNew(kind) {
   for (const s of def.statics) v[s.id] = s.def;
   for (const s of def.keyed) v[s.id] = s.of === 'height' ? Math.round(s.def * vfxPic.height) : s.def;
   if (!def.area) return v;
+  v.rotation = 0;
+  // V5.1. A kind for the whole picture starts on all of it, and Tilt-Shift
+  // on a band across its middle, the sharp part.
+  if (def.fill) {
+    v.box = { x: 0, y: 0, w: vfxPic.width, h: vfxPic.height };
+    return v;
+  }
+  if (def.band) {
+    const bh = Math.max(16, Math.round(vfxPic.height / 3));
+    v.box = { x: 0, y: Math.round((vfxPic.height - bh) / 2), w: vfxPic.width, h: bh };
+    return v;
+  }
   const h = Math.max(16, Math.round(vfxPic.height / 3));
   const w = Math.max(16, Math.round(h * genDraw.shapeAspect({ kind: v.shape })));
   const box = { x: Math.round((vfxPic.width - w) / 2), y: Math.round((vfxPic.height - h) / 2), w, h };
@@ -304,6 +510,8 @@ function openVfx(layerId, at) {
   vfxClip = { start: layer.start, end: timelineModel.endOf(layer) };
   vfxDraft = vfxDraftOf(timelineModel.vfxList(layer));
   vfxSel = vfxDraft.length ? 0 : -1;
+  vfxPreviewId = null;
+  vfxMenuSearch.value = '';
   vfxPreviewKey = '';
   vfxPreviewLayers = null;
   vfxSeenAt = null;
@@ -340,6 +548,7 @@ function closeVfx() {
   vfxAngle.hidden = true;
   vfxOthers.replaceChildren();
   vfxChain.replaceChildren();
+  vfxStatics.replaceChildren();
   vfxSettings.replaceChildren();
   vfxPanelFor = '';
   vfxFields = [];
@@ -348,6 +557,7 @@ function closeVfx() {
   vfxDraft = null;
   vfxClip = null;
   vfxSel = -1;
+  vfxPreviewId = null;
 }
 
 function cancelVfx() {
@@ -358,7 +568,8 @@ function cancelVfx() {
 function applyVfx() {
   if (!vfxDraft) return;
   const id = vfxLayerId;
-  const list = vfxListOfDraft(vfxDraft);
+  // A VFX only previewed was never added, so it does not go onto the track.
+  const list = vfxListOfDraft(vfxDraft.filter((v) => v.id !== vfxPreviewId));
   // Against the track as it is now, not as it was when the window opened: a
   // trim of its start meanwhile moved its keyframes and the draft's alike.
   const live = timelineModel.layerById(layers, id);
@@ -431,10 +642,15 @@ function rebaseVfxDraft(live) {
 
 function showVfxMenu() {
   const doc = vfxMenu.ownerDocument;
-  vfxMenu.replaceChildren(...timelineModel.VFX_KIND_IDS.filter((kind) => VFX_UI[kind]).map((kind) => {
+  // V5.1. Under headings, a kind no heading names after them all.
+  const listed = new Set(timelineModel.VFX_GROUPS.flatMap((g) => g.kinds));
+  const rest = timelineModel.VFX_KIND_IDS.filter((kind) => !listed.has(kind));
+  const groups = [...timelineModel.VFX_GROUPS, ...(rest.length ? [{ id: '', kinds: rest }] : [])];
+  const row = (kind) => {
     const row = doc.createElement('div');
     row.className = 'vfx-menu__row';
     row.dataset.kind = kind;
+    if (VFX_UI[kind].about) row.title = VFX_UI[kind].about();
     const name = doc.createElement('span');
     name.className = 'vfx-menu__name';
     name.textContent = VFX_UI[kind].name();
@@ -445,14 +661,87 @@ function showVfxMenu() {
     add.title = t('Add this VFX');
     row.append(name, add);
     return row;
-  }));
+  };
+  const nodes = [];
+  for (const g of groups) {
+    const kinds = g.kinds.filter((kind) => VFX_UI[kind] && timelineModel.vfxKind(kind));
+    if (!kinds.length) continue;
+    if (VFX_GROUP_NAMES[g.id]) {
+      const head = doc.createElement('div');
+      head.className = 'vfx-menu__group';
+      head.textContent = VFX_GROUP_NAMES[g.id]();
+      nodes.push(head);
+    }
+    nodes.push(...kinds.map(row));
+  }
+  const none = doc.createElement('div');
+  none.className = 'vfx-menu__none';
+  none.textContent = t('No VFX found');
+  none.hidden = true;
+  nodes.push(none);
+  vfxMenu.replaceChildren(...nodes);
+  filterVfxMenu();
+  markVfxMenu();
 }
 
-// The user: "A click on a menu vfx does nothing. Add a [+] button at its
-// right to add or a double-click adds it."
+/**
+ * V5.1.1. The user: "a search bar right below" the title. The rows whose
+ * name holds what is typed, any case, and the headings that still have one.
+ */
+function filterVfxMenu() {
+  const want = vfxMenuSearch.value.trim().toLowerCase();
+  let head = null;
+  let headShows = false;
+  let any = false;
+  const closeHead = () => {
+    if (head) head.hidden = !headShows;
+  };
+  for (const node of vfxMenu.children) {
+    if (node.classList.contains('vfx-menu__group')) {
+      closeHead();
+      head = node;
+      headShows = false;
+    } else if (node.classList.contains('vfx-menu__row')) {
+      const name = node.querySelector('.vfx-menu__name').textContent.toLowerCase();
+      node.hidden = !!want && !name.includes(want);
+      if (!node.hidden) {
+        headShows = true;
+        any = true;
+      }
+    } else if (node.classList.contains('vfx-menu__none')) {
+      node.hidden = any;
+    }
+  }
+  closeHead();
+}
+
+vfxMenuSearch.addEventListener('input', filterVfxMenu);
+// Escape in the search empties it first; only an empty one lets the window close.
+vfxMenuSearch.addEventListener('keydown', (evt) => {
+  if (evt.key !== 'Escape' || !vfxMenuSearch.value) return;
+  evt.stopPropagation();
+  vfxMenuSearch.value = '';
+  filterVfxMenu();
+});
+
+/** The row of the kind being previewed lit, the others not. */
+function markVfxMenu() {
+  const p = vfxDraft && vfxDraft.find((v) => v.id === vfxPreviewId);
+  for (const row of vfxMenu.querySelectorAll('.vfx-menu__row')) {
+    row.classList.toggle('vfx-menu__row--on', !!p && row.dataset.kind === p.kind);
+  }
+}
+
+// The user, V5.1.1: "A left-click on an VFX opens its preview with default
+// parameters only, not adding it yet, double-click or "+" adds it."
 vfxMenu.addEventListener('click', (evt) => {
   const add = evt.target.closest && evt.target.closest('.vfx-menu__add');
-  if (add) addVfx(add.parentNode.dataset.kind);
+  if (add) {
+    addVfx(add.parentNode.dataset.kind);
+    return;
+  }
+  const row = evt.target.closest && evt.target.closest('.vfx-menu__row');
+  if (row) previewVfx(row.dataset.kind);
 });
 vfxMenu.addEventListener('dblclick', (evt) => {
   if (evt.target.closest && evt.target.closest('.vfx-menu__add')) return;
@@ -460,15 +749,66 @@ vfxMenu.addEventListener('dblclick', (evt) => {
   if (row) addVfx(row.dataset.kind);
 });
 
-/** A VFX of a kind added at the end of the track's, and chosen. */
+/** The VFX being previewed taken out of the draft, when there is one; true if it was. */
+function dropVfxPreview() {
+  if (!vfxPreviewId || !vfxDraft) return false;
+  const wasSel = vfxCurrent() && vfxCurrent().id === vfxPreviewId;
+  vfxDraft = vfxDraft.filter((v) => v.id !== vfxPreviewId);
+  vfxPreviewId = null;
+  if (wasSel) vfxSel = -1;
+  return true;
+}
+
+/**
+ * A VFX of a kind previewed: as a new one starts, at the end of the draft
+ * and chosen, but not added. Whatever another preview had set is dropped
+ * with it ("Clicking another vfx to preview discards all settings made in
+ * the preview"); the kind already previewed is left as it is, so the first
+ * click of a double click does not undo what was set.
+ */
+function previewVfx(kind) {
+  if (!vfxDraft || !timelineModel.vfxKind(kind)) return;
+  const was = vfxDraft.find((v) => v.id === vfxPreviewId);
+  if (was && was.kind === kind) return;
+  dropVfxPreview();
+  const v = vfxNew(kind);
+  vfxDraft = [...vfxDraft, v];
+  vfxPreviewId = v.id;
+  vfxSel = vfxDraft.length - 1;
+  showVfxDraft();
+  paintVfxStage();
+}
+
+/** The VFX being previewed kept as it is set, the user's Add. */
+function keepVfxPreview() {
+  if (!vfxPreviewId || !vfxDraft) return;
+  vfxPreviewId = null;
+  showVfxDraft();
+  paintVfxStage();
+  noteVfxKeyframes();
+}
+
+/**
+ * A VFX of a kind added at the end of the track's, and chosen. The kind
+ * being previewed is kept with what was set in the preview; another kind
+ * drops the preview and is added as it starts.
+ */
 function addVfx(kind) {
   if (!vfxDraft || !timelineModel.vfxKind(kind)) return;
+  const was = vfxDraft.find((v) => v.id === vfxPreviewId);
+  if (was && was.kind === kind) {
+    keepVfxPreview();
+    return;
+  }
+  dropVfxPreview();
   vfxDraft = [...vfxDraft, vfxNew(kind)];
   vfxSel = vfxDraft.length - 1;
   showVfxDraft();
   paintVfxStage();
   noteVfxKeyframes();
 }
+
+vfxPreviewAddBtn.addEventListener('click', keepVfxPreview);
 
 /**
  * The user: no cap on VFX, but once a project, on "adding >=8th VFX to a
@@ -494,36 +834,66 @@ function noteVfxKeyframes() {
 
 function showVfxChain() {
   const doc = vfxChain.ownerDocument;
-  if (!vfxDraft.length) {
+  // The one previewed is the last of the draft and has no button.
+  const added = vfxDraft.filter((v) => v.id !== vfxPreviewId);
+  if (!added.length) {
     const none = doc.createElement('div');
     none.className = 'vfx-chain__none';
     none.textContent = t('No VFX yet. Add one from the list on the left.');
     vfxChain.replaceChildren(none);
     return;
   }
-  vfxChain.replaceChildren(...vfxDraft.map((v, i) => {
-    const chip = doc.createElement('div');
-    chip.className = 'vfx-chip' + (i === vfxSel ? ' vfx-chip--on' : '');
-    chip.dataset.index = String(i);
-    const name = doc.createElement('span');
-    name.className = 'vfx-chip__name';
-    name.textContent = vfxLabel(i);
-    // The user: "Each added VFX has its own red X right of its name to be
-    // removed individually."
-    const x = doc.createElement('button');
-    x.type = 'button';
-    x.className = 'vfx-chip__x';
-    x.textContent = '×';
-    x.title = t('Remove this VFX');
-    chip.append(name, x);
-    return chip;
-  }));
+  // The user, V5.1.1: "[VFX1 X] > [VFX2 X] > VFX N, to indicate order
+  // better". The arrows are between the buttons, not part of them.
+  const nodes = [];
+  added.forEach((v, i) => {
+    if (i > 0) {
+      const arrow = doc.createElement('span');
+      arrow.className = 'vfx-chain__arrow';
+      arrow.textContent = '>';
+      nodes.push(arrow);
+    }
+    nodes.push(vfxChip(doc, i));
+  });
+  vfxChain.replaceChildren(...nodes);
 }
 
+/** The button of the draft's VFX at `i`: its name and its X. */
+function vfxChip(doc, i) {
+  const chip = doc.createElement('div');
+  chip.className = 'vfx-chip' + (i === vfxSel ? ' vfx-chip--on' : '') + (vfxDraft[i].disabled ? ' vfx-chip--disabled' : '');
+  chip.dataset.index = String(i);
+  // V5.1.2. The user: a checkbox "right infront of every added VFX so it
+  // can be quickly dis-/enabled without the need to delete or move it to
+  // compare changes". Like everything here it reaches the track with Apply.
+  const on = doc.createElement('input');
+  on.type = 'checkbox';
+  on.className = 'vfx-chip__on';
+  on.checked = !vfxDraft[i].disabled;
+  on.title = t('Switch this VFX on or off');
+  chip.appendChild(on);
+  const name = doc.createElement('span');
+  name.className = 'vfx-chip__name';
+  name.textContent = vfxLabel(i);
+  // The user: "Each added VFX has its own red X right of its name to be
+  // removed individually." V5.1.1: only the X itself is red.
+  const x = doc.createElement('button');
+  x.type = 'button';
+  x.className = 'vfx-chip__x';
+  x.textContent = '×';
+  x.title = t('Remove this VFX');
+  chip.append(name, x);
+  return chip;
+}
+
+/** An added VFX chosen to edit; a preview there was is dropped. */
 function selectVfx(index) {
   if (!vfxDraft || index === vfxSel) return;
-  vfxSel = index;
+  const keep = vfxDraft[index];
+  const dropped = dropVfxPreview();
+  vfxSel = keep ? vfxDraft.indexOf(keep) : -1;
   showVfxDraft();
+  if (dropped) paintVfxStage();
 }
 
 function removeVfx(index) {
@@ -553,7 +923,7 @@ function moveVfx(from, to) {
 // their line"), the button following the pointer from one place to the next.
 vfxChain.addEventListener('pointerdown', (evt) => {
   if (evt.button !== 0 || !vfxDraft) return;
-  if (evt.target.closest && evt.target.closest('.vfx-chip__x')) return;
+  if (evt.target.closest && evt.target.closest('.vfx-chip__x, .vfx-chip__on')) return;
   const chip = evt.target.closest && evt.target.closest('.vfx-chip');
   if (!chip) return;
   let index = Number(chip.dataset.index);
@@ -577,7 +947,9 @@ vfxChain.addEventListener('pointerdown', (evt) => {
     // back and forth under a pointer that is not moving.
     const b = under.getBoundingClientRect();
     const past = to > index ? ev.clientX > b.left + b.width / 2 : ev.clientX < b.left + b.width / 2;
-    const sameRow = Math.abs(b.top - vfxChain.children[index].getBoundingClientRect().top) < b.height / 2;
+    // By its index, since the arrows between the buttons are children too.
+    const own = vfxChain.querySelector('.vfx-chip[data-index="' + index + '"]');
+    const sameRow = !!own && Math.abs(b.top - own.getBoundingClientRect().top) < b.height / 2;
     if (sameRow && !past) return;
     moveVfx(index, to);
     index = vfxDraft.findIndex((v) => v.id === id);
@@ -594,6 +966,20 @@ vfxChain.addEventListener('click', (evt) => {
   removeVfx(Number(x.parentNode.dataset.index));
 });
 
+// V5.1.2. A checkbox switches its VFX off or on without choosing it, so the
+// picture can be compared with and without it while another is edited.
+vfxChain.addEventListener('change', (evt) => {
+  const box = evt.target.closest && evt.target.closest('.vfx-chip__on');
+  if (!box || !vfxDraft) return;
+  const index = Number(box.parentNode.dataset.index);
+  const v = vfxDraft[index];
+  if (!v) return;
+  const { disabled: _was, ...rest } = v;
+  vfxDraft = vfxDraft.map((o, i) => (i === index ? (box.checked ? rest : { ...rest, disabled: true }) : o));
+  showVfxChain();
+  paintVfxStage();
+});
+
 // ---- the chosen VFX: its name and its settings ----
 
 /** Everything the window shows of the draft, the picture apart. */
@@ -602,18 +988,34 @@ function showVfxDraft() {
   showVfxChain();
   const v = vfxCurrent();
   const label = v ? vfxLabel(vfxSel) : '';
-  vfxEditing.textContent = v ? t('Editing {name}', { name: label }) : '';
-  vfxName.textContent = label;
+  // V5.1.1. The user: "While a VFX is only left-clicked once show
+  // "Previewing [vfx_name]" ... instead of "Editing [vfx_name]" and give it
+  // an "Add" button floating right of the "Previewing..." title".
+  const previewing = !!v && v.id === vfxPreviewId;
+  vfxEditing.textContent = !v ? ''
+    : (previewing ? t('Previewing {name}', { name: label }) : t('Editing {name}', { name: label }));
+  vfxPreviewAddBtn.hidden = !previewing;
+  // Under it in a line what the kind does.
+  vfxAbout.textContent = v && VFX_UI[v.kind] && VFX_UI[v.kind].about ? VFX_UI[v.kind].about() : '';
+  markVfxMenu();
   vfxRemoveAllBtn.disabled = !vfxDraft.length;
   buildVfxSettings();
   showVfxSettings(null);
   placeVfxBoxes();
+  // V5.1.1. The line of VFX and the settings in the centre take what room
+  // they need, so the picture's cell can have grown or shrunk.
+  if (vfxStageCell.clientWidth !== parseFloat(vfxStage.style.width)
+    || vfxStageCell.clientHeight !== parseFloat(vfxStage.style.height)) {
+    sizeVfxStage();
+    paintVfxStage();
+  }
 }
 
 /**
  * The settings of the chosen VFX's kind, made from its table row: the ones
- * that are the same the whole clip long first, then a line, then the ones a
- * keyframe holds. Made again only when another VFX is chosen.
+ * that are the same the whole clip long in the centre under its name, the
+ * ones a keyframe holds on the right. Made again only when another VFX is
+ * chosen.
  */
 function buildVfxSettings() {
   const v = vfxCurrent();
@@ -621,6 +1023,7 @@ function buildVfxSettings() {
   if (want === vfxPanelFor) return;
   vfxPanelFor = want;
   vfxFields = [];
+  vfxStatics.replaceChildren();
   vfxSettings.replaceChildren();
   if (!v) return;
   const doc = vfxSettings.ownerDocument;
@@ -640,12 +1043,12 @@ function buildVfxSettings() {
     return box;
   };
   // The user: "show static settings as slightly greenish (like 222, 255,
-  // 222) first with a divider line between changeable settings per keyframe
-  // in white after the divider".
+  // 222)" and the ones per keyframe in white. V5.1.1: "put its constant
+  // settings into the center as well, only leave the per-keyframe settings
+  // sitting on the right", so the column between the two is the divider.
   const fixed = group('vfx-group--static', t('The same for the whole clip'), def.statics, false);
   const keyed = group('vfx-group--keyed', t('Per keyframe'), def.keyed, true);
-  if (fixed) vfxSettings.appendChild(fixed);
-  if (fixed && keyed) vfxSettings.appendChild(make('div', 'vfx-divider'));
+  if (fixed) vfxStatics.appendChild(fixed);
   if (keyed) vfxSettings.appendChild(keyed);
 }
 
@@ -683,6 +1086,71 @@ function vfxField(doc, make, s, text, keyed) {
     });
     return row;
   }
+  if (s.type === 'choice') {
+    // V5.1. One of a few, as buttons like the shapes.
+    row.appendChild(make('div', 'vfx-field__caption', text));
+    const names = VFX_CHOICE_LABELS[s.id] || {};
+    const picks = make('div', 'gen-choice shape-kinds vfx-shapes');
+    for (const option of s.options) {
+      const b = make('button', '', names[option] ? names[option]() : option);
+      b.type = 'button';
+      b.dataset.option = option;
+      b.addEventListener('click', () => change(option));
+      picks.appendChild(b);
+    }
+    row.appendChild(picks);
+    vfxFields.push({
+      s,
+      keyed,
+      show: (value) => {
+        for (const b of picks.children) b.classList.toggle('btn--active', b.dataset.option === value);
+      },
+    });
+    return row;
+  }
+  if (s.type === 'file') {
+    // V5.1. A file of the user's own: its name, and a button that picks one.
+    row.appendChild(make('div', 'vfx-field__caption', text));
+    const line = make('div', 'vfx-field__line');
+    const name = make('span', 'vfx-file__name');
+    const pick = make('button', 'vfx-file__pick', t('Choose File'));
+    pick.type = 'button';
+    line.append(name, pick);
+    row.appendChild(line);
+    pick.addEventListener('click', async () => {
+      const kept = vfxCurrent();
+      const picked = await window.lwclipper.openLut();
+      if (!picked || !picked.ok || !vfxDraft || vfxCurrent() !== kept) return;
+      // Read again from the disk, in case it is one chosen before and changed since.
+      vfxGl.forgetCube(picked.path);
+      change(picked.path);
+    });
+    vfxFields.push({
+      s,
+      keyed,
+      show: (value) => {
+        const file = typeof value === 'string' ? value : '';
+        const state = file ? vfxGl.cube(file).state : '';
+        name.textContent = !file ? t('No file chosen')
+          : (state === 'bad' ? t('This file could not be read as a LUT') : file.split(/[\\/]/).pop());
+        name.title = file;
+        name.classList.toggle('vfx-file__name--bad', state === 'bad');
+      },
+    });
+    return row;
+  }
+  if (s.type === 'color') {
+    // V5.1. A colour, picked in the system's own colour window.
+    const wrap = make('label', 'vfx-field__color');
+    wrap.appendChild(make('span', 'vfx-field__caption', text));
+    const well = make('input', 'vfx-color');
+    well.type = 'color';
+    wrap.appendChild(well);
+    row.appendChild(wrap);
+    well.addEventListener('input', () => change(well.value));
+    vfxFields.push({ s, keyed, show: (value) => { if (well.value !== value) well.value = value; } });
+    return row;
+  }
   // A number: its name, a slider and the figure to type.
   row.appendChild(make('div', 'vfx-field__caption', text));
   const line = make('div', 'vfx-field__line');
@@ -695,7 +1163,7 @@ function vfxField(doc, make, s, text, keyed) {
   box.maxLength = 5;
   line.append(slider, box);
   // A unit's room after every figure, named or not, so the sliders line up.
-  line.appendChild(make('span', 'gen-field__unit', s.of === 'height' ? 'px' : ''));
+  line.appendChild(make('span', 'gen-field__unit', s.of === 'height' ? 'px' : (VFX_SETTING_UNITS[s.id] || '')));
   row.appendChild(line);
   const field = {
     s,
@@ -774,6 +1242,7 @@ vfxRemoveAllBtn.addEventListener('click', () => {
   if (!vfxDraft) return;
   vfxDraft = [];
   vfxSel = -1;
+  vfxPreviewId = null;
   showVfxDraft();
   paintVfxStage();
 });

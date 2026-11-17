@@ -6,8 +6,29 @@ The most important changes since 1.5.5, newest first.
 
 ## 5.x: VFX (2026-11-17)
 
-Current version: 5.0.0.
+Current version: 5.1.2.
 
+- **Switch a VFX off and on (5.1.2).** Each VFX a track has shows a checkbox in front of its name. Untick it and the VFX is off, in the preview and in the export, without removing it or changing its place, so the picture can be compared with and without it; its name is struck through meanwhile. Ticking it again brings it back as it was. Like every change in the window it reaches the track with Apply, is kept with the project and goes along with Copy VFX.
+- **The VFX window, rearranged (5.1.1).**
+  - **Available VFX** is a title of its own with a search under it: type part of a name and only the VFX that match are listed.
+  - The list is tighter, and each entry's **+** is only the sign.
+  - A click on a VFX in the list **previews** it with its defaults, without adding it: the centre says **Previewing [name]** with an **Add** button at its right edge, and its settings can be tried out. Add keeps it as set, its + or a double click adds it too. Clicking another VFX in the list, or one the track already has, drops the preview and what was set in it, and Apply leaves a preview out.
+  - The **Editing [name]** line sits right under the track's VFX, below a dividing line, with what the VFX does under it and its settings for the whole clip (green) under that; only the settings per keyframe (white) stay on the right.
+  - The track's VFX show their order as **[VFX 1 ×] > [VFX 2 ×] > [VFX 3 ×]**, and only the × is red.
+
+- **Many more VFX (5.1).** The VFX window now lists 57 VFX instead of two, under four headings. Each says in a line what it does, in the list when the pointer rests on it and under its name once added.
+  - **Blur and Hide:** Obscure, Pixelate, Directional Blur, Tilt-Shift.
+  - **Color:** Brightness and Contrast, Exposure and Gamma, Levels, Shadows and Highlights, Hue and Saturation, Temperature and Tint, RGB Balance, Black and White, Sepia, Colorize, Duotone, Split Toning, Color Pass (one colour kept, the rest grey), Film Look (twelve looks, from Teal and Orange to Noir), Apply LUT (a .cube file of your own, as colour grading tools write them), Channel Swap, Invert Colors.
+  - **Stylize:** Glow, Dream, Sharpen, Clarity, Vignette, Cinema Bars, Film Grain, Old Film, VHS, Old TV, Comic, Border, Scanlines, RGB Split, Posterize, Threshold, Solarize, Edge Detect, Emboss, Night Vision, Thermal Camera.
+  - **Distort:** Lens Distortion, Bulge, Flip and Mirror, Rotate, Offset, Zoom, Perspective, Wave, Ripple, Swirl, Heat Haze, Shake, Glitch, Tile, Kaleidoscope.
+  - Every new VFX starts on the whole picture and has an area like Obscure and Pixelate, so it can be held to a part of the picture, with a shape, a soft edge or inverted: a Vignette is a soft circle turned round, a colour correction can sit on one face.
+  - Every new VFX has **Mix**: how much of it shows over the picture as it was. Mix changes between keyframes like the other white settings, and a Mix of 0 switches the VFX off, so an effect can fade in and out or be held to a part of the clip.
+  - Almost every figure can change between keyframes: a hue that runs through the rainbow, bars that close in, a lens that bulges and lets go, a picture that scrolls, turns or zooms in. A choice (the look, the palette, the mirror side), a colour and a speed are the same for the whole clip, shown in green like the shape.
+  - Wave, Ripple, Heat Haze, Shake and Glitch move by themselves, at the Speed set, on a still picture too.
+  - Lens Distortion, Bulge, Zoom, Swirl, Ripple and Kaleidoscope act about the middle of their own area: a Zoom in a small circle is a magnifying glass over what the circle is on, and with keyframes on the area the glass travels; a Swirl on a face turns about the face.
+  - **Copy VFX** and **Paste VFX** on a track's right click take a track's VFX to another track, in place of the ones it has: the same look on several clips without making it again on each.
+  - The preview shows what the export writes. Each VFX was compared frame by frame against its own export, also keyed, stacked, on a cropped and scaled track and on a picture with see-through parts. Film Grain, Old Film and VHS have their grain at random, so only its strength is the same; lines one pixel fine (Scanlines, Old TV) come out a little softer in the file, as any video codec leaves them.
+  - VFX on the whole picture export faster than areas do: twelve stacked on six seconds of 1080p took about seven seconds. Bulge and the ten from Zoom to Kaleidoscope are the exception: the export works them out pixel by pixel, at 1080p about 20 frames a second for Zoom and Wave and 8 to 12 for the others.
 - **VFX (5.0).** Obscure and Pixelate are now VFX, with more kinds to follow. A video or image track has a VFX button beside its settings button, green when the track has VFX, and its right click has **Add VFX** or **Edit VFX**. Both open the VFX window: the list of VFX to add on the left, the track's own VFX with the preview and the keyframes in the middle, the chosen VFX's settings on the right.
   - A track can have any number of VFX, also several of one kind (Pixelate, Pixelate (2), and so on). They are processed in the order shown, and dragging one changes the order.
   - Each VFX has one area and keyframes of its own. Position, size, turn, Strength and Soft Edge can all change between keyframes; the shape and Invert are the same for the whole clip. A Strength of 0 switches a VFX off, so keyframes can limit it to a part of the clip.

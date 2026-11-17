@@ -490,12 +490,22 @@ const genDraw = (() => {
       paintShape(ctx, { kind: a.kind, rotation: a.rotation, color: '#ffffffff' },
         maskBox(a, width, height), soft, 0, width, height, on);
     }
-    if (!cover.invert) return;
-    // source-out: white wherever nothing is yet, and what is there taken away
-    // by as much as it covers, which is the same picture the other way round.
+    if (cover.invert) {
+      // source-out: white wherever nothing is yet, and what is there taken away
+      // by as much as it covers, which is the same picture the other way round.
+      ctx.save();
+      ctx.globalCompositeOperation = 'source-out';
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, width, height);
+      ctx.restore();
+    }
+    // V5.1. Mix: all of it taken down alike, so that much of the effect shows
+    // over the picture as it was. A kind without Mix has it whole.
+    const mix = cover.mix === undefined ? 100 : Number(cover.mix);
+    if (mix >= 100 || !Number.isFinite(mix)) return;
     ctx.save();
-    ctx.globalCompositeOperation = 'source-out';
-    ctx.fillStyle = '#ffffff';
+    ctx.globalCompositeOperation = 'destination-in';
+    ctx.fillStyle = 'rgba(0, 0, 0, ' + (Math.round(Math.max(0, mix) * 2.55) / 255) + ')';
     ctx.fillRect(0, 0, width, height);
     ctx.restore();
   }

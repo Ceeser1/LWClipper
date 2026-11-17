@@ -384,13 +384,29 @@ async function exportMask(l, frame) {
 // the picture it touches needs round it over all its figures, and `whole`,
 // whether the filter has to be given the whole picture (composer.js
 // VFX_FILTERS is the other half of each row). A new kind is a new row.
+//
+// V5.1. Every later kind but Tilt-Shift hands over its ops (vfxOps.js), the
+// one row OPS_EXPORT: `ops` is what the encoder's side writes its filters
+// from, and what the preview's shaders are run by. `plain` says the kind may
+// go without a drawing of where it acts when that is all of the picture.
+const OPS_EXPORT = {
+  // A LUT file that is gone, or is no table, is left out: the encoder would
+  // stop at it. exportVfx has read every such file by now.
+  step: (now, H, W) => ({
+    ops: vfxOps.opsOf(now.kind, now, W, H).filter((o) => o.op !== 'lut3d' || vfxGl.cube(o.file).state === 'ok'),
+  }),
+  room: (steps) => ({ margin: Math.max(...steps.map((x) => vfxOps.roomOf(x.ops).margin)), grid: 2 }),
+  whole: (steps) => steps.some((x) => vfxOps.roomOf(x.ops).whole),
+  plain: true,
+};
+const BLUR_EXPORT = {
+  step: (now, H) => ({ sigma: timelineModel.obscureSigma(now.strength, H) }),
+  // A blur needs the pixels beside what it blurs, as far as its widest reaches.
+  room: (steps) => ({ margin: Math.ceil(Math.max(...steps.map((x) => x.sigma)) * 3), grid: 2 }),
+  whole: () => false,
+};
 const VFX_EXPORT = {
-  obscure: {
-    step: (now, H) => ({ sigma: timelineModel.obscureSigma(now.strength, H) }),
-    // A blur needs the pixels beside what it blurs, as far as its widest reaches.
-    room: (steps) => ({ margin: Math.ceil(Math.max(...steps.map((x) => x.sigma)) * 3), grid: 2 }),
-    whole: () => false,
-  },
+  obscure: { ...BLUR_EXPORT },
   pixelate: {
     step: (now, H) => ({ block: timelineModel.pixelateBlock(now.strength, H) }),
     // The blocks are counted from the picture's corner: one size has its part
@@ -398,6 +414,61 @@ const VFX_EXPORT = {
     room: (steps) => ({ margin: 0, grid: steps.length > 1 ? 2 : steps[0].block }),
     whole: (steps) => steps.length > 1,
   },
+  dirblur: { ...OPS_EXPORT },
+  tiltshift: { ...BLUR_EXPORT },
+  brightness: { ...OPS_EXPORT },
+  exposure: { ...OPS_EXPORT },
+  levels: { ...OPS_EXPORT },
+  huesat: { ...OPS_EXPORT },
+  temperature: { ...OPS_EXPORT },
+  rgb: { ...OPS_EXPORT },
+  mono: { ...OPS_EXPORT },
+  sepia: { ...OPS_EXPORT },
+  colorize: { ...OPS_EXPORT },
+  duotone: { ...OPS_EXPORT },
+  colorpass: { ...OPS_EXPORT },
+  look: { ...OPS_EXPORT },
+  invert: { ...OPS_EXPORT },
+  glow: { ...OPS_EXPORT },
+  sharpen: { ...OPS_EXPORT },
+  vignette: { ...OPS_EXPORT },
+  grain: { ...OPS_EXPORT },
+  scanlines: { ...OPS_EXPORT },
+  rgbsplit: { ...OPS_EXPORT },
+  posterize: { ...OPS_EXPORT },
+  threshold: { ...OPS_EXPORT },
+  solarize: { ...OPS_EXPORT },
+  edges: { ...OPS_EXPORT },
+  emboss: { ...OPS_EXPORT },
+  nightvision: { ...OPS_EXPORT },
+  thermal: { ...OPS_EXPORT },
+  lens: { ...OPS_EXPORT },
+  flip: { ...OPS_EXPORT },
+  shadows: { ...OPS_EXPORT },
+  splittone: { ...OPS_EXPORT },
+  channels: { ...OPS_EXPORT },
+  clarity: { ...OPS_EXPORT },
+  dream: { ...OPS_EXPORT },
+  oldfilm: { ...OPS_EXPORT },
+  vhs: { ...OPS_EXPORT },
+  crt: { ...OPS_EXPORT },
+  bars: { ...OPS_EXPORT },
+  offset: { ...OPS_EXPORT },
+  comic: { ...OPS_EXPORT },
+  border: { ...OPS_EXPORT },
+  rotate: { ...OPS_EXPORT },
+  zoom: { ...OPS_EXPORT },
+  wave: { ...OPS_EXPORT },
+  ripple: { ...OPS_EXPORT },
+  swirl: { ...OPS_EXPORT },
+  shake: { ...OPS_EXPORT },
+  glitch: { ...OPS_EXPORT },
+  haze: { ...OPS_EXPORT },
+  tile: { ...OPS_EXPORT },
+  kaleido: { ...OPS_EXPORT },
+  perspective: { ...OPS_EXPORT },
+  bulge: { ...OPS_EXPORT },
+  lut: { ...OPS_EXPORT },
 };
 
 /**
@@ -428,20 +499,27 @@ async function exportVfx(l, frame) {
     const kind = VFX_EXPORT[v.kind];
     const def = timelineModel.vfxKind(v.kind);
     if (!kind || !def || !timelineModel.vfxEverOn(v)) continue;
+    // V5.1. A file a kind works from is read before its figures are asked for.
+    for (const s of def.statics) if (s.type === 'file' && v[s.id]) await vfxGl.cubeReady(v[s.id]);
     const runs = timelineModel.vfxRuns(l, v, fps);
     const live = runs.filter((r) => !r.at.off);
     if (!live.length) continue;
     // Each figure once, with every stretch of frames it holds for.
     const figures = new Map();
     for (const r of live) {
-      const step = kind.step(r.at, H);
+      const step = kind.step(r.at, H, W);
       const key = JSON.stringify(step);
       if (!figures.has(key)) figures.set(key, { ...step, ranges: [] });
-      figures.get(key).ranges.push([r.from, r.to]);
+      // V5.1. Frames one after the other with the same figure are one stretch:
+      // a setting may move without its filter's figure moving.
+      const held = figures.get(key).ranges;
+      const before = held[held.length - 1];
+      if (before && before[1] + 1 === r.from) before[1] = r.to;
+      else held.push([r.from, r.to]);
     }
     const steps = [...figures.values()];
     // The same the whole clip long needs no frames named.
-    if (runs.length === 1) delete steps[0].ranges;
+    if (runs.length === 1 || (steps.length === 1 && live.length === runs.length)) delete steps[0].ranges;
     let on = null;
     if (live.length < runs.length) {
       on = [];
@@ -459,13 +537,28 @@ async function exportVfx(l, frame) {
     const last = moving ? Math.min(total - 1, Math.max(first, Math.ceil(moving.to * fps))) : 0;
     const at = (i) => timelineModel.vfxAt(v, i / fps);
     let region = null;
+    // V5.1. Whether it acts on all of the picture alike on every frame.
+    let flat = true;
     for (let i = first; i <= last; i += 1) {
-      region = genDraw.coverRegionUnion(region, genDraw.coverRegion(at(i), W, H, room));
+      const now = at(i);
+      region = genDraw.coverRegionUnion(region, genDraw.coverRegion(now, W, H, room));
+      if (flat && !timelineModel.vfxCoversAll(now)) flat = false;
     }
     if (!region) continue;
+    const entry = { kind: v.kind, region, steps, on, whole: kind.whole(steps) };
+    // V5.1. One that is all of the picture at full Mix the whole clip long
+    // needs no drawing of where it acts: its filters are put straight on the
+    // picture. Not one that forks the picture and is off for some frames,
+    // which only the laying back can switch off.
+    const forked = steps.some((x) => vfxOps.forksOf(x.ops) > 0);
+    if (kind.plain && flat && !moving && !(at(0).mix < 100) && !(forked && on)) {
+      files.push({ ...entry, full: true });
+      continue;
+    }
     // A picture held to the size every drawn surface is; the encoder scales
-    // it back to the region.
-    const k = Math.min(1, GEN_SURFACE_MAX / Math.max(region.width, region.height));
+    // it back to the region. One that is the same all over is drawn small.
+    const k = flat ? 16 / Math.max(region.width, region.height)
+      : Math.min(1, GEN_SURFACE_MAX / Math.max(region.width, region.height));
     const w = Math.max(2, Math.round(region.width * k));
     const h = Math.max(2, Math.round(region.height * k));
     const ink = new OffscreenCanvas(w, h).getContext('2d');
@@ -484,10 +577,9 @@ async function exportVfx(l, frame) {
       const blob = await new Promise((done) => canvas.toBlob(done, 'image/png'));
       return blob ? new Uint8Array(await blob.arrayBuffer()) : null;
     };
-    const entry = { kind: v.kind, region, steps, on, whole: kind.whole(steps) };
     if (!moving) {
       const now = at(0);
-      const key = JSON.stringify(['vfxmask', now.areas, now.soft, now.invert, W, H, region, w, h]);
+      const key = JSON.stringify(['vfxmask', now.areas, now.soft, now.invert, W, H, region, w, h, now.mix]);
       let saved = await window.lwclipper.genImage(key, null);
       if (saved.ok && !saved.path) {
         const bytes = await png(now);

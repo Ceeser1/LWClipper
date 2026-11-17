@@ -28,6 +28,7 @@ const {
 } = require('./trimmer');
 const geometry = require('./geometry');
 const timeline = require('./timeline');
+const vfxOps = require('./vfxOps');
 const toolPaths = require('./toolPaths');
 const exportWindow = require('./exportWindow');
 const progress = require('./progress');
@@ -348,6 +349,20 @@ function framesOn(ranges, fps) {
 }
 
 // What each kind's filter is for one figure. A new kind is a new row.
+//
+// V5.1. Every later kind but Tilt-Shift is written from its ops (vfxOps.js):
+// `ops: true`, and `format` what its filters work on. The colours are done
+// on red, green and blue, as the preview does them; grain, lines and the
+// one-way blur on the picture's own brightness and colour planes. `straight`
+// is for a picture with an alpha of its own: a colour is changed as it is,
+// not weighed by how much of it shows.
+const RGB_OPS = { format: 'gbrp', ops: true, straight: true };
+const YUV_OPS = { format: 'yuv444p', ops: true, straight: false };
+// The kinds worked out pixel by pixel (a warp): on the picture as it comes,
+// 4:2:0, where the two colour planes are a quarter of the size and the whole
+// costs half of what it does at 4:4:4 (measured: a wave on 1080p 71 ms a
+// frame at 4:4:4, 37 at 4:2:0).
+const OWN_OPS = { format: 'yuv420p', ops: true, straight: false };
 const VFX_FILTERS = {
   obscure: {
     // The blur is made at 4:4:4, see above.
@@ -361,13 +376,80 @@ const VFX_FILTERS = {
       return 'pixelize=w=' + block + ':h=' + block;
     },
   },
+  dirblur: { ...YUV_OPS },
+  tiltshift: {
+    format: 'yuv444p',
+    filter: (step) => 'gblur=sigma=' + fixed(Math.min(1024, Math.max(0.1, Number(step.sigma) || 0.1))) + ':steps=6',
+  },
+  brightness: { ...RGB_OPS },
+  exposure: { ...RGB_OPS },
+  levels: { ...RGB_OPS },
+  huesat: { ...RGB_OPS },
+  temperature: { ...RGB_OPS },
+  rgb: { ...RGB_OPS },
+  mono: { ...RGB_OPS },
+  sepia: { ...RGB_OPS },
+  colorize: { ...RGB_OPS },
+  duotone: { ...RGB_OPS },
+  colorpass: { ...RGB_OPS },
+  look: { ...RGB_OPS },
+  invert: { ...RGB_OPS },
+  glow: { ...RGB_OPS },
+  sharpen: { ...RGB_OPS },
+  vignette: { ...RGB_OPS },
+  grain: { ...YUV_OPS },
+  scanlines: { ...YUV_OPS },
+  rgbsplit: { ...RGB_OPS },
+  posterize: { ...RGB_OPS },
+  threshold: { ...RGB_OPS },
+  solarize: { ...RGB_OPS },
+  edges: { ...RGB_OPS },
+  emboss: { ...RGB_OPS },
+  nightvision: { ...RGB_OPS },
+  thermal: { ...RGB_OPS },
+  lens: { ...RGB_OPS },
+  flip: { ...RGB_OPS },
+  shadows: { ...RGB_OPS },
+  splittone: { ...RGB_OPS },
+  channels: { ...RGB_OPS },
+  clarity: { ...RGB_OPS },
+  dream: { ...RGB_OPS },
+  oldfilm: { ...RGB_OPS },
+  vhs: { ...RGB_OPS },
+  crt: { ...RGB_OPS },
+  bars: { ...YUV_OPS },
+  offset: { ...RGB_OPS },
+  comic: { ...RGB_OPS },
+  border: { ...RGB_OPS },
+  rotate: { ...RGB_OPS },
+  zoom: { ...OWN_OPS },
+  wave: { ...OWN_OPS },
+  ripple: { ...OWN_OPS },
+  swirl: { ...OWN_OPS },
+  shake: { ...OWN_OPS },
+  glitch: { ...OWN_OPS },
+  haze: { ...OWN_OPS },
+  tile: { ...YUV_OPS },
+  kaleido: { ...OWN_OPS },
+  perspective: { ...OWN_OPS },
+  bulge: { ...OWN_OPS },
+  lut: { ...RGB_OPS },
 };
 
-/** A VFX's filters, one behind the other, each on for the frames its step names. */
-function vfxFilters(f, fps) {
+/**
+ * A VFX's filters, one behind the other, each on for the frames its step
+ * names. V5.1. `tag` names the labels of a kind that forks the picture
+ * inside itself; `forks` is how many times it does.
+ */
+function vfxFilterGraph(f, fps, tag, alpha = false) {
   const kind = VFX_FILTERS[f.kind];
   const steps = Array.isArray(f.steps) && f.steps.length ? f.steps : [f];
-  return steps.map((step) => kind.filter(step) + framesOn(step.ranges, fps)).join(',');
+  if (kind.ops) return vfxOps.filtersOf(steps, (ranges) => framesOn(ranges, fps), tag, alpha);
+  return { text: steps.map((step) => kind.filter(step) + framesOn(step.ranges, fps)).join(','), forks: 0 };
+}
+
+function vfxFilters(f, fps) {
+  return vfxFilterGraph(f, fps, 'x').text;
 }
 
 /**
@@ -384,7 +466,9 @@ function vfxHead(graph, l, n, input, fps, inputs, source, pre = null) {
     .map((f, i) => ({ ...f, input: inputs && inputs[i] }))
     .filter((f) => {
       const r = f.region;
-      if (f.input === undefined || !r || !VFX_FILTERS[f.kind]) return false;
+      if ((f.input === undefined && !f.full) || !r || !VFX_FILTERS[f.kind]) return false;
+      // One written from its ops with none to write changes nothing.
+      if (VFX_FILTERS[f.kind].ops && !vfxFilterGraph(f, fps, 'x').text) return false;
       const whole = [r.x, r.y, r.width, r.height].every((v) => Number.isInteger(v) && v >= 0);
       if (!whole || r.width < 2 || r.height < 2) return false;
       // Never past a source this module knows the size of.
@@ -397,13 +481,48 @@ function vfxHead(graph, l, n, input, fps, inputs, source, pre = null) {
   const head = plain + chain(['fps=' + fps, 'format=' + (alpha ? 'yuva420p' : 'yuv420p')]) + '[' + cur + ']';
   const blended = alpha && source && source.width > 0 && source.height > 0;
   // Each VFX's own part of the graph, kept apart so they can be shared out.
+  // V5.1. `weights`: how many times each forks the picture, which is what
+  // the sharing out goes by.
   const steps = [];
+  const weights = [];
+  // V5.1. The planes the picture is in as it stands, 4:2:0 to begin with. A
+  // change to other planes and back is always written with the scaler told
+  // to round (vfxOps.TO_PLANES), never left to the encoder to put in.
+  const base = alpha ? 'yuva420p' : 'yuv420p';
+  let held = base;
+  const planes = (to) => (to === 'rgb' ? (alpha ? 'gbrap' : 'gbrp') : (alpha ? 'yuva444p' : 'yuv444p'));
+  const into = (to) => (held === to ? [] : [vfxOps.TO_PLANES, 'format=' + to]);
   files.forEach((f, i) => {
     const step = [];
     steps.push(step);
     const r = f.region;
     const t = 'cv' + n + 'x' + i;
-    const filters = vfxFilters(f, fps);
+    const made = vfxFilterGraph(f, fps, t, alpha);
+    const filters = made.text;
+    const row = VFX_FILTERS[f.kind];
+    if (f.full) {
+      // V5.1. All of the picture, the whole clip long: its filters straight
+      // on it, with no cutting out and no laying back. Left in the planes its
+      // filters work on: brought back to 4:2:0 after each, the colour lost a
+      // little every time, and five in a row read 3.6 of 255 off the preview
+      // where one reads 0.9 (measured). It goes back once, after the last.
+      weights.push(made.forks);
+      const on = row.format === 'yuv420p' ? base : planes(row.format === 'gbrp' ? 'rgb' : 'yuv');
+      const lead = alpha && !row.straight ? ['premultiply=inplace=1'] : [];
+      const tail = alpha && !row.straight ? ['unpremultiply=inplace=1'] : [];
+      step.push('[' + cur + ']' + chain([...into(on), ...lead, filters, ...tail]) + '[' + t + 'o]');
+      cur = t + 'o';
+      held = made.ends ? planes(made.ends) : on;
+      return;
+    }
+    weights.push(1 + made.forks);
+    // One cut out and laid back starts from 4:2:0 again.
+    const back = held === base ? '' : chain(into(base)) + ',';
+    held = base;
+    // What its filters leave it in: red, green and blue for a kind that works
+    // on those, unless its ops end on the other planes.
+    const rgb = !!row.ops && row.format === 'gbrp';
+    const endsRgb = made.ends ? made.ends === 'rgb' : rgb;
     // V4.8. Where it acts as one PNG, or with an area that moves as the frames
     // of the stretch where it does, held at either end like a moving mask's.
     // Both this and the picture count from the clip's first frame here, the
@@ -414,7 +533,7 @@ function vfxHead(graph, l, n, input, fps, inputs, source, pre = null) {
       ? [holdFrames(f.frames, fps), 'fps=' + fps, 'format=gray', 'scale=' + r.width + ':' + r.height]
       : ['format=gray', 'scale=' + r.width + ':' + r.height, holdStill(l.duration), 'fps=' + fps]);
     if (blended) {
-      step.push('[' + cur + ']format=yuva444p,split[' + t + 'a][' + t + 'b]');
+      step.push('[' + cur + ']' + back + 'format=yuva444p,split[' + t + 'a][' + t + 'b]');
       // V4.8. Premultiplied round the filter, as the preview's canvas is: a
       // blur or a block that takes in both solid and see-through pixels must
       // weigh each colour by how much of it shows. Filtered plane by plane,
@@ -422,7 +541,15 @@ function vfxHead(graph, l, n, input, fps, inputs, source, pre = null) {
       // through at full weight (measured on a PNG half solid and half at 35%:
       // a blurred edge up to 44 of 255 off the preview, 12 this way; a block
       // across that edge 23 off, 6 this way).
-      step.push('[' + t + 'b]premultiply=inplace=1,' + filters + ',unpremultiply=inplace=1[' + t + 'c]');
+      // V5.1. A kind that changes colours does it on red, green and blue, and
+      // on the colours as they are.
+      step.push('[' + t + 'b]' + chain([
+        ...(rgb ? [vfxOps.TO_PLANES, 'format=gbrap'] : []),
+        row.straight ? null : 'premultiply=inplace=1',
+        filters,
+        row.straight ? null : 'unpremultiply=inplace=1',
+        ...(endsRgb ? [vfxOps.TO_PLANES, 'format=yuva444p'] : []),
+      ]) + '[' + t + 'c]');
       step.push(where + ',pad=' + Math.round(source.width) + ':' + Math.round(source.height) + ':' + r.x + ':' + r.y
         + ':black,mergeplanes=0x00000000:yuva444p[' + t + 'm]');
       step.push('[' + t + 'a][' + t + 'c][' + t + 'm]maskedmerge,format=yuva420p[' + t + 'o]');
@@ -431,26 +558,46 @@ function vfxHead(graph, l, n, input, fps, inputs, source, pre = null) {
     }
     const cut = 'crop=' + r.width + ':' + r.height + ':' + r.x + ':' + r.y;
     const format = VFX_FILTERS[f.kind].format;
-    step.push('[' + cur + ']split[' + t + 'a][' + t + 'b]');
+    step.push('[' + cur + ']' + back + 'split[' + t + 'a][' + t + 'b]');
+    // V5.1. To red, green and blue and back with the scaler told to round;
+    // the first two kinds' own planes need no such change and are as they were.
+    const to = rgb ? [vfxOps.TO_PLANES, 'format=gbrp'] : [format ? 'format=' + format : null];
+    const from = endsRgb ? [vfxOps.TO_PLANES, 'format=yuv444p'] : [];
     step.push('[' + t + 'b]' + (f.whole
-      ? chain([format ? 'format=' + format : null, filters, cut])
-      : chain([cut, format ? 'format=' + format : null, filters])) + '[' + t + 'c]');
+      ? chain([...to, filters, ...from, cut])
+      : chain([cut, ...to, filters, ...from])) + '[' + t + 'c]');
     step.push(where + '[' + t + 'm]');
     step.push('[' + t + 'c][' + t + 'm]alphamerge[' + t + 'h]');
     step.push('[' + t + 'a][' + t + 'h]overlay=x=' + r.x + ':y=' + r.y + ':format=yuv420'
       + framesOn(f.on, fps) + '[' + t + 'o]');
     cur = t + 'o';
   });
-  if (!pre || steps.length <= VFX_INLINE_MAX) {
+  if (held !== base) {
+    steps[steps.length - 1].push('[' + cur + ']' + chain(into(base)) + '[' + cur + 'z]');
+    cur += 'z';
+  }
+  // V5.1. Counted by how often the picture is forked, not by how many VFX
+  // there are: one put straight on the picture forks nothing, a glow forks
+  // twice.
+  const total = weights.reduce((sum, x) => sum + x, 0);
+  if (!pre || total <= VFX_INLINE_MAX) {
     graph.push(head, ...steps.flat());
     return '[' + cur + ']';
   }
   // A few to a graph, the first with the layer's input, the layer's own graph
   // taking the last one's label as it would have taken the input.
-  for (let i = 0; i < steps.length; i += VFX_PER_GRAPH) {
-    const part = steps.slice(i, i + VFX_PER_GRAPH).flat();
-    pre.push((i === 0 ? [head, ...part] : part).join(';'));
-  }
+  let part = [head];
+  let load = 0;
+  steps.forEach((step, i) => {
+    if (load > 0 && load + weights[i] > VFX_PER_GRAPH) {
+      pre.push(part.join(';'));
+      part = [];
+      load = 0;
+    }
+    part.push(...step);
+    load += weights[i];
+  });
+  if (part.length) pre.push(part.join(';'));
   return '[' + cur + ']';
 }
 
@@ -842,6 +989,8 @@ function buildComposeArgs({
     vfxInputsOf.set(l.id, l.vfxFiles.map((f) => {
       // V4.8. One whose area moves comes as numbered frames, like a moving mask.
       const frames = f && f.frames && f.frames.pattern ? f.frames : null;
+      // V5.1. One that is all of the picture has no drawing of where it acts.
+      if (f && f.full) return undefined;
       if (!f || (!f.src && !frames)) return undefined;
       inputs.push(null);
       if (frames) args.push('-framerate', String(fps), '-start_number', '0', '-i', frames.pattern);

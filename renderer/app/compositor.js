@@ -694,6 +694,7 @@ function maskedPicture(layer, el, from, d, at, src = null, matte = null, win = n
   p.globalCompositeOperation = 'source-over';
   p.clearRect(0, 0, w, h);
   p.drawImage(el, ...from, 0, 0, w, h);
+  vfxDrawnAt = at - layer.start;
   layVfx(p, effects, el, src, w, h);
   if (cut) {
     const m = maskedSurface(1, w, h);
@@ -762,18 +763,138 @@ function shownKeysFor(layer, source, frame) {
 // Pixelate is the source drawn small, one pixel to a block, and back up
 // without smoothing; the blocks are counted from the source's corner as the
 // encoder counts them, so a crop does not shift the grid.
-const VFX_PREVIEW = {
-  obscure: {
-    room: (v, H) => ({ margin: Math.ceil(timelineModel.obscureSigma(v.strength, H) * 3) }),
-    draw: (e, p, v, el, src, w, h) => coverBlur(e, p, el, src, w, h,
-      timelineModel.obscureSigma(v.strength, src.H) * (h / src.h)),
+//
+// V5.1. Every later kind but Tilt-Shift is drawn from its ops (vfxOps.js) by
+// the graphics card (vfxGl.js), the one row OPS_PREVIEW for all of them: what
+// a kind does is written once, there, for this and for the export. Tilt-Shift
+// is Obscure's blur with another start.
+const OPS_PREVIEW = {
+  room: (v, H) => {
+    const room = vfxOps.roomOf(vfxOps.opsOf(v.kind, v, Math.round(H * 16 / 9), H));
+    // One worked out of the whole picture reads all of it.
+    return { margin: room.whole ? 1e9 : room.margin };
   },
+  draw: (e, p, v, el, src, w, h) => drawVfxOps(e, p, v, el, src, w, h),
+};
+const BLUR_PREVIEW = {
+  room: (v, H) => ({ margin: Math.ceil(timelineModel.obscureSigma(v.strength, H) * 3) }),
+  draw: (e, p, v, el, src, w, h) => coverBlur(e, p, el, src, w, h,
+    timelineModel.obscureSigma(v.strength, src.H) * (h / src.h)),
+};
+const VFX_PREVIEW = {
+  obscure: { ...BLUR_PREVIEW },
   pixelate: {
     room: (v, H) => ({ grid: timelineModel.pixelateBlock(v.strength, H) }),
     draw: (e, p, v, el, src, w, h) => coverBlocks(e, el, src, w / src.w, h / src.h,
       timelineModel.pixelateBlock(v.strength, src.H)),
   },
+  dirblur: { ...OPS_PREVIEW },
+  tiltshift: { ...BLUR_PREVIEW },
+  brightness: { ...OPS_PREVIEW },
+  exposure: { ...OPS_PREVIEW },
+  levels: { ...OPS_PREVIEW },
+  huesat: { ...OPS_PREVIEW },
+  temperature: { ...OPS_PREVIEW },
+  rgb: { ...OPS_PREVIEW },
+  mono: { ...OPS_PREVIEW },
+  sepia: { ...OPS_PREVIEW },
+  colorize: { ...OPS_PREVIEW },
+  duotone: { ...OPS_PREVIEW },
+  colorpass: { ...OPS_PREVIEW },
+  look: { ...OPS_PREVIEW },
+  invert: { ...OPS_PREVIEW },
+  glow: { ...OPS_PREVIEW },
+  sharpen: { ...OPS_PREVIEW },
+  vignette: { ...OPS_PREVIEW },
+  grain: { ...OPS_PREVIEW },
+  scanlines: { ...OPS_PREVIEW },
+  rgbsplit: { ...OPS_PREVIEW },
+  posterize: { ...OPS_PREVIEW },
+  threshold: { ...OPS_PREVIEW },
+  solarize: { ...OPS_PREVIEW },
+  edges: { ...OPS_PREVIEW },
+  emboss: { ...OPS_PREVIEW },
+  nightvision: { ...OPS_PREVIEW },
+  thermal: { ...OPS_PREVIEW },
+  lens: { ...OPS_PREVIEW },
+  flip: { ...OPS_PREVIEW },
+  shadows: { ...OPS_PREVIEW },
+  splittone: { ...OPS_PREVIEW },
+  channels: { ...OPS_PREVIEW },
+  clarity: { ...OPS_PREVIEW },
+  dream: { ...OPS_PREVIEW },
+  oldfilm: { ...OPS_PREVIEW },
+  vhs: { ...OPS_PREVIEW },
+  crt: { ...OPS_PREVIEW },
+  bars: { ...OPS_PREVIEW },
+  offset: { ...OPS_PREVIEW },
+  comic: { ...OPS_PREVIEW },
+  border: { ...OPS_PREVIEW },
+  rotate: { ...OPS_PREVIEW },
+  zoom: { ...OPS_PREVIEW },
+  wave: { ...OPS_PREVIEW },
+  ripple: { ...OPS_PREVIEW },
+  swirl: { ...OPS_PREVIEW },
+  shake: { ...OPS_PREVIEW },
+  glitch: { ...OPS_PREVIEW },
+  haze: { ...OPS_PREVIEW },
+  tile: { ...OPS_PREVIEW },
+  kaleido: { ...OPS_PREVIEW },
+  perspective: { ...OPS_PREVIEW },
+  bulge: { ...OPS_PREVIEW },
+  lut: { ...OPS_PREVIEW },
 };
+
+// The moment maskedPicture is drawing, in the clip's own seconds, for a kind
+// whose picture changes by the frame with no setting changing (grain, and
+// the ones that move by themselves: a wave, a shake).
+let vfxDrawnAt = 0;
+
+/**
+ * V5.1. The picture with a kind's ops on all of it, onto `e`. What the ops
+ * read beside the part shown is taken along: the source round the crop as far
+ * as they reach, or all of the source for one worked out of the whole
+ * picture, drawn at the size the part is shown. Read from `el`, the file's
+ * picture or the underlay with earlier VFX on it, as the other kinds do.
+ */
+function drawVfxOps(e, p, v, el, src, w, h) {
+  const ops = vfxOps.opsOf(v.kind, v, src.W, src.H);
+  const room = vfxOps.roomOf(ops);
+  const kx = w / src.w;
+  const ky = h / src.h;
+  // How far the source goes on past each edge of the part shown, in pixels here.
+  const has = {
+    l: Math.max(0, Math.round(src.x * kx)),
+    t: Math.max(0, Math.round(src.y * ky)),
+    r: Math.max(0, Math.round((src.W - src.x - src.w) * kx)),
+    b: Math.max(0, Math.round((src.H - src.y - src.h) * ky)),
+  };
+  const want = room.whole ? Infinity : (room.margin ? Math.ceil(room.margin * Math.max(kx, ky)) + 1 : 0);
+  const pad = { l: Math.min(has.l, want), t: Math.min(has.t, want), r: Math.min(has.r, want), b: Math.min(has.b, want) };
+  const fw = w + pad.l + pad.r;
+  const fh = h + pad.t + pad.b;
+  const x = maskedSurface(3, fw, fh);
+  x.setTransform(1, 0, 0, 1, 0, 0);
+  x.globalCompositeOperation = 'source-over';
+  x.filter = 'none';
+  x.imageSmoothingEnabled = true;
+  x.clearRect(0, 0, fw, fh);
+  const sx = Math.max(0, src.x - pad.l / kx);
+  const sy = Math.max(0, src.y - pad.t / ky);
+  const sw = Math.min(src.W - sx, fw / kx);
+  const sh = Math.min(src.H - sy, fh / ky);
+  x.drawImage(el, sx * src.ex, sy * src.ey, sw * src.ex, sh * src.ey, 0, 0, fw, fh);
+  const out = vfxGl.run(x.canvas, {
+    scale: [kx, ky],
+    pic: [pad.l - src.x * kx, pad.t - src.y * ky, src.W * kx, src.H * ky],
+    time: vfxDrawnAt,
+  }, vfxGl.passesOf(ops, kx, ky));
+  if (!out) {
+    e.drawImage(x.canvas, pad.l, pad.t, w, h, 0, 0, w, h);
+    return;
+  }
+  e.drawImage(out, pad.l, pad.t, w, h, 0, 0, w, h);
+}
 
 /**
  * One VFX laid on the picture `p`: the effect made of the whole picture and
@@ -792,6 +913,14 @@ function layCover(p, v, el, src, w, h) {
   e.filter = 'none';
   e.clearRect(0, 0, w, h);
   VFX_PREVIEW[v.kind].draw(e, p, v, el, src, w, h);
+  // V5.1. One that acts on all of the picture at full Mix is the picture
+  // from here on: nothing of where it acts to draw, nothing to blend.
+  if (timelineModel.vfxCoversAll(v) && !(v.mix < 100)) {
+    p.globalCompositeOperation = 'copy';
+    p.drawImage(e.canvas, 0, 0);
+    p.globalCompositeOperation = 'source-over';
+    return;
+  }
   const m = maskedSurface(1, w, h);
   m.setTransform(1, 0, 0, 1, 0, 0);
   m.clearRect(0, 0, w, h);
@@ -832,6 +961,19 @@ function layVfx(p, list, el, src, w, h) {
   const parts = list.map((v) => genDraw.coverRegion(v, src.W, src.H, VFX_PREVIEW[v.kind].room(v, src.H)));
   const meet = (a, b) => !!a && !!b
     && !(a.x >= b.x + b.width || b.x >= a.x + a.width || a.y >= b.y + b.height || b.y >= a.y + a.height);
+  // V5.1. A picture shown whole is its own underlay: each VFX reads what is
+  // on it by then and is laid on once. Only a cropped one needs the whole
+  // source kept on the side, below.
+  if (src.x === 0 && src.y === 0 && src.w === src.W && src.h === src.H) {
+    let laid = false;
+    list.forEach((v, i) => {
+      if (!parts[i]) return;
+      if (laid) layCover(p, v, p.canvas, { ...src, ex: w / src.W, ey: h / src.H }, w, h);
+      else layCover(p, v, el, src, w, h);
+      laid = true;
+    });
+    return;
+  }
   let under = null;
   const onUnder = [];
   list.forEach((v, i) => {
@@ -2085,7 +2227,9 @@ function compositeDrawDue() {
 function layerMovesAt(l, at) {
   if (timelineModel.keyframesFor(l).length > 1) return true;
   if (timelineModel.transitionAt(l, at)) return true;
-  if (timelineModel.vfxList(l).some((v) => timelineModel.vfxMoves(v))) return true;
+  // V5.1. Or one that moves by itself: a wave on a still picture has no next
+  // picture of the file to be drawn for.
+  if (timelineModel.vfxList(l).some((v) => timelineModel.vfxMoves(v) || timelineModel.vfxMovesAlone(v))) return true;
   const next = at + 1 / projectFrame().fps;
   return timelineModel.layerAlphaAt(l, at) !== timelineModel.layerAlphaAt(l, next);
 }

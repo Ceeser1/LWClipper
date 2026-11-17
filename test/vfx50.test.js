@@ -57,8 +57,9 @@ function graphsOf(args) {
 // ---- the table of kinds ----
 
 test('every kind says what its settings are, which are its own and which a keyframe holds', () => {
-  assert.deepEqual(T.VFX_KIND_IDS, ['obscure', 'pixelate']);
-  for (const kind of T.VFX_KIND_IDS) {
+  // V5.1 put more kinds after the first two (test/vfx51.test.js).
+  assert.deepEqual(T.VFX_KIND_IDS.slice(0, 2), ['obscure', 'pixelate']);
+  for (const kind of ['obscure', 'pixelate']) {
     const def = T.vfxKind(kind);
     assert.equal(def.area, true);
     // The user: the settings that cannot blend between keyframes are the VFX's own.
@@ -685,7 +686,7 @@ test('the preview and the export cut each VFX with the one drawing, as it is at 
   assert.ok(comp.includes('.filter((v) => !v.off && VFX_PREVIEW[v.kind])'), 'one that is off is not drawn');
   assert.ok(exp.includes('timelineModel.vfxAt(v, i / fps)'), 'each frame the moment at its start');
   assert.ok(exp.includes('timelineModel.vfxRuns(l, v, fps)'), 'and the figure by the same frames');
-  assert.ok(exp.includes('genDraw.coverRegionUnion(region, genDraw.coverRegion(at(i), W, H, room))'));
+  assert.ok(exp.includes('genDraw.coverRegionUnion(region, genDraw.coverRegion(now, W, H, room))'));
   // The two figures come from the model both times.
   for (const text of [comp, exp]) {
     assert.ok(text.includes('timelineModel.obscureSigma(') && text.includes('timelineModel.pixelateBlock('));
@@ -747,13 +748,17 @@ test('a track has the VFX button left of its settings button, lit when it has VF
 
 test('the window has its three parts, and the buttons under all of them', () => {
   const modal = HTML.slice(HTML.indexOf('<div id="vfxModal"'), HTML.indexOf('<div id="textGradModal"'));
-  for (const id of ['vfxTitle', 'vfxMenu', 'vfxChain', 'vfxEditing', 'vfxStageCell', 'vfxStage', 'vfxCanvas', 'vfxOthers',
-    'vfxBoxEl', 'vfxRotor', 'vfxAngle', 'vfxKeys', 'vfxKeysReadout', 'vfxKeysCanvas', 'vfxName', 'vfxSettings',
+  for (const id of ['vfxTitle', 'vfxMenuSearch', 'vfxMenu', 'vfxChain', 'vfxEditing', 'vfxPreviewAddBtn', 'vfxAbout',
+    'vfxStatics', 'vfxStageCell', 'vfxStage', 'vfxCanvas', 'vfxOthers',
+    'vfxBoxEl', 'vfxRotor', 'vfxAngle', 'vfxKeys', 'vfxKeysReadout', 'vfxKeysCanvas', 'vfxSettings',
     'vfxRemoveAllBtn', 'vfxCancelBtn', 'vfxApplyBtn']) {
     assert.ok(modal.includes('id="' + id + '"'), id);
   }
-  // Left, centre, right, in that order; in the centre the list, the line, the picture, the keyframes.
-  const order = ['id="vfxMenu"', 'id="vfxChain"', 'id="vfxEditing"', 'id="vfxStage"', 'id="vfxKeys"', 'id="vfxName"', 'id="vfxSettings"', 'id="vfxRemoveAllBtn"'];
+  // Left, centre, right, in that order. On the left the search over the
+  // list; in the centre the VFX, the line with Add right of it, what the kind
+  // does, the settings for the whole clip, the picture, the keyframes (V5.1.1).
+  const order = ['id="vfxMenuSearch"', 'id="vfxMenu"', 'id="vfxChain"', 'id="vfxEditing"', 'id="vfxPreviewAddBtn"', 'id="vfxAbout"',
+    'id="vfxStatics"', 'id="vfxStage"', 'id="vfxKeys"', 'id="vfxSettings"', 'id="vfxRemoveAllBtn"'];
   const places = order.map((o) => modal.indexOf(o));
   assert.deepEqual(places, places.slice().sort((a, b) => a - b));
   // Remove all VFX on the left, Cancel in the middle, Apply on the right.
@@ -769,7 +774,7 @@ test('the window has its three parts, and the buttons under all of them', () => 
   assert.equal(fs.existsSync(path.join(ROOT, 'renderer', 'app', 'cover.js')), false);
 });
 
-test('the three parts are a quarter, a half and a quarter, and the centre a fifth, a tenth, a half and a fifth', () => {
+test('the three parts are a quarter, a half and a quarter, and the picture has what the centre leaves', () => {
   const css = read('renderer', 'style.css');
   const rule = (sel) => {
     const at = css.indexOf('\n' + sel + ' {');
@@ -777,27 +782,37 @@ test('the three parts are a quarter, a half and a quarter, and the centre a fift
     return css.slice(at, css.indexOf('}', at));
   };
   assert.ok(rule('.vfx-body').includes('grid-template-columns: 25% 50% 25%;'));
-  assert.ok(rule('.vfx-center').includes('grid-template-rows: 20% 10% 50% 20%;'));
-  assert.ok(rule('.vfx-side').includes('grid-template-rows: 20% 80%;'));
+  // V5.1.1. The title moved up: the VFX, the line and the settings for the
+  // whole clip take what they need, the picture the rest.
+  assert.ok(rule('.vfx-center').includes('flex-direction: column;'));
+  for (const sel of ['.vfx-chain', '.vfx-head', '.vfx-statics', '.vfx-keys-cell']) assert.ok(rule(sel).includes('flex: none;'), sel);
+  assert.ok(rule('.vfx-stage-cell').includes('flex: 1 1 0;'));
+  assert.ok(rule('.vfx-statics').includes('overflow-y: auto;'));
   assert.ok(rule('.vfx-menu__list').includes('overflow-y: auto;'));
   assert.ok(rule('.vfx-settings').includes('overflow-y: auto;'));
   // The user: static settings "slightly greenish (like 222, 255, 222)", the keyed ones white.
   assert.ok(/\.vfx-group--static[^{]*\{\s*color: rgb\(222, 255, 222\);/.test(css));
   assert.ok(/\.vfx-group--keyed[^{]*\{\s*color: #ffffff;/.test(css));
-  assert.ok(css.includes('.vfx-divider {'));
+  // The + and the X are only their glyphs, the X alone red.
+  assert.ok(rule('button.vfx-menu__add').includes('background: none;'));
+  assert.ok(rule('button.vfx-chip__x').includes('background: none;'));
+  // Rows that are display: flex hide only by a rule of their own.
+  assert.ok(css.includes('.vfx-menu__row[hidden],'));
 });
 
 test('the window is made from the table: the menu, the settings in their two groups, the keyframes', () => {
   const js = read('renderer', 'app', 'vfx.js');
   assert.ok(js.includes("popOut(vfxModal, 'vfx'"), 'an editor window of its own');
   assert.ok(js.includes('noDock: true'), 'which does not dock');
-  assert.ok(js.includes('timelineModel.VFX_KIND_IDS.filter((kind) => VFX_UI[kind])'), 'the menu is every kind there is');
-  // A click on a row does nothing; its + adds, or a double click.
+  assert.ok(js.includes('const rest = timelineModel.VFX_KIND_IDS.filter((kind) => !listed.has(kind));'), 'the menu is every kind there is');
+  // V5.1.1. A click on a row previews it; its + adds, or a double click.
   assert.ok(js.includes("vfxMenu.addEventListener('dblclick'"));
-  assert.ok(/vfxMenu\.addEventListener\('click', \(evt\) => \{\s*const add = evt\.target\.closest && evt\.target\.closest\('\.vfx-menu__add'\);\s*if \(add\) addVfx\(/.test(js));
-  // The statics first, a line, then the keyed ones.
-  assert.ok(js.indexOf("group('vfx-group--static'") < js.indexOf("make('div', 'vfx-divider')"));
-  assert.ok(js.indexOf("make('div', 'vfx-divider')") < js.indexOf('if (keyed) vfxSettings.appendChild(keyed);'));
+  assert.ok(/vfxMenu\.addEventListener\('click', \(evt\) => \{\s*const add = evt\.target\.closest && evt\.target\.closest\('\.vfx-menu__add'\);\s*if \(add\) \{\s*addVfx\(/.test(js));
+  assert.ok(js.includes('if (row) previewVfx(row.dataset.kind);'));
+  assert.ok(js.includes("vfxPreviewAddBtn.addEventListener('click', keepVfxPreview);"));
+  // The statics in the centre, the keyed ones on the right.
+  assert.ok(js.includes('if (fixed) vfxStatics.appendChild(fixed);'));
+  assert.ok(js.includes('if (keyed) vfxSettings.appendChild(keyed);'));
   assert.ok(js.includes("group('vfx-group--static', t('The same for the whole clip'), def.statics, false)"));
   assert.ok(js.includes("group('vfx-group--keyed', t('Per keyframe'), def.keyed, true)"));
   assert.ok(js.includes('makeKeyStrip(vfxKeys, vfxKeysReadout, vfxKeysCanvas, {'));
@@ -817,6 +832,8 @@ test('Apply writes the whole list as one step, and only when it changed anything
   const js = read('renderer', 'app', 'vfx.js');
   const apply = js.slice(js.indexOf('function applyVfx()'), js.indexOf('function previewVfxDraft()'));
   assert.ok(apply.includes('setLayers(timelineModel.setLayer(layers, id, { vfx: list }));'));
+  // V5.1.1. A VFX only previewed was never added and stays off the track.
+  assert.ok(apply.includes('vfxListOfDraft(vfxDraft.filter((v) => v.id !== vfxPreviewId))'));
   assert.equal((apply.match(/commitHistory\(\)/g) || []).length, 1, 'one undo step, however much was changed');
   assert.ok(apply.indexOf('if (!changed) return;') < apply.indexOf('setLayers('));
   // Nothing else in the window writes to the track.

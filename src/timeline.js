@@ -550,6 +550,145 @@ const timelineModel = (() => {
     { id: 'invert', type: 'check', def: false },
   ];
   const VFX_SOFT = { id: 'soft', type: 'number', min: 0, max: 0.5, def: 0, of: 'height', in: 'mask' };
+
+  // V5.1. The kinds after the first two. The user, 2026-11-17: "create many
+  // more selectable vfx effects", "Some settings stay static, most should be
+  // changeable/animatable using keyframes".
+  //
+  // More sorts of setting, all a VFX's own (they cannot blend): 'choice', one
+  // of `options`; 'color', a colour as '#rrggbb'; 'file', a file's path, empty
+  // for none; and a plain number where a figure cannot blend (a speed).
+  //
+  // Every one of these kinds has an area like the first two, so any of them
+  // can be held to a part of the picture, with a soft edge, or to all but a
+  // part. A new one starts on the whole picture (`fill`). And every one has
+  // Mix, 0 to 100, how much of the effect shows over the picture as it was:
+  // it is `in: 'mask'`, a see-through of where the VFX acts, so it is the
+  // same for every kind and needs nothing of a kind's filter. Mix 0 is off,
+  // as Strength 0 is for the first two, which is how keyframes hold a VFX to
+  // a stretch of the clip. A kind is also off while its own figures leave
+  // the picture as it is (a Brightness of 0 with a Contrast of 0).
+  //
+  // What a kind does with its figures is its row in vfxOps.js. `centred`: it
+  // bends the picture about the middle of its own area (vfxOps.js midOf).
+  const VFX_MIX = { id: 'mix', type: 'number', min: 0, max: 100, whole: true, def: 100, in: 'mask' };
+  const VFX_PALETTES = ['iron', 'rainbow', 'ice'];
+  const VFX_LOOKS = ['tealorange', 'bleach', 'vintage', 'cross', 'cool', 'warm', 'noir', 'faded', 'matrix', 'sunset', 'moon', 'pastel'];
+  const VFX_CHANNEL_ORDERS = ['rbg', 'grb', 'gbr', 'brg', 'bgr'];
+  const VFX_EDGE_STYLES = ['neon', 'sketch', 'mono'];
+  const VFX_FLIP_MODES = ['across', 'down', 'both', 'left', 'right', 'top', 'bottom', 'quad'];
+  const VFX_MORE = (() => {
+    const fig = (id, min, max, def) => ({ id, type: 'number', min, max, whole: true, def, in: 'filter' });
+    const part = (id, max, def) => ({ id, type: 'number', min: 0, max, def, of: 'height', in: 'filter' });
+    const pick = (id, options, def) => ({ id, type: 'choice', options, def: def || options[0] });
+    const tone = (id, def) => ({ id, type: 'color', def });
+    const tick = (id) => ({ id, type: 'check', def: false });
+    // A figure that is the VFX's own: how fast it moves cannot blend, a speed
+    // changed half way would make the picture jump.
+    const own = (id, min, max, def) => ({ id, type: 'number', min, max, whole: true, def });
+    // A kind on the whole picture with Mix and Soft Edge after its own. What
+    // is its own comes before the area's shape and Invert: on a kind for the
+    // whole picture the look or the colour is what one came for.
+    const kind = (statics, keyed, still, more) => ({
+      area: true,
+      fill: true,
+      statics: [...statics, ...VFX_AREA_STATICS],
+      keyed: [...keyed, VFX_MIX, VFX_SOFT],
+      off: (s) => !(s.mix > 0) || (still ? !!still(s) : false),
+      ...more,
+    });
+    return {
+      // ---- blurs ----
+      dirblur: kind([tick('vertical')], [fig('strength', 0, 100, 30)], (s) => !(s.strength > 0)),
+      tiltshift: {
+        area: true,
+        band: true,
+        statics: [{ id: 'shape', type: 'shape', def: 'square' }, { id: 'invert', type: 'check', def: true }],
+        keyed: [fig('strength', 0, 100, 20), { ...VFX_SOFT, def: 0.12 }],
+        off: (s) => !(s.strength > 0),
+      },
+      // ---- colour ----
+      brightness: kind([], [fig('brightness', -100, 100, 15), fig('contrast', -100, 100, 15)],
+        (s) => s.brightness === 0 && s.contrast === 0),
+      exposure: kind([], [fig('exposure', -300, 300, 50), fig('gamma', 10, 400, 100)],
+        (s) => s.exposure === 0 && s.gamma === 100),
+      levels: kind([], [fig('black', 0, 100, 8), fig('white', 0, 100, 92), fig('gamma', 10, 400, 100),
+        fig('outBlack', 0, 100, 0), fig('outWhite', 0, 100, 100)],
+      (s) => s.black === 0 && s.white === 100 && s.gamma === 100 && s.outBlack === 0 && s.outWhite === 100),
+      huesat: kind([], [fig('hue', -180, 180, 0), fig('saturation', -100, 100, 40)],
+        (s) => s.hue === 0 && s.saturation === 0),
+      temperature: kind([], [fig('temperature', -100, 100, 40), fig('tint', -100, 100, 0)],
+        (s) => s.temperature === 0 && s.tint === 0),
+      rgb: kind([], [fig('red', -100, 100, 20), fig('green', -100, 100, 0), fig('blue', -100, 100, -20)],
+        (s) => s.red === 0 && s.green === 0 && s.blue === 0),
+      mono: kind([], [fig('red', 0, 200, 21), fig('green', 0, 200, 72), fig('blue', 0, 200, 7)]),
+      sepia: kind([], []),
+      colorize: kind([], [fig('hue', 0, 360, 200), fig('saturation', 0, 100, 60)]),
+      duotone: kind([tone('shadows', '#1b1464'), tone('highlights', '#ffd166')], []),
+      colorpass: kind([tone('color', '#ff0000')], [fig('range', 1, 100, 30), fig('softness', 0, 100, 10)]),
+      look: kind([pick('look', VFX_LOOKS)], []),
+      invert: kind([], []),
+      // ---- stylize ----
+      glow: kind([tone('color', '#ffffff')], [fig('threshold', 0, 100, 60), part('radius', 0.1, 0.02), fig('intensity', 0, 200, 100)],
+        (s) => !(s.intensity > 0)),
+      sharpen: kind([], [fig('amount', 0, 100, 40)], (s) => !(s.amount > 0)),
+      vignette: {
+        area: true,
+        fill: true,
+        statics: [{ id: 'shape', type: 'shape', def: 'circle' }, { id: 'invert', type: 'check', def: true }],
+        keyed: [fig('amount', -100, 100, 70), VFX_MIX, { ...VFX_SOFT, def: 0.2 }],
+        off: (s) => !(s.mix > 0) || s.amount === 0,
+      },
+      grain: kind([], [fig('amount', 0, 100, 25)], (s) => !(s.amount > 0)),
+      scanlines: kind([tick('vertical')], [fig('spacing', 2, 64, 4), fig('thickness', 1, 100, 50), fig('darkness', 0, 100, 50)],
+        (s) => !(s.darkness > 0)),
+      rgbsplit: kind([], [part('amount', 0.05, 0.006), fig('angle', 0, 360, 0)], (s) => !(s.amount > 0)),
+      posterize: kind([], [fig('levels', 2, 32, 5)]),
+      threshold: kind([], [fig('level', 0, 100, 50)]),
+      solarize: kind([], [fig('level', 0, 100, 50)]),
+      edges: kind([pick('style', VFX_EDGE_STYLES)], [fig('intensity', 10, 500, 100)]),
+      emboss: kind([], [fig('amount', 0, 100, 50)], (s) => !(s.amount > 0)),
+      nightvision: kind([], [fig('gain', 0, 200, 150)]),
+      thermal: kind([pick('palette', VFX_PALETTES)], []),
+      // ---- distort ----
+      lens: kind([], [fig('amount', -100, 100, 40)], (s) => s.amount === 0, { centred: true }),
+      flip: kind([pick('mode', VFX_FLIP_MODES)], []),
+      // ---- the second lot ----
+      shadows: kind([], [fig('shadows', -100, 100, 30), fig('highlights', -100, 100, -20)],
+        (s) => s.shadows === 0 && s.highlights === 0),
+      splittone: kind([tone('shadows', '#1e5a8c'), tone('highlights', '#ffb060')], [fig('amount', 0, 100, 50)],
+        (s) => !(s.amount > 0)),
+      channels: kind([pick('order', VFX_CHANNEL_ORDERS, 'bgr')], []),
+      clarity: kind([], [fig('amount', -100, 200, 60), part('radius', 0.1, 0.03)], (s) => s.amount === 0),
+      dream: kind([], [fig('amount', 0, 100, 60)], (s) => !(s.amount > 0)),
+      oldfilm: kind([], [fig('amount', 0, 100, 70)], (s) => !(s.amount > 0)),
+      vhs: kind([], [fig('amount', 0, 100, 60)], (s) => !(s.amount > 0)),
+      crt: kind([], [fig('amount', 0, 100, 60)], (s) => !(s.amount > 0)),
+      bars: kind([tick('vertical')], [part('size', 0.5, 0.12)], (s) => !(s.size > 0)),
+      offset: kind([], [fig('x', 0, 100, 25), fig('y', 0, 100, 0)], (s) => s.x % 100 === 0 && s.y % 100 === 0),
+      comic: kind([], [fig('levels', 2, 16, 6), fig('edges', 0, 300, 120)]),
+      border: kind([tone('color', '#ffffff')], [part('size', 0.25, 0.03)], (s) => !(s.size > 0)),
+      rotate: kind([], [fig('angle', -180, 180, 15)], (s) => s.angle === 0),
+      // ---- pictures that move by themselves ----
+      zoom: kind([], [fig('zoom', 100, 800, 150), fig('x', -100, 100, 0), fig('y', -100, 100, 0)], (s) => !(s.zoom > 100),
+        { centred: true }),
+      wave: kind([tick('vertical'), own('speed', -50, 50, 10)], [part('amount', 0.1, 0.015), part('length', 1, 0.2)],
+        (s) => !(s.amount > 0)),
+      ripple: kind([own('speed', -50, 50, 10)], [part('amount', 0.1, 0.01), part('length', 1, 0.15)], (s) => !(s.amount > 0),
+        { centred: true }),
+      swirl: kind([], [fig('angle', -720, 720, 120), part('radius', 1.5, 0.6)], (s) => s.angle === 0, { centred: true }),
+      shake: kind([own('speed', 1, 100, 30)], [part('amount', 0.1, 0.01)], (s) => !(s.amount > 0)),
+      glitch: kind([own('speed', 1, 300, 80)], [part('amount', 0.3, 0.05), part('size', 0.5, 0.06)], (s) => !(s.amount > 0)),
+      haze: kind([own('speed', -50, 50, 10)], [part('amount', 0.05, 0.006), part('length', 0.5, 0.08)], (s) => !(s.amount > 0)),
+      tile: kind([own('count', 2, 8, 3)], []),
+      kaleido: kind([own('segments', 2, 16, 6)], [fig('angle', -180, 180, 0)], null, { centred: true }),
+      perspective: kind([], [fig('tiltx', -100, 100, 40), fig('tilty', -100, 100, 0)], (s) => s.tiltx === 0 && s.tilty === 0),
+      bulge: kind([], [fig('amount', -100, 100, 60), part('radius', 1.5, 0.35)], (s) => s.amount === 0, { centred: true }),
+      // A colour table of the user's own, a .cube file. Off until one is chosen.
+      lut: kind([{ id: 'file', type: 'file', def: '' }], [], (s) => !s.file),
+    };
+  })();
+
   const VFX_KINDS = {
     obscure: {
       area: true,
@@ -569,8 +708,19 @@ const timelineModel = (() => {
       ],
       off: (s) => !(s.strength > 0),
     },
+    ...VFX_MORE,
   };
   const VFX_KIND_IDS = Object.keys(VFX_KINDS);
+  // V5.1. The menu's groups, each the kinds under one heading, in order.
+  const VFX_GROUPS = [
+    { id: 'hide', kinds: ['obscure', 'pixelate', 'dirblur', 'tiltshift'] },
+    { id: 'color', kinds: ['brightness', 'exposure', 'levels', 'shadows', 'huesat', 'temperature', 'rgb', 'mono', 'sepia',
+      'colorize', 'duotone', 'splittone', 'colorpass', 'look', 'lut', 'channels', 'invert'] },
+    { id: 'stylize', kinds: ['glow', 'dream', 'sharpen', 'clarity', 'vignette', 'bars', 'grain', 'oldfilm', 'vhs', 'crt', 'comic', 'border',
+      'scanlines', 'rgbsplit', 'posterize', 'threshold', 'solarize', 'edges', 'emboss', 'nightvision', 'thermal'] },
+    { id: 'distort', kinds: ['lens', 'bulge', 'flip', 'rotate', 'offset', 'zoom', 'perspective', 'wave', 'ripple', 'swirl', 'haze',
+      'shake', 'glitch', 'tile', 'kaleido'] },
+  ];
 
   // The user: no cap, "if you have 50 same vfx in a track but all at different
   // times ... it should still export", and instead a note, once a project,
@@ -596,6 +746,9 @@ const timelineModel = (() => {
   function vfxSettingValue(s, v) {
     if (s.type === 'check') return bool(v);
     if (s.type === 'shape') return oneOf(v, SHAPE_KINDS, s.def);
+    if (s.type === 'choice') return oneOf(v, s.options, s.def);
+    if (s.type === 'color') return typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v) ? v.toLowerCase() : s.def;
+    if (s.type === 'file') return typeof v === 'string' ? v : '';
     const n = within(v, s.min, s.max, s.def);
     return s.whole ? Math.round(n) : n;
   }
@@ -640,6 +793,10 @@ const timelineModel = (() => {
     const def = vfxKind(v.kind);
     if (!def) return null;
     const out = { id: typeof v.id === 'string' && v.id ? v.id : newVfxId(), kind: v.kind };
+    // V5.1.2. The user: a checkbox in front of every added VFX "so it can be
+    // quickly dis-/enabled without the need to delete or move it". Kept only
+    // when it is switched off, so a VFX that is on reads as it always did.
+    if (v.disabled === true) out.disabled = true;
     for (const s of def.statics) out[s.id] = vfxSettingValue(s, v[s.id]);
     Object.assign(out, vfxValuesOf(v.kind, v));
     const keys = vfxKeysOf(v.kind, v.keys);
@@ -751,14 +908,39 @@ const timelineModel = (() => {
     for (const s of def.statics) out[s.id] = v[s.id];
     for (const s of def.keyed) out[s.id] = s.whole ? Math.round(now[s.id]) : now[s.id];
     out.areas = def.area ? [{ kind: v.shape, box: now.box, rotation: now.rotation || 0 }] : [];
-    out.off = !!def.off(out);
+    // V5.1.2. One switched off by its checkbox is off at every moment.
+    out.off = !!v.disabled || !!def.off(out);
     return out;
+  }
+
+  /**
+   * V5.1. Whether a VFX as it is at one moment (vfxAt) acts on all of the
+   * picture alike: a square not turned and not inverted that reaches every
+   * edge, with no soft edge. Mix aside, which takes all of it down alike.
+   * Such a one needs no drawing of where it acts.
+   */
+  function vfxCoversAll(now) {
+    if (!now || now.invert || now.shape !== 'square' || (now.soft || 0) > 0) return false;
+    const a = now.areas && now.areas[0];
+    if (!a || (((a.rotation || 0) % 180) + 180) % 180 !== 0) return false;
+    const b = a.box;
+    const e = 1e-6;
+    return b.x <= e && b.y <= e && b.x + b.w >= 1 - e && b.y + b.h >= 1 - e;
+  }
+
+  // V5.1. The kinds whose picture changes from frame to frame with no setting
+  // changing: the ones with a Speed, and the ones with grain.
+  const VFX_ALONE = ['wave', 'ripple', 'shake', 'glitch', 'haze', 'grain', 'oldfilm', 'vhs'];
+
+  /** Whether a VFX moves by itself while it is on, keyframes or none. */
+  function vfxMovesAlone(v) {
+    return !!v && VFX_ALONE.includes(v.kind) && vfxEverOn(v);
   }
 
   /** Whether a VFX does anything at any moment: one that is off throughout does not. */
   function vfxEverOn(v) {
     const def = vfxKind(v.kind);
-    if (!def) return false;
+    if (!def || v.disabled) return false;
     const list = vfxKeysFor(v);
     if (!list.length) return !def.off(v);
     return list.some((k) => !def.off(k));
@@ -767,7 +949,7 @@ const timelineModel = (() => {
   /** Whether a VFX changes at all over the clip: keyframes that do not all say the same. */
   function vfxMoves(v) {
     const list = vfxKeysFor(v);
-    if (list.length < 2) return false;
+    if (list.length < 2 || v.disabled) return false;
     const ids = vfxKeyedIds(v.kind);
     const said = (k) => JSON.stringify(ids.map((id) => k[id]));
     const first = said(list[0]);
@@ -806,11 +988,17 @@ const timelineModel = (() => {
     const def = vfxKind(v.kind);
     const rate = Math.max(1, Number(fps) || 30);
     const total = Math.max(1, Math.round(layer.duration * rate));
-    const ids = def.keyed.filter((s) => s.in === 'filter').map((s) => s.id);
+    // V5.1. A kind that bends the picture about the middle of its area
+    // (`centred`) does something else wherever the area is, so its area is
+    // one of the figures its filter takes.
+    const ids = [...(def.centred ? ['areas'] : []), ...def.keyed.filter((s) => s.in === 'filter').map((s) => s.id)];
     const said = (now) => (now.off ? 'off' : JSON.stringify(ids.map((id) => now[id])));
     const list = vfxKeysFor(v);
     const first = vfxAt(v, 0);
-    if (list.length < 2 || list.every((k) => JSON.stringify(ids.map((id) => k[id])) === JSON.stringify(ids.map((id) => list[0][id])))) {
+    // V5.1. By every setting a keyframe holds but the area's own: one that only
+    // says where the VFX acts, like Mix, may still switch it off and on.
+    const held = [...(def.centred ? ['box'] : []), ...def.keyed.map((s) => s.id)];
+    if (list.length < 2 || list.every((k) => JSON.stringify(held.map((id) => k[id])) === JSON.stringify(held.map((id) => list[0][id])))) {
       return [{ from: 0, to: total - 1, at: first }];
     }
     const runs = [];
@@ -3583,6 +3771,14 @@ const timelineModel = (() => {
     // V4.7.
     VFX_KINDS,
     VFX_KIND_IDS,
+    VFX_GROUPS,
+    VFX_PALETTES,
+    VFX_LOOKS,
+    VFX_EDGE_STYLES,
+    VFX_FLIP_MODES,
+    VFX_CHANNEL_ORDERS,
+    vfxCoversAll,
+    vfxMovesAlone,
     VFX_NOTE_FROM,
     VFX_NOTE_SAME,
     vfxKind,

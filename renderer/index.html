@@ -1318,13 +1318,13 @@
 
   <!-- V5.0. VFX. The user, 2026-11-17: Obscure and Pixelate (V4.7, V4.8)
        become VFX, edited in one window, "Editing VFX for [track X]", in
-       three parts. Left, a quarter: a menu of every VFX there is, each added
-       by its [+] or a double click. Centre, half: the VFX the track has as
+       three parts. Left, a quarter: a menu of every VFX there is, searched
+       (V5.1.1); a click previews one, its + or a double click adds it. Centre, half: the VFX the track has as
        buttons to choose which is edited and to drag into order, each with a
        red X; the line saying which is edited; the preview; the keyframes.
-       Right, a quarter: the chosen VFX's name and its settings, the ones
-       that are the same the whole clip long first and greenish, then a line,
-       then the ones a keyframe holds in white. Under all of it Remove all
+       Right, a quarter: the settings a keyframe holds, in white. Since
+       V5.1.1 the ones that are the same the whole clip long, greenish, are
+       in the centre under the chosen VFX's name. Under all of it Remove all
        VFX, Cancel and Apply; nothing reaches the track before Apply.
        Everything a kind of VFX shows here is made from its row of the table
        (timeline.js VFX_KINDS, vfx.js VFX_UI), so a later kind needs no
@@ -1336,21 +1336,35 @@
       <div class="info-tip">
         <button class="info-tip__btn" type="button" tabindex="-1">Info</button>
         <div class="info-tip__pop">
-          <div class="hint-label">Add a VFX with its + or a double click. The VFX are processed from left to right: drag one to change the order, click one to edit it, its X removes it</div>
+          <div class="hint-label">Click a VFX in the list to preview it, its + or a double click adds it, or Add once previewed. The VFX are processed from left to right: drag one to change the order, click one to edit it, its box switches it off and on, its X removes it</div>
           <div class="hint-label">Drag the area's sides to size it, a corner to size two sides together, inside it to move it and the dot above it to turn it, hold Shift to move opposite sides together</div>
           <div class="hint-label">Scroll to zoom, drag empty space or with the middle button to pan, double-click empty space to fit the frame</div>
           <div class="hint-label">Keyframes: click one to edit it, drag one to move it, press or drag the bar to move the playhead, double-click the bar to add one, right-click one to delete it</div>
           <div class="hint-label">Each VFX has its own keyframes. Once it has one, a change to its area or to a white setting sets the keyframe at the playhead or adds one there. The green settings are the same the whole clip long. A Strength of 0 switches the VFX off</div>
+          <div class="hint-label">Mix is how much of a VFX shows over the picture as it was, and a Mix of 0 switches it off. A VFX for the whole picture can be held to a part of it: size its area, pick a shape, soften its edge or invert it</div>
         </div>
       </div>
       <div class="vfx-body">
         <div class="vfx-menu">
           <div class="vfx-menu__head">Available VFX</div>
+          <input id="vfxMenuSearch" class="vfx-menu__search" type="text" placeholder="Search VFX" spellcheck="false" autocomplete="off">
           <div id="vfxMenu" class="vfx-menu__list" data-no-translate></div>
         </div>
         <div class="vfx-center">
           <div id="vfxChain" class="vfx-chain" data-no-translate></div>
-          <div id="vfxEditing" class="vfx-editing" data-no-translate></div>
+          <!-- V5.1.1. "Editing [name]", or "Previewing [name]" with Add right of
+               it, what the kind does under it, and the settings that are the
+               same the whole clip long; the keyed ones stay on the right. -->
+          <div class="vfx-head">
+            <div class="vfx-head__line">
+              <span class="vfx-head__title">
+                <span id="vfxEditing" class="vfx-editing" data-no-translate></span>
+                <button id="vfxPreviewAddBtn" class="vfx-head__add crop-accept-btn" type="button" hidden>Add</button>
+              </span>
+            </div>
+            <div id="vfxAbout" class="vfx-about" data-no-translate></div>
+          </div>
+          <div id="vfxStatics" class="vfx-statics" data-no-translate></div>
           <div id="vfxStageCell" class="vfx-stage-cell">
             <div id="vfxStage" class="gen-stage">
               <canvas id="vfxCanvas" class="gen-canvas"></canvas>
@@ -1381,7 +1395,6 @@
           </div>
         </div>
         <div class="vfx-side">
-          <div id="vfxName" class="vfx-name" data-no-translate></div>
           <div id="vfxSettings" class="vfx-settings" data-no-translate></div>
         </div>
       </div>
@@ -1605,6 +1618,7 @@
   <script src="../src/textLayout.js"></script>
   <script src="../src/textRuns.js"></script>
   <script src="../src/genDraw.js"></script>
+  <script src="../src/vfxOps.js"></script>
   <script src="../src/colorModel.js"></script>
   <script src="../src/geometry.js"></script>
   <script src="../src/history.js"></script>
@@ -1624,6 +1638,7 @@
   <script src="app/media.js"></script>
   <script src="app/timeline.js"></script>
   <script src="app/clips.js"></script>
+  <script src="app/vfxGl.js"></script>
   <script src="app/compositor.js"></script>
   <script src="app/editing.js"></script>
   <script src="app/layout.js"></script>
