@@ -23,6 +23,8 @@ function resetApp() {
   // V3.3. A cleared project has no views; done after closeCrop, which keeps
   // the view of whatever it was open on.
   adoptViews(null);
+  // V5.0. Nor has it shown a note yet.
+  adoptNotes(null);
   updateCropOverlays();
 
   resetAudioState();

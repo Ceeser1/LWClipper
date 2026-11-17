@@ -202,12 +202,14 @@ function openClipMenu(evt, track) {
       item(t('Remove Mask'), true, () => removeMaskFrom(layer.id));
     }
   }
-  // V4.7. The user: "You can right click on a track to have Obscure or
-  // Pixelate in its menu". On the tracks a mask can be on, a picture of a
-  // file; each opens its window, where it is also taken off again.
+  // V5.0. The user: "Dont show obscure and pixelate in the right click menu,
+  // instead show Add/Edit VFX". On the tracks a mask can be on, a picture of
+  // a file: Add VFX on one with none and Edit VFX on one with some, either
+  // opening the VFX window, where they are also taken off again.
   if (layer && layer.kind !== 'gen' && layer.type === 'video') {
-    item(t('Obscure'), true, () => openCover(layer.id, 'obscure', at));
-    item(t('Pixelate'), true, () => openCover(layer.id, 'pixelate', at));
+    // Two calls, so check-locales sees both literals.
+    if (timelineModel.vfxList(layer).length) item(t('Edit VFX'), true, () => openVfx(layer.id, at));
+    else item(t('Add VFX'), true, () => openVfx(layer.id, at));
   }
   // V3.3. Keyframes, on a clip that can have them and within it. On anything
   // else they are there and greyed, so the menu keeps its shape.

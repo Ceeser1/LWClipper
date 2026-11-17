@@ -382,7 +382,13 @@ function createWindow() {
 const POPOUT_NAME = /^lwc-pop-[a-z]+$/;
 
 // V4.1. A first size for the windows that are not a picture to edit.
-const POPOUT_SIZES = { 'lwc-pop-prefs': [580, 640], 'lwc-pop-keys': [620, 720], 'lwc-pop-transition': [720, 500] };
+const POPOUT_SIZES = { 'lwc-pop-prefs': [580, 640], 'lwc-pop-keys': [620, 720], 'lwc-pop-transition': [720, 500], 'lwc-pop-vfx': [1100, 760] };
+
+// V5.0. The VFX window has three parts side by side. The user: "the vfx
+// window should have a decent width so that all 3 columns fit, maybe like
+// 50% of the total window width for now". Half the main window wide and most
+// of it high, and never under what the three parts need.
+const POPOUT_SHARES = { 'lwc-pop-vfx': { of: [0.5, 0.8], least: [900, 600] } };
 
 // V3.7.1. The editor windows open now, by their names.
 const popoutWindows = new Map();
@@ -444,8 +450,10 @@ function popoutBounds(name) {
   const host = mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null;
   // V4.1 and V4.2. Preferences and Key Binds are lists, not a picture to edit.
   const size = POPOUT_SIZES[name] || [960, 760];
-  const width = size[0];
-  const height = size[1];
+  // V5.0. Or a share of the main window, never under the size it needs.
+  const share = host ? POPOUT_SHARES[name] : null;
+  const width = share ? Math.max(share.least[0], Math.round(host.width * share.of[0])) : size[0];
+  const height = share ? Math.max(share.least[1], Math.round(host.height * share.of[1])) : size[1];
   if (!host) return { width, height };
   return {
     width,
@@ -1318,6 +1326,8 @@ function openProject(filePath) {
     meta: parsed.meta,
     // V3.3. The editors' zoom and pan, kept beside the document.
     views: parsed.views,
+    // V5.0. The notes the project has already shown.
+    notes: parsed.notes,
     // V3.3. The undo stack the project was saved with.
     history: parsed.history,
     statuses,
@@ -1575,6 +1585,7 @@ function openAutosave(filePath, parsed) {
     doc: parsed.doc,
     meta: parsed.meta,
     views: parsed.views,
+    notes: parsed.notes,
     history: parsed.history,
     statuses,
     masksMissing,

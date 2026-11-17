@@ -574,12 +574,14 @@ test('a generated layer arrives with its transition drawn, and is not put throug
 
 test('a filter graph too long for a command line goes to ffmpeg in a file', () => {
   const short = ['-y', '-filter_complex', 'color=c=black[o]', '-map', '[o]', 'out.mp4'];
-  assert.deepEqual(spillGraph(short, 'g.txt'), { args: short, graph: null });
+  // V5.0. `files` names every graph written, none here.
+  assert.deepEqual(spillGraph(short, 'g.txt'), { args: short, graph: null, files: [] });
   const graph = 'x'.repeat(GRAPH_ARG_MAX);
   const long = ['-y', '-filter_complex', graph, '-map', '[o]', 'out.mp4'];
   const spilt = spillGraph(long, 'g.txt');
   assert.deepEqual(spilt.args, ['-y', '-/filter_complex', 'g.txt', '-map', '[o]', 'out.mp4']);
   assert.equal(spilt.graph, graph);
+  assert.deepEqual(spilt.files, [{ file: 'g.txt', text: graph }]);
   assert.deepEqual(long[1], '-filter_complex', 'the argv handed in is left alone');
   // Twelve eased steps on a few layers is what gets there.
   const eased = [0, 1, 2, 3].map((i) => vid({

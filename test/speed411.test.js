@@ -154,12 +154,12 @@ test('what is on the clip goes with what it shows: keyframes spread out, fades k
     fadeIn: 2,
     fadeOut: 3,
     keyframes: [{ id: 'a', t: 1, render: { x: 0, y: 0, width: 100, height: 100 } }, { id: 'b', t: 8, render: { x: 9, y: 9, width: 100, height: 100 } }],
-    obscure: { areas: [{ kind: 'square', box: { x: 0, y: 0, w: 0.2, h: 0.2 },
-      keys: [{ id: 'k', t: 2, box: { x: 0, y: 0, w: 0.2, h: 0.2 } }, { id: 'm', t: 6, box: { x: 0.5, y: 0.5, w: 0.2, h: 0.2 } }] }] },
+    vfx: [{ kind: 'obscure', box: { x: 0, y: 0, w: 0.2, h: 0.2 },
+      keys: [{ id: 'k', t: 2, box: { x: 0, y: 0, w: 0.2, h: 0.2 } }, { id: 'm', t: 6, box: { x: 0.5, y: 0.5, w: 0.2, h: 0.2 } }] }],
   });
   const slow = T.stretchGroup([l], 'v', 'end', 40)[0];
   assert.deepEqual(slow.keyframes.map((k) => k.t), [2, 16]);
-  assert.deepEqual(slow.obscure.areas[0].keys.map((k) => k.t), [4, 12]);
+  assert.deepEqual(slow.vfx[0].keys.map((k) => k.t), [4, 12]);
   assert.deepEqual([slow.fadeIn, slow.fadeOut], [2, 3]);
   // Each keyframe is still on the same moment of the source.
   assert.equal(T.sourceTimeFor(slow, slow.start + 16), T.sourceTimeFor(l, l.start + 8));

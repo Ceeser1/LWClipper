@@ -30,7 +30,7 @@ async function autosaveNow() {
   try {
     const from = projectPath;
     const result = await window.lwclipper.autosave(
-      { ...doc, views: viewsForFile(), history: projectHistory.pack(undoStack) },
+      { ...doc, views: viewsForFile(), notes: notesForFile(), history: projectHistory.pack(undoStack) },
       from ? { path: from, name: projectTitle } : null);
     if (!result || !result.ok) {
       if (!autosaveFailed) setStatus('The auto-save could not be written: {error}', { error: (result && result.error) || '' });

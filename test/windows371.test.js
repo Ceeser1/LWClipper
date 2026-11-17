@@ -145,6 +145,7 @@ test('every window\'s row is Remove on the left, Cancel in the middle and Accept
   // V4.6. Nine with the text's Gradient modal. V4.7: ten with Obscure and
   // Pixelate's window.
   // V4.10. Eleven with the Transitions window.
+  // V5.0. Still eleven: the VFX window took the place of Obscure and Pixelate's.
   assert.equal(rows.length, 11);
   for (const row of rows) {
     const order = ['remove', 'cancel', 'accept'].filter((k) => row.includes(k));

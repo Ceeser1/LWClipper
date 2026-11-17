@@ -655,9 +655,9 @@ function shapeCover(canvas, draw) {
 
 // Two surfaces, kept: the picture, and its mask. Every masked layer is cut out
 // on them in turn, and each is drawn out before the next is cut.
-// V4.7. Three more for Obscure and Pixelate: the effect, and two that the
-// blur's copy and Pixelate's halvings are made on.
-// V4.8. And one for the whole picture with Obscure on it, see coverUnderlay.
+// V4.7. Three more for the VFX: the effect, and two that the blur's copy and
+// Pixelate's halvings are made on.
+// V4.8. And one for the whole picture with the earlier VFX on it, see layVfx.
 const maskedSurfaces = [null, null, null, null, null, null];
 function maskedSurface(i, w, h) {
   if (!maskedSurfaces[i]) maskedSurfaces[i] = new OffscreenCanvas(w, h).getContext('2d');
@@ -673,7 +673,7 @@ function maskedSurface(i, w, h) {
  * as it is at `at` on the timeline. drawMask is the export's drawing too.
  */
 // V4.7. `src`, when given, says what part of the source picture `from` is,
-// and with it the layer's Obscure and Pixelate are laid on first, see layCover.
+// and with it the layer's VFX are laid on first, see layVfx.
 // V4.10. `matte`, when given, is the transition cutting the picture at this
 // moment (timeline.js transitionAt), laid on last, and `win` the part of the
 // whole picture being drawn, as fractions of it, when a slide shows only part.
@@ -682,22 +682,19 @@ function maskedPicture(layer, el, from, d, at, src = null, matte = null, win = n
   // A custom mask whose picture cannot be read, gone from the disk since, is
   // shown as no mask rather than as a picture with nothing left of it.
   const cut = !!mask && !maskPictureFailed(mask);
-  // V4.8. Each with its areas where their own keyframes put them at `at`.
-  const covers = (src ? timelineModel.coverList(layer) : [])
-    .map((c) => ({ kind: c.kind, cover: timelineModel.coverAt(c.cover, at - layer.start) }));
-  if (!cut && !covers.length && !matte) return { el, from };
+  // V5.0. Its VFX as their keyframes have them at `at`, in the order they
+  // are processed, the ones that are off at this moment left out.
+  const effects = (src ? timelineModel.vfxList(layer) : [])
+    .map((v) => timelineModel.vfxAt(v, at - layer.start))
+    .filter((v) => !v.off && VFX_PREVIEW[v.kind]);
+  if (!cut && !effects.length && !matte) return { el, from };
   const w = Math.max(1, Math.round(d.dw));
   const h = Math.max(1, Math.round(d.dh));
-  // Before the picture is drawn: it is made on the surfaces the covers use.
-  const under = coverUnderlay(covers, el, src, w, h);
   const p = maskedSurface(0, w, h);
   p.globalCompositeOperation = 'source-over';
   p.clearRect(0, 0, w, h);
   p.drawImage(el, ...from, 0, 0, w, h);
-  for (const c of covers) {
-    if (c.kind === 'pixelate' && under) layCover(p, c, under.el, under.src, w, h);
-    else layCover(p, c, el, src, w, h);
-  }
+  layVfx(p, effects, el, src, w, h);
   if (cut) {
     const m = maskedSurface(1, w, h);
     m.setTransform(1, 0, 0, 1, 0, 0);
@@ -747,25 +744,46 @@ function shownKeysFor(layer, source, frame) {
   return keys;
 }
 
-// ---- V4.7. Obscure and Pixelate ----
+// ---- V5.0. VFX (V4.7 and V4.8: Obscure and Pixelate) ----
 //
-// The export does both to the source picture, before it is cropped, placed
-// or turned (composer.js coverHead). Here the picture is already cut out at
-// the size it is drawn, `w` by `h`, so the same is worked out at that size:
-// `src` is the part of the source that is, { x, y, w, h } in the source's
-// pixels, { W, H } its whole size, and { ex, ey } the element's pixels for
-// one of the source's.
+// The export does every VFX to the source picture, before it is cropped,
+// placed or turned, one after the other in the track's order (composer.js
+// vfxHead). Here the picture is already cut out at the size it is drawn, `w`
+// by `h`, so the same is worked out at that size: `src` is the part of the
+// source that is, { x, y, w, h } in the source's pixels, { W, H } its whole
+// size, and { ex, ey } the element's pixels for one of the source's.
+//
+// Each kind has a row here: `room`, what genDraw.coverRegion needs to say
+// which part of the picture it reads and changes, and `draw`, the picture
+// with the effect on all of it, onto `e`. A new kind is a new row; the
+// cutting to where it acts, the order and the keyframes are the same for all.
 //
 // Obscure is a Gaussian of the sigma the export uses, scaled to the drawing.
 // Pixelate is the source drawn small, one pixel to a block, and back up
 // without smoothing; the blocks are counted from the source's corner as the
-// encoder counts them, so a crop does not shift the grid. Either is then
-// blended into the picture where it acts, genDraw.drawCoverMask laid the way
-// the source is: the picture taken out there and the effect put in, not the
-// one over the other, which on a PNG with see-through parts would add the
-// two up. `cover` is the effect at the moment drawn, its areas already where
-// their keyframes have them then (V4.8, timeline.js coverAt).
-function layCover(p, { kind, cover }, el, src, w, h) {
+// encoder counts them, so a crop does not shift the grid.
+const VFX_PREVIEW = {
+  obscure: {
+    room: (v, H) => ({ margin: Math.ceil(timelineModel.obscureSigma(v.strength, H) * 3) }),
+    draw: (e, p, v, el, src, w, h) => coverBlur(e, p, el, src, w, h,
+      timelineModel.obscureSigma(v.strength, src.H) * (h / src.h)),
+  },
+  pixelate: {
+    room: (v, H) => ({ grid: timelineModel.pixelateBlock(v.strength, H) }),
+    draw: (e, p, v, el, src, w, h) => coverBlocks(e, el, src, w / src.w, h / src.h,
+      timelineModel.pixelateBlock(v.strength, src.H)),
+  },
+};
+
+/**
+ * One VFX laid on the picture `p`: the effect made of the whole picture and
+ * then blended in where it acts, genDraw.drawCoverMask laid the way the
+ * source is: the picture taken out there and the effect put in, not the one
+ * over the other, which on a PNG with see-through parts would add the two up.
+ * `v` is the VFX at the moment drawn (timeline.js vfxAt), and `el` with
+ * `src` what it reads the picture from.
+ */
+function layCover(p, v, el, src, w, h) {
   const kx = w / src.w;
   const ky = h / src.h;
   const e = maskedSurface(2, w, h);
@@ -773,13 +791,12 @@ function layCover(p, { kind, cover }, el, src, w, h) {
   e.globalCompositeOperation = 'source-over';
   e.filter = 'none';
   e.clearRect(0, 0, w, h);
-  if (kind === 'obscure') coverBlur(e, p, el, src, w, h, timelineModel.obscureSigma(cover.strength, src.H) * ky);
-  else coverBlocks(e, el, src, kx, ky, timelineModel.pixelateBlock(cover.strength, src.H));
+  VFX_PREVIEW[v.kind].draw(e, p, v, el, src, w, h);
   const m = maskedSurface(1, w, h);
   m.setTransform(1, 0, 0, 1, 0, 0);
   m.clearRect(0, 0, w, h);
   m.setTransform(kx, 0, 0, ky, -src.x * kx, -src.y * ky);
-  genDraw.drawCoverMask(m, cover, src.W, src.H);
+  genDraw.drawCoverMask(m, v, src.W, src.H);
   m.setTransform(1, 0, 0, 1, 0, 0);
   e.globalCompositeOperation = 'destination-in';
   e.drawImage(m.canvas, 0, 0);
@@ -792,40 +809,59 @@ function layCover(p, { kind, cover }, el, src, w, h) {
 }
 
 /**
- * V4.8. What Pixelate takes its blocks from when the layer has an Obscure
- * that meets it: the whole source picture with Obscure already on it, since
- * the export lays the one on and then the other, and a block is the average
- * of what is there by then. Found with areas that move, which cross each
- * other where still ones seldom did: the preview had taken the blocks from
- * the picture as the file has it, and a blurred edge inside a pixelated part
- * came out sharper than in the file.
+ * V5.0. A track's VFX laid on the picture `p` in their order, each one
+ * working on what the ones before it left, as the export has it: a block is
+ * the average of what is there by then, a blur of a pixelated part blurs the
+ * blocks.
  *
- * Null when there is nothing to it, the two not touching at this moment or
- * the layer having only one of them, and the blocks come from the element as
- * they always did. Made no finer than the picture is drawn, so a small
- * preview of a large source costs a small surface. Uses the covers' other
- * surfaces, so it is made before the picture is drawn on its own.
+ * The picture drawn is only the part of the source that shows, at the size
+ * it shows, and an effect reads more than that: Pixelate whole blocks,
+ * Obscure the pixels beside what it blurs. So what a later VFX reads is kept
+ * on the side, the whole source picture with the earlier ones on it (the
+ * underlay, V4.8's answer for an Obscure under a Pixelate, here for any
+ * order and number). Only where it is needed: a VFX goes onto the underlay
+ * when a later one touches the part it changed, and one reads the underlay
+ * when an earlier one changed the part it reads. Two that never meet cost
+ * what they did alone, which is the common case of several faces hidden.
+ *
+ * The underlay is made no finer than the picture is drawn, so a small
+ * preview of a large source costs a small surface.
  */
-function coverUnderlay(covers, el, src, w, h) {
-  const obscure = covers.find((c) => c.kind === 'obscure');
-  const pixelate = covers.find((c) => c.kind === 'pixelate');
-  if (!src || !obscure || !pixelate) return null;
-  const sigma = timelineModel.obscureSigma(obscure.cover.strength, src.H);
-  const a = genDraw.coverRegion(obscure.cover, src.W, src.H, { margin: Math.ceil(sigma * 3) });
-  const b = genDraw.coverRegion(pixelate.cover, src.W, src.H,
-    { grid: timelineModel.pixelateBlock(pixelate.cover.strength, src.H) });
-  if (!a || !b) return null;
-  if (a.x >= b.x + b.width || b.x >= a.x + a.width || a.y >= b.y + b.height || b.y >= a.y + a.height) return null;
+function layVfx(p, list, el, src, w, h) {
+  if (!list.length) return;
+  const parts = list.map((v) => genDraw.coverRegion(v, src.W, src.H, VFX_PREVIEW[v.kind].room(v, src.H)));
+  const meet = (a, b) => !!a && !!b
+    && !(a.x >= b.x + b.width || b.x >= a.x + a.width || a.y >= b.y + b.height || b.y >= a.y + a.height);
+  let under = null;
+  const onUnder = [];
+  list.forEach((v, i) => {
+    const part = parts[i];
+    // One that touches none of the picture changes none of it.
+    if (!part) return;
+    const reads = !!under && onUnder.some((j) => meet(parts[j], part));
+    if (reads) layCover(p, v, under.el, { ...src, ex: under.ex, ey: under.ey }, w, h);
+    else layCover(p, v, el, src, w, h);
+    if (!list.some((o, j) => j > i && meet(part, parts[j]))) return;
+    if (!under) under = vfxUnderlay(el, src, w, h);
+    const whole = { x: 0, y: 0, w: src.W, h: src.H, W: src.W, H: src.H };
+    if (reads) layCover(under.ctx, v, under.el, { ...whole, ex: under.ex, ey: under.ey }, under.w, under.h);
+    else layCover(under.ctx, v, el, { ...whole, ex: src.ex, ey: src.ey }, under.w, under.h);
+    onUnder.push(i);
+  });
+}
+
+/** The whole source picture on a surface of its own, for layVfx to lay VFX on. */
+function vfxUnderlay(el, src, w, h) {
   const k = Math.min(1, Math.max(w / src.w, h / src.h));
   const uw = Math.max(1, Math.round(src.W * Math.min(src.ex, k)));
   const uh = Math.max(1, Math.round(src.H * Math.min(src.ey, k)));
   const u = maskedSurface(5, uw, uh);
   u.setTransform(1, 0, 0, 1, 0, 0);
   u.globalCompositeOperation = 'source-over';
+  u.filter = 'none';
   u.clearRect(0, 0, uw, uh);
   u.drawImage(el, 0, 0, src.W * src.ex, src.H * src.ey, 0, 0, uw, uh);
-  layCover(u, obscure, el, { x: 0, y: 0, w: src.W, h: src.H, W: src.W, H: src.H, ex: src.ex, ey: src.ey }, uw, uh);
-  return { el: u.canvas, src: { ...src, ex: uw / src.W, ey: uh / src.H } };
+  return { ctx: u, el: u.canvas, w: uw, h: uh, ex: uw / src.W, ey: uh / src.H };
 }
 
 /**
@@ -2042,14 +2078,14 @@ function compositeDrawDue() {
 /**
  * V4.12. Whether a layer's picture changes from one project frame to the
  * next at timeline second `at` for a reason other than its file's next
- * picture: keyframes, a transition, a fade, or an Obscure or Pixelate area
- * that moves. Generous rather than exact, a clip with keyframes counts for
+ * picture: keyframes, a transition, a fade, or a VFX that changes by
+ * keyframes of its own. Generous rather than exact, a clip with keyframes counts for
  * its whole length, since all it costs to be wrong that way is a draw.
  */
 function layerMovesAt(l, at) {
   if (timelineModel.keyframesFor(l).length > 1) return true;
   if (timelineModel.transitionAt(l, at)) return true;
-  if (timelineModel.coverList(l).some((c) => timelineModel.coverMotion(l, c.cover))) return true;
+  if (timelineModel.vfxList(l).some((v) => timelineModel.vfxMoves(v))) return true;
   const next = at + 1 / projectFrame().fps;
   return timelineModel.layerAlphaAt(l, at) !== timelineModel.layerAlphaAt(l, next);
 }

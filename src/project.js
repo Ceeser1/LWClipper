@@ -166,6 +166,24 @@ const projectFile = (() => {
   }
 
   /**
+   * V5.0. What the project has already told its user, so it is said once a
+   * project and not again: the names of the notes shown, each `true`. The
+   * first is the VFX window's, the user's "dont re-open that modal on the
+   * project again (so note, if it got opened once)".
+   *
+   * Beside the document like the views, and for the same reason: having
+   * read a note is not an unsaved change, and undo must not bring it back.
+   */
+  function notesOf(source) {
+    const out = {};
+    if (!source || typeof source !== 'object' || Array.isArray(source)) return out;
+    for (const [key, value] of Object.entries(source)) {
+      if (key && /^[A-Za-z][A-Za-z0-9]*$/.test(key) && value === true) out[key] = true;
+    }
+    return out;
+  }
+
+  /**
    * V3.3. The undo stack as history.js packs it, kept beside the document for
    * the same reason the views are: undoing changes the document, the stack
    * itself is not an unsaved change. Only its shape is checked here;
@@ -259,6 +277,8 @@ const projectFile = (() => {
       })),
       // V3.3. Beside the document rather than in it, see viewsOf.
       views: viewsOf(state.views),
+      // V5.0. The notes already shown, see notesOf.
+      notes: notesOf(state.notes),
       // V3.3. The undo stack, see historyOf. Last, since it is the bulk.
       history: historyOf(state.history),
     };
@@ -305,6 +325,7 @@ const projectFile = (() => {
       mediaRefs: mediaRaw(doc.media).map((m) => (m.ref && typeof m.ref === 'object' ? m.ref : { path: m.src })),
       meta: metaOf(doc),
       views: viewsOf(doc.views),
+      notes: notesOf(doc.notes),
       history: historyOf(doc.history),
       autosave: autosaveOf(doc.autosave),
     };
@@ -433,6 +454,7 @@ const projectFile = (() => {
     mediaOf,
     metaOf,
     viewsOf,
+    notesOf,
     historyOf,
     autosaveOf,
     sameDocument,

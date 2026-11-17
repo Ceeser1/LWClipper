@@ -273,14 +273,15 @@ function ownAlpha(l) {
   return l.kind === 'image' && timeline.seeThrough(l);
 }
 
-// ---- V4.7. Obscure and Pixelate ----
+// ---- V5.0. VFX (V4.7 and V4.8: Obscure and Pixelate) ----
 //
-// Both are done to the layer's picture as the file has it, before it is
+// Every VFX is done to the layer's picture as the file has it, before it is
 // cropped, scaled, placed or turned, so nothing after this point has to know
-// about them, the moving layers included. The window hands over, for each, the
-// part of the source it touches and a PNG of where it acts in that part
-// (export.js exportCovers). That part is cut out, filtered, given the PNG as
-// its alpha and laid back where it came from.
+// about them, the moving layers included, and one after the other in the
+// track's order, each on what the one before it left. The window hands over,
+// for each, the part of the source it touches and a PNG of where it acts in
+// that part (export.js exportVfx). That part is cut out, filtered, given the
+// PNG as its alpha and laid back where it came from.
 //
 // A picture with an alpha of its own, a PNG, cannot be done that way: the
 // filtered part laid over the picture would add its see-through to the
@@ -296,21 +297,94 @@ function ownAlpha(l) {
 // the sigma says. Six steps is within three percent, which is what the
 // preview's blur is. pixelize takes an odd block one smaller on 4:2:0, so
 // the block always arrives even (timeline.js pixelateBlock).
+//
+// V5.0. A setting that changes by keyframes, the user's "the amount of
+// pixelation should be able to change animated between start- and
+// end-keyframe". Neither filter takes its figure as an expression, and
+// sendcmd, which could tell it one frame by frame, raced and held a value
+// for two frames when the keyframes were built (see "Constraints" in the
+// notes). What every filter here does take is `enable`, worked out on each
+// frame's own time. So the window hands over the figure in `steps`: each a
+// figure and the stretches of frames it holds for, and each becomes a filter
+// of its own that is on for exactly those frames, one behind the other, a
+// frame passing through the others untouched. Strength is a whole number, so
+// a ramp is at most a hundred of them. Where a VFX is off no filter is on,
+// and `on` says so for the overlay too, which then hands the picture on
+// without a copy: fifty VFX at fifty different times cost one at a time.
+//
+// Pixelate's blocks are counted from the picture's corner. One block size
+// can have its part cut on its own grid; several cannot share a cut, so a
+// Pixelate whose block changes (`whole`) is made of the whole picture and
+// its part cut out afterwards.
+
+// V5.0. More than two VFX on a track go into filter graphs of their own, a
+// few to a graph, each graph handing its picture to the next by a label
+// (ffmpeg 7.1 and later run several graphs, each on its own thread with a
+// queue between them). Not for tidiness: every VFX is a split whose two
+// halves meet again in an overlay, and ffmpeg's cost for such steps one
+// behind the other in ONE graph doubles with each. Measured with the bundled
+// ffmpeg on six seconds of 1080p, the steps alone and nothing else: 8 in a
+// row 1.0 s, 14 in 2.9 s, 16 in 9 s, 18 in 33 s, and the fifty the user asked
+// for ("if you have 50 same vfx in a track ... it should still export") did
+// not write a frame in ten minutes. No filter put between the steps and no
+// option of the overlay changed that; it is the one graph's scheduling. In
+// graphs of four chained by their labels the same steps cost what they add up
+// to: 18 in 3 s, 50 in 6.5 s, and the file is the same file.
+//
+// Up to VFX_INLINE_MAX they stay in the layer's own graph, which is the graph
+// V4.7 and V4.8 wrote and proved.
+const VFX_INLINE_MAX = 2;
+const VFX_PER_GRAPH = 4;
+
+/** The frames `ranges` as an `enable` on each frame's time, or nothing for always. */
+function framesOn(ranges, fps) {
+  if (!Array.isArray(ranges)) return '';
+  const live = ranges.filter((r) => Array.isArray(r) && r[1] >= r[0]);
+  // Never on: a moment before the first frame.
+  if (!live.length) return ":enable='lt(t,-1)'";
+  // Half a frame either side, so no frame's time lands on an edge.
+  const one = (r) => 'between(t,' + fixed((r[0] - 0.5) / fps) + ',' + fixed((r[1] + 0.5) / fps) + ')';
+  return ":enable='" + live.map(one).join('+') + "'";
+}
+
+// What each kind's filter is for one figure. A new kind is a new row.
+const VFX_FILTERS = {
+  obscure: {
+    // The blur is made at 4:4:4, see above.
+    format: 'yuv444p',
+    filter: (step) => 'gblur=sigma=' + fixed(Math.min(1024, Math.max(0.1, Number(step.sigma) || 0.1))) + ':steps=6',
+  },
+  pixelate: {
+    format: null,
+    filter: (step) => {
+      const block = Math.max(2, Math.round(Number(step.block) || 2));
+      return 'pixelize=w=' + block + ':h=' + block;
+    },
+  },
+};
+
+/** A VFX's filters, one behind the other, each on for the frames its step names. */
+function vfxFilters(f, fps) {
+  const kind = VFX_FILTERS[f.kind];
+  const steps = Array.isArray(f.steps) && f.steps.length ? f.steps : [f];
+  return steps.map((step) => kind.filter(step) + framesOn(step.ranges, fps)).join(',');
+}
 
 /**
- * What a layer's chain starts from: its input as it is, or with covers the
+ * What a layer's chain starts from: its input as it is, or with VFX the
  * label of the picture with them laid on, at the project's rate. `inputs` is
- * each cover's PNG input, in their order.
+ * each VFX's PNG input, in their order. `pre`, when given, takes the graphs
+ * that go before the layer's own when it has more VFX than stay in it.
  */
-function coverHead(graph, l, n, input, fps, inputs, source) {
-  // V4.11. At the layer's speed from the very start, covers and all.
+function vfxHead(graph, l, n, input, fps, inputs, source, pre = null) {
+  // V4.11. At the layer's speed from the very start, VFX and all.
   // V4.12. A still has no speed; it is its one frame, held for the clip.
   const plain = '[' + input + ':v]' + (oneStill(l) ? holdStill(l.duration) + ',' : speedHead(l, fps));
-  const files = (Array.isArray(l.coverFiles) && l.type === 'video' ? l.coverFiles : [])
+  const files = (Array.isArray(l.vfxFiles) && l.type === 'video' ? l.vfxFiles : [])
     .map((f, i) => ({ ...f, input: inputs && inputs[i] }))
     .filter((f) => {
       const r = f.region;
-      if (f.input === undefined || !r) return false;
+      if (f.input === undefined || !r || !VFX_FILTERS[f.kind]) return false;
       const whole = [r.x, r.y, r.width, r.height].every((v) => Number.isInteger(v) && v >= 0);
       if (!whole || r.width < 2 || r.height < 2) return false;
       // Never past a source this module knows the size of.
@@ -320,16 +394,18 @@ function coverHead(graph, l, n, input, fps, inputs, source) {
   if (!files.length) return plain;
   const alpha = ownAlpha(l);
   let cur = 'cv' + n + 's';
-  graph.push(plain + chain(['fps=' + fps, 'format=' + (alpha ? 'yuva420p' : 'yuv420p')]) + '[' + cur + ']');
+  const head = plain + chain(['fps=' + fps, 'format=' + (alpha ? 'yuva420p' : 'yuv420p')]) + '[' + cur + ']';
   const blended = alpha && source && source.width > 0 && source.height > 0;
+  // Each VFX's own part of the graph, kept apart so they can be shared out.
+  const steps = [];
   files.forEach((f, i) => {
+    const step = [];
+    steps.push(step);
     const r = f.region;
     const t = 'cv' + n + 'x' + i;
-    const blur = 'gblur=sigma=' + fixed(Math.min(1024, Math.max(0.1, Number(f.sigma) || 0.1))) + ':steps=6';
-    const block = Math.max(2, Math.round(Number(f.block) || 2));
-    const blocks = 'pixelize=w=' + block + ':h=' + block;
-    // V4.8. Where it acts as one PNG, or with areas that move as the frames
-    // of the stretch where they do, held at either end like a moving mask's.
+    const filters = vfxFilters(f, fps);
+    // V4.8. Where it acts as one PNG, or with an area that moves as the frames
+    // of the stretch where it does, held at either end like a moving mask's.
     // Both this and the picture count from the clip's first frame here, the
     // layer's place on the timeline being given to it further down.
     // V4.12. The one PNG is made grey and sized once, and then held.
@@ -338,7 +414,7 @@ function coverHead(graph, l, n, input, fps, inputs, source) {
       ? [holdFrames(f.frames, fps), 'fps=' + fps, 'format=gray', 'scale=' + r.width + ':' + r.height]
       : ['format=gray', 'scale=' + r.width + ':' + r.height, holdStill(l.duration), 'fps=' + fps]);
     if (blended) {
-      graph.push('[' + cur + ']format=yuva444p,split[' + t + 'a][' + t + 'b]');
+      step.push('[' + cur + ']format=yuva444p,split[' + t + 'a][' + t + 'b]');
       // V4.8. Premultiplied round the filter, as the preview's canvas is: a
       // blur or a block that takes in both solid and see-through pixels must
       // weigh each colour by how much of it shows. Filtered plane by plane,
@@ -346,22 +422,35 @@ function coverHead(graph, l, n, input, fps, inputs, source) {
       // through at full weight (measured on a PNG half solid and half at 35%:
       // a blurred edge up to 44 of 255 off the preview, 12 this way; a block
       // across that edge 23 off, 6 this way).
-      graph.push('[' + t + 'b]premultiply=inplace=1,' + (f.kind === 'obscure' ? blur : blocks)
-        + ',unpremultiply=inplace=1[' + t + 'c]');
-      graph.push(where + ',pad=' + Math.round(source.width) + ':' + Math.round(source.height) + ':' + r.x + ':' + r.y
+      step.push('[' + t + 'b]premultiply=inplace=1,' + filters + ',unpremultiply=inplace=1[' + t + 'c]');
+      step.push(where + ',pad=' + Math.round(source.width) + ':' + Math.round(source.height) + ':' + r.x + ':' + r.y
         + ':black,mergeplanes=0x00000000:yuva444p[' + t + 'm]');
-      graph.push('[' + t + 'a][' + t + 'c][' + t + 'm]maskedmerge,format=yuva420p[' + t + 'o]');
+      step.push('[' + t + 'a][' + t + 'c][' + t + 'm]maskedmerge,format=yuva420p[' + t + 'o]');
       cur = t + 'o';
       return;
     }
-    graph.push('[' + cur + ']split[' + t + 'a][' + t + 'b]');
-    graph.push('[' + t + 'b]crop=' + r.width + ':' + r.height + ':' + r.x + ':' + r.y + ','
-      + (f.kind === 'obscure' ? 'format=yuv444p,' + blur : blocks) + '[' + t + 'c]');
-    graph.push(where + '[' + t + 'm]');
-    graph.push('[' + t + 'c][' + t + 'm]alphamerge[' + t + 'h]');
-    graph.push('[' + t + 'a][' + t + 'h]overlay=x=' + r.x + ':y=' + r.y + ':format=yuv420[' + t + 'o]');
+    const cut = 'crop=' + r.width + ':' + r.height + ':' + r.x + ':' + r.y;
+    const format = VFX_FILTERS[f.kind].format;
+    step.push('[' + cur + ']split[' + t + 'a][' + t + 'b]');
+    step.push('[' + t + 'b]' + (f.whole
+      ? chain([format ? 'format=' + format : null, filters, cut])
+      : chain([cut, format ? 'format=' + format : null, filters])) + '[' + t + 'c]');
+    step.push(where + '[' + t + 'm]');
+    step.push('[' + t + 'c][' + t + 'm]alphamerge[' + t + 'h]');
+    step.push('[' + t + 'a][' + t + 'h]overlay=x=' + r.x + ':y=' + r.y + ':format=yuv420'
+      + framesOn(f.on, fps) + '[' + t + 'o]');
     cur = t + 'o';
   });
+  if (!pre || steps.length <= VFX_INLINE_MAX) {
+    graph.push(head, ...steps.flat());
+    return '[' + cur + ']';
+  }
+  // A few to a graph, the first with the layer's input, the layer's own graph
+  // taking the last one's label as it would have taken the input.
+  for (let i = 0; i < steps.length; i += VFX_PER_GRAPH) {
+    const part = steps.slice(i, i + VFX_PER_GRAPH).flat();
+    pre.push((i === 0 ? [head, ...part] : part).join(';'));
+  }
   return '[' + cur + ']';
 }
 
@@ -650,7 +739,7 @@ function movingTurnedLayer(graph, l, n, motion, prev, { input, fps, source, mask
 function windowSkip(l, win, sources, project) {
   const skip = win && win.skips && win.skips[l.id];
   if (!skip || !(skip.k >= 1) || l.type !== 'video' || l.frames) return null;
-  if (Array.isArray(l.coverFiles) && l.coverFiles.length) return null;
+  if (Array.isArray(l.vfxFiles) && l.vfxFiles.length) return null;
   if (l.maskFile && l.maskFile.frames) return null;
   if (hasCurvedFade(l)) return null;
   if (l.kind !== 'gen' && timeline.transitionSteps(l).length) return null;
@@ -746,12 +835,12 @@ function buildComposeArgs({
       args.push(...stillInput(l.maskFile.src, fps));
     }
   };
-  // V4.7. And each Obscure or Pixelate's picture of where it acts, after those.
-  const coverInputsOf = new Map();
-  const addCovers = (l) => {
-    if (!Array.isArray(l.coverFiles) || l.type !== 'video') return;
-    coverInputsOf.set(l.id, l.coverFiles.map((f) => {
-      // V4.8. One whose areas move comes as numbered frames, like a moving mask.
+  // V4.7. And each VFX's picture of where it acts, after those.
+  const vfxInputsOf = new Map();
+  const addVfx = (l) => {
+    if (!Array.isArray(l.vfxFiles) || l.type !== 'video') return;
+    vfxInputsOf.set(l.id, l.vfxFiles.map((f) => {
+      // V4.8. One whose area moves comes as numbered frames, like a moving mask.
       const frames = f && f.frames && f.frames.pattern ? f.frames : null;
       if (!f || (!f.src && !frames)) return undefined;
       inputs.push(null);
@@ -793,10 +882,13 @@ function buildComposeArgs({
       }
     }
     addMask(l);
-    addCovers(l);
+    addVfx(l);
   }
 
   const graph = [];
+  // V5.0. The graphs that go before it: a track's VFX when it has many, see
+  // VFX_PER_GRAPH.
+  const vfxGraphs = [];
   const maps = [];
 
   if (hasVideo) {
@@ -825,8 +917,8 @@ function buildComposeArgs({
       const steps = l.kind === 'gen' ? [] : timeline.transitionSteps(l);
       const motion = (steps.length && geometry.shownKeys(l, sources[l.src] || null, project, steps))
         || geometry.motionOf(l, sources[l.src] || null, project);
-      // V4.7. What the layer's chain starts from, its covers laid on.
-      const from = coverHead(graph, l, n, indexOf.get(l.id), fps, coverInputsOf.get(l.id), sources[l.src] || null);
+      // V4.7. What the layer's chain starts from, its VFX laid on.
+      const from = vfxHead(graph, l, n, indexOf.get(l.id), fps, vfxInputsOf.get(l.id), sources[l.src] || null, vfxGraphs);
       if (motion) {
         // V3.4. One that also turns takes the square road above.
         const mover = motion.some((k) => k.turn) ? movingTurnedLayer : movingLayer;
@@ -993,13 +1085,16 @@ function buildComposeArgs({
     maps.push('-map', '[' + prev + ']');
   }
 
+  // V5.0. The sound's part of the graph, kept apart: it goes into a graph of
+  // its own when a track's VFX are in graphs of theirs, see below.
+  const sound = [];
   if (audioLayers.length) {
     const labels = [];
     audioLayers.forEach((l, n) => {
       const label = 'a' + n;
       labels.push('[' + label + ']');
       const fades = timeline.alphaFadesOf(l);
-      graph.push('[' + indexOf.get(l.id) + ':a]'
+      sound.push('[' + indexOf.get(l.id) + ':a]'
         + chain([
           'asetpts=PTS-STARTPTS',
           // V4.11. Its speed first, so the fades after it are in the
@@ -1033,7 +1128,7 @@ function buildComposeArgs({
     if (labels.length > 1) {
       // normalize=0 or amix divides by the number of inputs and every layer
       // gets quieter as the project grows, which is not what a mixer does.
-      graph.push(labels.join('') + 'amix=inputs=' + labels.length
+      sound.push(labels.join('') + 'amix=inputs=' + labels.length
         + ':normalize=0:duration=longest[amixed]');
       prev = 'amixed';
     } else {
@@ -1042,13 +1137,25 @@ function buildComposeArgs({
 
     // Audio that ends before the picture does leaves a file whose streams
     // disagree about how long it is. Pad to the output length first, then cut.
-    graph.push('[' + prev + ']apad=whole_dur=' + fixed(span.end)
+    sound.push('[' + prev + ']apad=whole_dur=' + fixed(span.end)
       + ',atrim=start=' + fixed(span.start) + ':end=' + fixed(span.end)
       + ',asetpts=PTS-STARTPTS[aout]');
     maps.push('-map', '[aout]');
   }
 
-  args.push('-filter_complex', graph.join(';'));
+  if (vfxGraphs.length) {
+    // A track's VFX in graphs of their own, the layers' own graph after them,
+    // and the sound in one of its own as well. With the sound left in the
+    // layers' graph the export never finished (measured: three VFX and a sound
+    // track wrote 5 MB and then stood still): that graph waits for the VFX
+    // graphs' picture while the file's sound, read by the same demuxer as the
+    // picture, piles up in front of it. On its own the sound runs on.
+    for (const text of vfxGraphs) args.push('-filter_complex', text);
+    if (graph.length) args.push('-filter_complex', graph.join(';'));
+    if (sound.length) args.push('-filter_complex', sound.join(';'));
+  } else {
+    args.push('-filter_complex', [...graph, ...sound].join(';'));
+  }
   args.push(...maps);
 
   if (hasVideo) {
@@ -1087,13 +1194,26 @@ const GRAPH_ARG_MAX = 24000;
  * command would be too long: `{ args, graph }`, `graph` being the text to
  * write there, or null when the argv is handed back as it was.
  */
+//
+// V5.0. There may be several graphs, a track's VFX before the layers' own.
+// Then each goes into a file of its own, `files` naming every one with its
+// text: the last graph, the layers' own, in `graphFile` as it always was, the
+// ones before it in `graphFile` with their number after it.
 function spillGraph(args, graphFile, limit = GRAPH_ARG_MAX) {
   const at = args.indexOf('-filter_complex');
   const length = args.reduce((n, a) => n + String(a).length + 3, 0);
-  if (at < 0 || length <= limit) return { args, graph: null };
+  if (at < 0 || length <= limit) return { args, graph: null, files: [] };
   const next = args.slice();
-  next.splice(at, 2, '-/filter_complex', graphFile);
-  return { args: next, graph: args[at + 1] };
+  const places = [];
+  next.forEach((a, i) => {
+    if (a === '-filter_complex') places.push(i);
+  });
+  const files = places.map((i, k) => ({
+    file: k === places.length - 1 ? graphFile : graphFile + '.' + k,
+    text: next[i + 1],
+  }));
+  places.forEach((i, k) => next.splice(i, 2, '-/filter_complex', files[k].file));
+  return { args: next, graph: files[files.length - 1].text, files };
 }
 
 /**
@@ -1175,8 +1295,10 @@ async function render({
   });
   // V4.10. A graph too long for a command line is read from a file.
   const graphFile = path.join(os.tmpdir(), 'lwclipper-graph-' + process.pid + '-' + Date.now() + '.txt');
-  const { args, graph } = spillGraph(built, graphFile);
-  if (graph !== null) fs.writeFileSync(graphFile, graph);
+  const { args, graph, files: graphFiles } = spillGraph(built, graphFile);
+  if (graph !== null) {
+    for (const g of graphFiles) fs.writeFileSync(g.file, g.text);
+  }
 
   const reader = progress.ffmpegProgress(span.duration);
   let result;
@@ -1193,10 +1315,12 @@ async function render({
     throw e;
   } finally {
     if (graph !== null) {
-      try {
-        fs.unlinkSync(graphFile);
-      } catch {
-        // Already gone, or still held: the temp folder is the system's to sweep.
+      for (const g of graphFiles) {
+        try {
+          fs.unlinkSync(g.file);
+        } catch {
+          // Already gone, or still held: the temp folder is the system's to sweep.
+        }
       }
     }
   }

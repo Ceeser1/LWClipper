@@ -752,6 +752,29 @@ bindPopup(choiceModal, () => settleChoice(choiceCancelId), 1);
 // it came from, whether it has changed since, and what to do about a file that
 // has moved.
 
+// V5.0. What this project has already told its user, by the note's name, so
+// each is said once a project (project.js notesOf). Not part of the document:
+// having read a note is not unsaved work, and undo does not bring one back.
+// It is written with the next save.
+let projectNotes = {};
+
+function projectNoted(name) {
+  return projectNotes[name] === true;
+}
+
+function noteProject(name) {
+  projectNotes = { ...projectNotes, [name]: true };
+}
+
+function notesForFile() {
+  return { ...projectNotes };
+}
+
+/** The notes a file says were shown, or none for a new project. */
+function adoptNotes(notes) {
+  projectNotes = projectFile.notesOf(notes);
+}
+
 // Where the document was last saved or opened from, and what it was called.
 // Null means it has never been written, which is what makes the Save button
 // Save-or-Save-As without needing two of them.
@@ -842,7 +865,7 @@ async function saveProject(alwaysAsk) {
   // into it: what markProjectSaved keeps below is the document alone.
   // V3.3. The undo stack goes with them, the same way.
   const result = await window.lwclipper.saveProject(target,
-    { ...document, views: viewsForFile(), history: projectHistory.pack(undoStack) },
+    { ...document, views: viewsForFile(), notes: notesForFile(), history: projectHistory.pack(undoStack) },
     projectPath ? { path: projectPath, name: projectTitle } : null);
   if (!result.ok) {
     reportFailure(result);
@@ -1162,6 +1185,8 @@ async function adoptProject(result) {
   closeGenWindow();
   // V3.3. Before anything opens an editor on the new layers.
   adoptViews(result.views);
+  // V5.0. And the notes it has already shown.
+  adoptNotes(result.notes);
   // V4.5. Its Project Media, before the layers, which add whatever of theirs
   // the list does not have (a project from before V4.5 has no list at all).
   adoptProjectMedia(result);

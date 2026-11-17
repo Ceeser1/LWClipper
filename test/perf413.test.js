@@ -465,7 +465,7 @@ test('a layer whose frames are counted from its start is read the long way', () 
   assert.ok(windowSkip(ok, win, src, PROJECT));
   assert.equal(windowSkip({ ...ok, speed: 2 }, win, src, PROJECT), null);
   assert.equal(windowSkip({ ...ok, frames: { pattern: 'f%d.png' } }, win, src, PROJECT), null);
-  assert.equal(windowSkip({ ...ok, coverFiles: [{ src: 'c.png' }] }, win, src, PROJECT), null);
+  assert.equal(windowSkip({ ...ok, vfxFiles: [{ src: 'c.png' }] }, win, src, PROJECT), null);
   assert.equal(windowSkip({ ...ok, maskFile: { frames: { pattern: 'm%d.png' } } }, win, src, PROJECT), null);
   assert.ok(windowSkip({ ...ok, maskFile: { src: 'm.png' } }, win, src, PROJECT), 'one mask picture is fine');
   const moving = timeline.setLayer([ok], 'a', {

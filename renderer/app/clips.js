@@ -686,6 +686,21 @@ function buildLayerClip(track, layer) {
     cog.appendChild(icon);
     marks.appendChild(cog);
   } else if (layer.type === 'video') {
+    // V5.0. The user: "Let each track have the effects.png left of its
+    // settings.png. If VFX are applied, let it be green instead of white
+    // too." On the tracks that can have VFX, a picture of a file; it opens
+    // the VFX window, as the right click's Add VFX or Edit VFX does.
+    const vfx = makeClipMark('clip-mark--vfx', '', t('VFX'), () => {
+      selectLayer(layer.id);
+      openVfx(layer.id);
+    });
+    const spark = document.createElement('img');
+    spark.className = 'clip-mark__icon';
+    spark.src = '../images/effects.png';
+    spark.alt = '';
+    vfx.appendChild(spark);
+    vfx.classList.toggle('clip-mark--on', timelineModel.vfxList(layer).length > 0);
+    marks.appendChild(vfx);
     // Video only: there is nothing to crop out of a waveform.
     // V3.6.2. The user: the crop button becomes "a cogwheel with hover text
     // Crop and Mask", opening the one window that has both.

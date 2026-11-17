@@ -491,85 +491,142 @@ const timelineModel = (() => {
     return within(v, 0, 1, 0);
   }
 
-  // ---- V4.7. Obscure and Pixelate ----
+  // ---- V5.0. VFX ----
   //
-  // The user: "You can right click on a track to have Obscure or Pixelate in
-  // its menu. Both get a setting in a new modal, what they want to
-  // obscure/pixelate." Each is done to a video or image layer's own picture:
-  // inside its areas the picture is blurred, or broken into blocks. An area
-  // is a shape in a box, turned or not, and there may be several, two faces
-  // or a name and a number.
+  // The user, 2026-11-17: Obscure and Pixelate (V4.7, V4.8) become "VFX", a
+  // list on a video or image track that one window edits. "Only one box/area
+  // per vfx", several of a kind being several entries ("Pixelate, Pixelate
+  // (2), Pixelate (n+1)"); "The order of which the VFX are added to a track
+  // determine which gets processed first"; "All settings of any vfx should be
+  // editable per keyframe, not set global"; and "Obscure and Pixelate are not
+  // the only VFX settings, more will come later", so nothing below is written
+  // for the two there are.
   //
-  // The areas belong to the picture as the file has it, not as it is cropped
-  // or placed: fractions of the whole source picture, so a crop changed later
-  // leaves an area on what it covered, and nothing the keyframes do to the
-  // picture has to know about them. `strength`, 1 to 100, is how far the
-  // effect goes (obscureSigma and pixelateBlock say what that is in pixels),
-  // `soft` how far the areas' edges fade, a fraction of the picture's height
-  // like a mask's, and `invert` makes it everything but the areas. Both are
-  // the whole clip's. In the code the pair is called a layer's covers, since
-  // "fx" was Outline and Shadow's word already.
-
-  const COVER_KINDS = ['obscure', 'pixelate'];
-  const COVER_AREAS_MAX = 24;
-  const COVER_STRENGTH = { obscure: 30, pixelate: 25 };
-
-  // V4.8. An area may carry keyframes of its own, `keys`, see "Areas that
-  // move" below. One without any has no `keys` at all, and is the area 4.7
-  // wrote.
-  function coverAreaOf(v) {
-    const src = v && typeof v === 'object' ? v : {};
-    const area = {
-      kind: oneOf(src.kind, SHAPE_KINDS, 'square'),
-      box: maskBoxOf(src.box),
-      rotation: rotationOf(src.rotation),
-    };
-    const keys = coverKeysOf(src.keys);
-    return keys.length ? { ...area, keys } : area;
-  }
-
-  // ---- V4.8. Areas that move ----
+  // A kind is a row of VFX_KINDS: its name, whether it acts in an area (a
+  // shape in a box on the picture), its settings, and when it is off. The
+  // settings are of two sorts, the user's rule for this and every later VFX:
+  // "a few things cannot really interpolate between keyframes. A few settings
+  // are global per VFX (or shape, like invert)". Those are `statics`, the
+  // VFX's own and the same the whole clip long. The rest are `keyed`: numbers
+  // that go smoothly from one keyframe to the next. An area's box and turn are
+  // keyed on every kind that has an area.
   //
-  // So an area can follow a face: each area carries keyframes of its own,
-  // `keys: [{ id, t, box, rotation }]`, and between two of them its box and
-  // its turn go smoothly from the one to the other, the user's rule for every
-  // keyframe: no hold, two close together make a jump. They are the area's and
-  // not the layer's, since the layer's keyframes are where the picture is put
-  // (the Crop and Mask window's) and an area is on the picture itself, and
-  // two areas on one picture follow two different things.
+  // One VFX is { id, kind, ...statics, ...keyed values, keys? }. Without
+  // `keys` it is the same the whole clip long, the user's "continuous". With
+  // them, `keys: [{ id, t, ...keyed values }]`, `t` in the clip's own seconds
+  // like a layer keyframe's: between two of them every keyed value blends,
+  // before the first it is the first's and after the last the last's, and
+  // while it has keys they are the whole of what it is. A Strength of 0 is
+  // off, which is how keyframes limit a VFX to a stretch of the clip: the
+  // user's example, 0, 50, 0, 100, 0, 0 (off between those two), 50, and a
+  // last one at 0 "until end of the clip".
   //
-  // `t` is the clip's own seconds like a layer keyframe's, so the same rules
-  // hold: moving the clip takes them along, a trim of its start shifts them
-  // back so they stay where they are on the timeline, a split gives both
-  // halves all of them, and one trimmed out of view is kept and still steers.
-  // Before the first the area is the first's, after the last the last's.
-  // While an area has keys they are the whole of where it is; its own box and
-  // turn are what it had before the first one.
+  // An area belongs to the picture as the file has it, not as it is cropped
+  // or placed: its box is in fractions of the whole source picture, so a crop
+  // changed later leaves it on what it covered, and nothing the layer's own
+  // keyframes do to the picture has to know about it. `soft` is how far its
+  // edge fades, a fraction of the picture's height like a mask's.
   //
-  // The functions below take an area in any unit, the layer's fractions or
+  // The same rules as a layer's keyframes hold for a VFX's: moving the clip
+  // takes them along, a trim of its start shifts them back so they stay where
+  // they are on the timeline, a split gives both halves all of them, and one
+  // trimmed out of view is kept and still steers.
+  //
+  // A project written before V5.0 kept `obscure` and `pixelate` on the layer.
+  // The user: "no conversion between old and new projects". createLayer no
+  // longer names those two, so such a project opens without them.
+  //
+  // The key functions below take a VFX in any unit, the layer's fractions or
   // the window's pixels: they only blend and compare its numbers.
 
-  /** One of an area's keyframes as a file may hand it over, or null. */
-  function coverKeyOf(v) {
-    if (!v || typeof v !== 'object') return null;
-    const t = Number(v.t);
-    if (!Number.isFinite(t)) return null;
-    return {
-      id: typeof v.id === 'string' && v.id ? v.id : newKeyframeId(),
-      t: round(t),
-      box: maskBoxOf(v.box),
-      rotation: rotationOf(v.rotation),
-    };
+  // A setting: `id` is the field it is kept in, `type` what it is ('number',
+  // 'check', 'shape'), `def` what a new VFX starts with. A number has its
+  // range, `whole` when it only takes whole numbers, and `of: 'height'` when
+  // it is a fraction of the picture's height that the window shows in the
+  // picture's pixels. `in` says what a keyed setting changes: 'mask', where
+  // the VFX acts, or 'filter', what it does there.
+  const VFX_AREA_STATICS = [
+    { id: 'shape', type: 'shape', def: 'square' },
+    { id: 'invert', type: 'check', def: false },
+  ];
+  const VFX_SOFT = { id: 'soft', type: 'number', min: 0, max: 0.5, def: 0, of: 'height', in: 'mask' };
+  const VFX_KINDS = {
+    obscure: {
+      area: true,
+      statics: VFX_AREA_STATICS,
+      keyed: [
+        { id: 'strength', type: 'number', min: 0, max: 100, whole: true, def: 30, in: 'filter' },
+        VFX_SOFT,
+      ],
+      off: (s) => !(s.strength > 0),
+    },
+    pixelate: {
+      area: true,
+      statics: VFX_AREA_STATICS,
+      keyed: [
+        { id: 'strength', type: 'number', min: 0, max: 100, whole: true, def: 25, in: 'filter' },
+        VFX_SOFT,
+      ],
+      off: (s) => !(s.strength > 0),
+    },
+  };
+  const VFX_KIND_IDS = Object.keys(VFX_KINDS);
+
+  // The user: no cap, "if you have 50 same vfx in a track but all at different
+  // times ... it should still export", and instead a note, once a project,
+  // on "adding >=8th VFX to a track with at least 3x the same vfx type".
+  const VFX_NOTE_FROM = 8;
+  const VFX_NOTE_SAME = 3;
+
+  function vfxKind(kind) {
+    return Object.prototype.hasOwnProperty.call(VFX_KINDS, kind) ? VFX_KINDS[kind] : null;
   }
 
-  /** An area's keyframes in time order, one to a moment and one to an id. */
-  function coverKeysOf(list) {
+  function newVfxId() {
+    return 'x' + Math.random().toString(36).slice(2, 10);
+  }
+
+  /** The fields a keyframe of this kind holds, in a fixed order. */
+  function vfxKeyedIds(kind) {
+    const def = vfxKind(kind);
+    if (!def) return [];
+    return [...(def.area ? ['box', 'rotation'] : []), ...def.keyed.map((s) => s.id)];
+  }
+
+  function vfxSettingValue(s, v) {
+    if (s.type === 'check') return bool(v);
+    if (s.type === 'shape') return oneOf(v, SHAPE_KINDS, s.def);
+    const n = within(v, s.min, s.max, s.def);
+    return s.whole ? Math.round(n) : n;
+  }
+
+  /** A kind's keyed values read out of `src`, each held to its range. */
+  function vfxValuesOf(kind, src) {
+    const def = vfxKind(kind);
+    const from = src && typeof src === 'object' ? src : {};
+    const out = {};
+    if (def.area) {
+      out.box = maskBoxOf(from.box);
+      out.rotation = rotationOf(from.rotation);
+    }
+    for (const s of def.keyed) out[s.id] = vfxSettingValue(s, from[s.id]);
+    return out;
+  }
+
+  /** A VFX's keyframes as a file may hand them over: in time order, one to a moment and one to an id. */
+  function vfxKeysOf(kind, list) {
     if (!Array.isArray(list)) return [];
     const byTime = new Map();
     const ids = new Set();
     for (const raw of list) {
-      const k = coverKeyOf(raw);
-      if (!k) continue;
+      if (!raw || typeof raw !== 'object') continue;
+      const t = Number(raw.t);
+      if (!Number.isFinite(t)) continue;
+      const k = {
+        id: typeof raw.id === 'string' && raw.id ? raw.id : newKeyframeId(),
+        t: round(t),
+        ...vfxValuesOf(kind, raw),
+      };
       if (ids.has(k.id)) k.id = newKeyframeId();
       ids.add(k.id);
       byTime.set(k.t, k);
@@ -577,8 +634,62 @@ const timelineModel = (() => {
     return [...byTime.values()].sort((a, b) => a.t - b.t);
   }
 
-  function coverKeysFor(area) {
-    return area && Array.isArray(area.keys) ? area.keys : [];
+  /** One VFX as the model keeps it, or null for a kind this build does not have. */
+  function vfxOf(v) {
+    if (!v || typeof v !== 'object') return null;
+    const def = vfxKind(v.kind);
+    if (!def) return null;
+    const out = { id: typeof v.id === 'string' && v.id ? v.id : newVfxId(), kind: v.kind };
+    for (const s of def.statics) out[s.id] = vfxSettingValue(s, v[s.id]);
+    Object.assign(out, vfxValuesOf(v.kind, v));
+    const keys = vfxKeysOf(v.kind, v.keys);
+    if (keys.length) out.keys = keys;
+    return out;
+  }
+
+  /** A layer's VFX in the order they are processed, each with an id of its own. */
+  function vfxListOf(list) {
+    if (!Array.isArray(list)) return [];
+    const ids = new Set();
+    const out = [];
+    for (const raw of list) {
+      const v = vfxOf(raw);
+      if (!v) continue;
+      if (ids.has(v.id)) v.id = newVfxId();
+      ids.add(v.id);
+      out.push(v);
+    }
+    return out;
+  }
+
+  /** What a layer has, in the order processed. Only a picture of a file has any. */
+  function vfxList(layer) {
+    if (!layer || layer.kind === 'gen' || layer.type !== 'video' || !Array.isArray(layer.vfx)) return [];
+    return layer.vfx;
+  }
+
+  function vfxKeysFor(v) {
+    return v && Array.isArray(v.keys) ? v.keys : [];
+  }
+
+  /**
+   * Which of its kind a VFX is on its track, counted from 1 in the order
+   * processed: the user's "Pixelate, Pixelate (2)".
+   */
+  function vfxNumber(list, index) {
+    const v = list[index];
+    if (!v) return 0;
+    let n = 0;
+    for (let i = 0; i <= index; i += 1) if (list[i].kind === v.kind) n += 1;
+    return n;
+  }
+
+  /** Whether a track with this list is due the note about keyframes. */
+  function vfxNoteDue(list) {
+    if (!Array.isArray(list) || list.length < VFX_NOTE_FROM) return false;
+    const counts = new Map();
+    for (const v of list) counts.set(v.kind, (counts.get(v.kind) || 0) + 1);
+    return [...counts.values()].some((n) => n >= VFX_NOTE_SAME);
   }
 
   /** From turn a to turn b the short way round, in signed degrees. */
@@ -587,67 +698,143 @@ const timelineModel = (() => {
     return d === -180 ? 180 : d;
   }
 
+  /** One set of keyed values copied, so a keyframe never shares its box. */
+  function vfxValuesCopy(kind, src) {
+    const out = {};
+    for (const id of vfxKeyedIds(kind)) out[id] = id === 'box' ? { ...src.box } : src[id];
+    return out;
+  }
+
   /**
-   * An area as it is at `t`, the clip's own seconds: `{ kind, box, rotation }`
-   * with no keys, which is what the drawing takes. Its box and turn blended
-   * between the keyframes either side, the turn the short way round.
+   * A VFX's keyed values at `t`, the clip's own seconds, blended between the
+   * keyframes either side and not rounded: its own without keyframes. The
+   * turn goes the short way round.
    */
-  function coverAreaAt(area, t) {
-    const list = coverKeysFor(area);
-    const put = (box, rotation) => ({ kind: area.kind, box: { ...box }, rotation });
-    if (!list.length) return put(area.box, area.rotation || 0);
+  function vfxValuesAt(v, t) {
+    const list = vfxKeysFor(v);
+    if (!list.length) return vfxValuesCopy(v.kind, v);
     const at = Number.isFinite(Number(t)) ? Number(t) : 0;
-    if (at <= list[0].t) return put(list[0].box, list[0].rotation || 0);
+    if (at <= list[0].t) return vfxValuesCopy(v.kind, list[0]);
     const last = list[list.length - 1];
-    if (at >= last.t) return put(last.box, last.rotation || 0);
+    if (at >= last.t) return vfxValuesCopy(v.kind, last);
     let i = 0;
     while (list[i + 1].t <= at) i += 1;
     const a = list[i];
     const b = list[i + 1];
     const u = (at - a.t) / (b.t - a.t);
     const lerp = (p, q) => p + (q - p) * u;
-    return put(
-      { x: lerp(a.box.x, b.box.x), y: lerp(a.box.y, b.box.y), w: lerp(a.box.w, b.box.w), h: lerp(a.box.h, b.box.h) },
-      rotationOf((a.rotation || 0) + turnBetween(a.rotation, b.rotation) * u),
-    );
-  }
-
-  /**
-   * An Obscure or a Pixelate as it is at `t` of the clip, every area where its
-   * keyframes put it then. The very same object when no area has any.
-   */
-  function coverAt(cover, t) {
-    if (!cover || !cover.areas.some((a) => coverKeysFor(a).length)) return cover;
-    return { ...cover, areas: cover.areas.map((a) => coverAreaAt(a, t)) };
-  }
-
-  /**
-   * The stretch of the clip over which an Obscure or a Pixelate changes, in
-   * its own seconds, or null when it never does: no keyframes, or ones that
-   * all say the same. From the first keyframe that shows to the last, over
-   * every area that moves.
-   */
-  function coverMotion(layer, cover) {
-    if (!layer || !cover) return null;
-    let from = Infinity;
-    let to = -Infinity;
-    for (const a of cover.areas) {
-      const list = coverKeysFor(a);
-      if (list.length < 2) continue;
-      const first = JSON.stringify([list[0].box, list[0].rotation]);
-      if (list.every((k) => JSON.stringify([k.box, k.rotation]) === first)) continue;
-      from = Math.min(from, list[0].t);
-      to = Math.max(to, list[list.length - 1].t);
+    const out = {};
+    for (const id of vfxKeyedIds(v.kind)) {
+      if (id === 'box') {
+        out.box = { x: lerp(a.box.x, b.box.x), y: lerp(a.box.y, b.box.y), w: lerp(a.box.w, b.box.w), h: lerp(a.box.h, b.box.h) };
+      } else if (id === 'rotation') {
+        out.rotation = rotationOf((a.rotation || 0) + turnBetween(a.rotation, b.rotation) * u);
+      } else {
+        out[id] = lerp(Number(a[id]) || 0, Number(b[id]) || 0);
+      }
     }
-    from = Math.max(0, from);
-    to = Math.min(layer.duration, to);
+    return out;
+  }
+
+  /**
+   * A VFX as it is at `t` of the clip, with no keys left, which is what every
+   * drawing takes: { id, kind, off, ...statics, ...keyed values, areas }.
+   * A whole-number setting is rounded here, so the preview and the export
+   * read the very same figure off a blend. `areas` is its area as the shared
+   * drawing has always taken one, [{ kind: its shape, box, rotation }], and
+   * empty for a kind without an area.
+   */
+  function vfxAt(v, t) {
+    const def = vfxKind(v.kind);
+    const now = vfxValuesAt(v, t);
+    const out = { id: v.id, kind: v.kind };
+    for (const s of def.statics) out[s.id] = v[s.id];
+    for (const s of def.keyed) out[s.id] = s.whole ? Math.round(now[s.id]) : now[s.id];
+    out.areas = def.area ? [{ kind: v.shape, box: now.box, rotation: now.rotation || 0 }] : [];
+    out.off = !!def.off(out);
+    return out;
+  }
+
+  /** Whether a VFX does anything at any moment: one that is off throughout does not. */
+  function vfxEverOn(v) {
+    const def = vfxKind(v.kind);
+    if (!def) return false;
+    const list = vfxKeysFor(v);
+    if (!list.length) return !def.off(v);
+    return list.some((k) => !def.off(k));
+  }
+
+  /** Whether a VFX changes at all over the clip: keyframes that do not all say the same. */
+  function vfxMoves(v) {
+    const list = vfxKeysFor(v);
+    if (list.length < 2) return false;
+    const ids = vfxKeyedIds(v.kind);
+    const said = (k) => JSON.stringify(ids.map((id) => k[id]));
+    const first = said(list[0]);
+    return list.some((k) => said(k) !== first);
+  }
+
+  /**
+   * The stretch of the clip over which where a VFX acts changes, in the
+   * clip's own seconds, or null when it never does: its box, its turn and
+   * every setting that is `in: 'mask'`. From the first keyframe to the last,
+   * held to the clip.
+   */
+  function vfxMotion(layer, v) {
+    if (!layer || !v) return null;
+    const def = vfxKind(v.kind);
+    const list = vfxKeysFor(v);
+    if (!def || list.length < 2) return null;
+    const ids = [...(def.area ? ['box', 'rotation'] : []), ...def.keyed.filter((s) => s.in === 'mask').map((s) => s.id)];
+    const said = (k) => JSON.stringify(ids.map((id) => k[id]));
+    const first = said(list[0]);
+    if (list.every((k) => said(k) === first)) return null;
+    const from = Math.max(0, list[0].t);
+    const to = Math.min(layer.duration, list[list.length - 1].t);
     return to > from ? { from, to } : null;
   }
 
-  /** The keyframe of an area at `t`, within `reach` either side, or null. */
-  function coverKeyNear(area, t, reach = 0) {
+  /**
+   * What a VFX does, frame by frame, for an encoder that cannot be told a
+   * figure per frame: the frames of the clip at `fps` in runs, each
+   * `{ from, to, at }`, first and last frame and the VFX as it is on them
+   * (vfxAt at the frame's own moment, frame i being i / fps of the clip).
+   * A run is as long as every `in: 'filter'` setting and `off` stay the same.
+   * One run for a VFX that never changes what it does.
+   */
+  function vfxRuns(layer, v, fps) {
+    const def = vfxKind(v.kind);
+    const rate = Math.max(1, Number(fps) || 30);
+    const total = Math.max(1, Math.round(layer.duration * rate));
+    const ids = def.keyed.filter((s) => s.in === 'filter').map((s) => s.id);
+    const said = (now) => (now.off ? 'off' : JSON.stringify(ids.map((id) => now[id])));
+    const list = vfxKeysFor(v);
+    const first = vfxAt(v, 0);
+    if (list.length < 2 || list.every((k) => JSON.stringify(ids.map((id) => k[id])) === JSON.stringify(ids.map((id) => list[0][id])))) {
+      return [{ from: 0, to: total - 1, at: first }];
+    }
+    const runs = [];
+    let open = { from: 0, to: 0, at: first };
+    let key = said(first);
+    for (let i = 1; i < total; i += 1) {
+      const now = vfxAt(v, i / rate);
+      const k = said(now);
+      if (k === key) {
+        open.to = i;
+        continue;
+      }
+      runs.push(open);
+      open = { from: i, to: i, at: now };
+      key = k;
+    }
+    runs.push(open);
+    return runs;
+  }
+
+  /** The keyframe of a VFX at `t`, within `reach` either side, or null. */
+  function vfxKeyNear(v, t, reach = 0) {
     let best = null;
-    for (const k of coverKeysFor(area)) {
+    for (const k of vfxKeysFor(v)) {
       const d = Math.abs(k.t - t);
       if (d <= reach && (!best || d < Math.abs(best.t - t))) best = k;
     }
@@ -655,90 +842,68 @@ const timelineModel = (() => {
   }
 
   /**
-   * A keyframe put on an area, a new one or a changed one by its id. One that
-   * was at the same moment already gives way to it.
+   * A keyframe put on a VFX, a new one or a changed one by its id, holding
+   * every keyed value. One that was at the same moment already gives way.
    */
-  function putCoverKey(area, key) {
-    const k = { id: key.id || newKeyframeId(), t: round(Number(key.t) || 0), box: { ...key.box }, rotation: key.rotation || 0 };
-    const rest = coverKeysFor(area).filter((o) => o.id !== k.id && o.t !== k.t);
-    return { ...area, keys: [...rest, k].sort((a, b) => a.t - b.t) };
+  function putVfxKey(v, key) {
+    const k = { id: key.id || newKeyframeId(), t: round(Number(key.t) || 0), ...vfxValuesCopy(v.kind, key) };
+    const rest = vfxKeysFor(v).filter((o) => o.id !== k.id && o.t !== k.t);
+    return { ...v, keys: [...rest, k].sort((a, b) => a.t - b.t) };
   }
 
   /**
-   * A keyframe taken off an area, by the rules a layer's go by: the first
+   * A keyframe taken off a VFX, by the rules a layer's go by: the first
    * deleted with two or more after it takes the second's settings and stays,
-   * and when a delete leaves one alone that goes too, the area holding still
-   * from then on as the first had it.
+   * and when a delete leaves one alone that goes too, the VFX being from then
+   * on what the first had.
    */
-  function removeCoverKey(area, id) {
-    const list = coverKeysFor(area);
+  function removeVfxKey(v, id) {
+    const list = vfxKeysFor(v);
     const gone = list.find((k) => k.id === id);
-    if (!gone) return area;
+    if (!gone) return v;
     if (gone === list[0] && list.length > 2) {
       const second = list[1];
-      return { ...area, keys: list.map((k) => (k === gone ? { ...k, box: { ...second.box }, rotation: second.rotation } : k)) };
+      return { ...v, keys: list.map((k) => (k === gone ? { id: k.id, t: k.t, ...vfxValuesCopy(v.kind, second) } : k)) };
     }
     const keys = list.filter((k) => k !== gone);
-    if (keys.length > 1) return { ...area, keys };
-    const { keys: _keys, ...still } = area;
-    return { ...still, box: { ...list[0].box }, rotation: list[0].rotation || 0 };
+    if (keys.length > 1) return { ...v, keys };
+    const { keys: _keys, ...still } = v;
+    return { ...still, ...vfxValuesCopy(v.kind, list[0]) };
   }
 
   /**
-   * A keyframe of an area dragged along a clip `duration` long. It stays on
-   * the part that shows and never lands on another's moment, stopping a
+   * A keyframe of a VFX dragged along a clip `duration` long. It stays on the
+   * part that shows and never lands on another's moment, stopping a
    * millisecond short instead.
    */
-  function moveCoverKey(area, id, t, duration) {
-    const list = coverKeysFor(area);
+  function moveVfxKey(v, id, t, duration) {
+    const list = vfxKeysFor(v);
     const k = list.find((o) => o.id === id);
-    if (!k) return area;
+    if (!k) return v;
     let at = clamp(round(Number(t)), 0, round(duration));
-    const taken = (v) => list.some((o) => o !== k && Math.abs(o.t - v) < 0.0005);
+    const taken = (x) => list.some((o) => o !== k && Math.abs(o.t - x) < 0.0005);
     if (taken(at)) at = round(at + (at >= k.t ? -0.001 : 0.001));
-    if (taken(at)) return area;
-    return { ...area, keys: list.map((o) => (o === k ? { ...o, t: at } : o)).sort((a, b) => a.t - b.t) };
+    if (taken(at)) return v;
+    return { ...v, keys: list.map((o) => (o === k ? { ...o, t: at } : o)).sort((a, b) => a.t - b.t) };
   }
 
-  /** An area with every keyframe moved by `dt` seconds. */
-  function shiftAreaKeys(area, dt) {
-    const list = coverKeysFor(area);
-    if (!list.length || !dt) return area;
-    return { ...area, keys: list.map((k) => ({ ...k, t: round(k.t + dt) })) };
+  /** A list of VFX with every keyframe's time put through `move`. */
+  function vfxKeysMoved(list, move) {
+    return list.map((v) => {
+      const keys = vfxKeysFor(v);
+      return keys.length ? { ...v, keys: keys.map((k) => ({ ...k, t: round(move(k.t)) })) } : v;
+    });
   }
 
   /**
-   * A layer's Obscure and Pixelate with every area's keyframes moved by `dt`
-   * of the clip's seconds, as `{ obscure, pixelate }` to spread onto it: what
+   * A layer's VFX with every keyframe moved by `dt` of the clip's seconds, as
+   * `{ vfx }` to spread onto it, or nothing to spread when none has any: what
    * a trim of the start and a split do to them, as they do to the layer's own.
    */
-  function shiftCoverKeys(layer, dt) {
-    const out = {};
-    for (const kind of COVER_KINDS) {
-      const cover = layer[kind];
-      if (!cover || !dt || !cover.areas.some((a) => coverKeysFor(a).length)) continue;
-      out[kind] = { ...cover, areas: cover.areas.map((a) => shiftAreaKeys(a, dt)) };
-    }
-    return out;
-  }
-
-  /** An Obscure or a Pixelate, or null for none: one with no area is none. */
-  function coverOf(v, kind) {
-    if (!v || typeof v !== 'object' || !Array.isArray(v.areas)) return null;
-    const areas = v.areas.filter((a) => a && typeof a === 'object').slice(0, COVER_AREAS_MAX).map(coverAreaOf);
-    if (!areas.length) return null;
-    return {
-      strength: Math.round(within(v.strength, 1, 100, COVER_STRENGTH[kind] || 30)),
-      soft: maskSoftOf(v.soft),
-      invert: bool(v.invert),
-      areas,
-    };
-  }
-
-  /** What a layer has of the two, in the order they are laid on: `{ kind, cover }`. */
-  function coverList(layer) {
-    if (!layer || layer.kind === 'gen' || layer.type !== 'video') return [];
-    return COVER_KINDS.filter((kind) => layer[kind]).map((kind) => ({ kind, cover: layer[kind] }));
+  function shiftVfxKeys(layer, dt) {
+    const list = vfxList(layer);
+    if (!dt || !list.some((v) => vfxKeysFor(v).length)) return {};
+    return { vfx: vfxKeysMoved(list, (t) => t + dt) };
   }
 
   /**
@@ -926,12 +1091,13 @@ const timelineModel = (() => {
       // before masks is. Only a picture of a file has one: a generated layer
       // is a shape or a text already, and a sound has nothing to mask.
       mask: kind !== 'gen' && props.type !== 'audio' ? maskOf(props.mask) : null,
-      // V4.7. Obscure and Pixelate, each null for none, which every layer
-      // written before them is. Like the mask, only a picture of a file has
-      // them. Declared here for the reason render is: a field createLayer
-      // does not name is a field the project open path drops.
-      obscure: kind !== 'gen' && props.type !== 'audio' ? coverOf(props.obscure, 'obscure') : null,
-      pixelate: kind !== 'gen' && props.type !== 'audio' ? coverOf(props.pixelate, 'pixelate') : null,
+      // V5.0. Its VFX in the order they are processed, empty for none, which
+      // every layer written before them is. Like the mask, only a picture of
+      // a file has them. Declared here for the reason render is: a field
+      // createLayer does not name is a field the project open path drops,
+      // which is also what becomes of the `obscure` and `pixelate` a project
+      // from before V5.0 has (the user: "no conversion").
+      vfx: kind !== 'gen' && props.type !== 'audio' ? vfxListOf(props.vfx) : [],
       // V3.3. The crop, placement and ring at moments of the clip, and empty on
       // everything written before them. See "Keyframes" below. Declared here
       // for the reason render is: a field createLayer does not name is a field
@@ -1483,7 +1649,7 @@ const timelineModel = (() => {
   // encoder alike.
   //
   // What is on the clip goes with what it shows: its keyframes, and the ones
-  // of its Obscure and Pixelate areas, keep their place in the picture, so a
+  // of its VFX, keep their place in the picture, so a
   // clip made twice as long has them twice as far apart. Its fades are times
   // of the timeline and stay the length they were, held to the new clip.
 
@@ -1526,17 +1692,7 @@ const timelineModel = (() => {
     }
     const keys = keyframesFor(l);
     if (keys.length) next.keyframes = keys.map((k) => ({ ...k, t: round(k.t * r) }));
-    for (const kind of COVER_KINDS) {
-      const cover = l[kind];
-      if (!cover || !cover.areas.some((a) => coverKeysFor(a).length)) continue;
-      next[kind] = {
-        ...cover,
-        areas: cover.areas.map((a) => {
-          const list = coverKeysFor(a);
-          return list.length ? { ...a, keys: list.map((k) => ({ ...k, t: round(k.t * r) })) } : a;
-        }),
-      };
-    }
+    if (vfxList(l).some((v) => vfxKeysFor(v).length)) next.vfx = vfxKeysMoved(vfxList(l), (t) => t * r);
     next.fadeIn = round(Math.min(l.fadeIn || 0, duration));
     next.fadeOut = round(Math.min(l.fadeOut || 0, Math.max(0, duration - next.fadeIn)));
     return next;
@@ -2181,8 +2337,8 @@ const timelineModel = (() => {
           // V3.3. Held where they are on the timeline while the start moves
           // under them, which on the clip's own clock is back by the shift.
           keyframes: shiftKeyframes(l, -shift),
-          // V4.8. And the ones its Obscure and Pixelate areas carry.
-          ...shiftCoverKeys(l, -shift),
+          // V4.8. And the ones its VFX carry.
+          ...shiftVfxKeys(l, -shift),
         };
       }
       const latest = round(l.start + sourceRemaining(l));
@@ -2802,8 +2958,8 @@ const timelineModel = (() => {
       // half cannot show are out of view and still steer it, the same as after
       // a trim.
       keyframes: shiftKeyframes(layer, -kept),
-      // V4.8. The same for the keyframes of its Obscure and Pixelate areas.
-      ...shiftCoverKeys(layer, -kept),
+      // V4.8. The same for the keyframes of its VFX.
+      ...shiftVfxKeys(layer, -kept),
     };
     return [left, right];
   }
@@ -3425,20 +3581,30 @@ const timelineModel = (() => {
     maskOf,
     maskAt,
     // V4.7.
-    COVER_KINDS,
-    COVER_AREAS_MAX,
-    COVER_STRENGTH,
-    coverOf,
-    coverList,
-    coverKeysFor,
-    coverAreaAt,
-    coverAt,
-    coverMotion,
-    coverKeyNear,
-    putCoverKey,
-    removeCoverKey,
-    moveCoverKey,
-    shiftCoverKeys,
+    VFX_KINDS,
+    VFX_KIND_IDS,
+    VFX_NOTE_FROM,
+    VFX_NOTE_SAME,
+    vfxKind,
+    vfxKeyedIds,
+    vfxOf,
+    vfxListOf,
+    vfxList,
+    vfxKeysFor,
+    vfxNumber,
+    vfxNoteDue,
+    vfxValuesAt,
+    vfxAt,
+    vfxEverOn,
+    vfxMoves,
+    vfxMotion,
+    vfxRuns,
+    vfxKeyNear,
+    putVfxKey,
+    removeVfxKey,
+    moveVfxKey,
+    shiftVfxKeys,
+    newVfxId,
     obscureSigma,
     pixelateBlock,
     maskMotion,

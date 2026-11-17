@@ -379,36 +379,85 @@ async function exportMask(l, frame) {
   return { ok: true, file: { frames: { pattern: wrote.pattern, ...frameHolds(runs, l.duration, fps) } } };
 }
 
+// V5.0. What each kind of VFX hands the encoder: `step`, the figure its
+// filter takes for the VFX as it is at one moment, `room`, what the part of
+// the picture it touches needs round it over all its figures, and `whole`,
+// whether the filter has to be given the whole picture (composer.js
+// VFX_FILTERS is the other half of each row). A new kind is a new row.
+const VFX_EXPORT = {
+  obscure: {
+    step: (now, H) => ({ sigma: timelineModel.obscureSigma(now.strength, H) }),
+    // A blur needs the pixels beside what it blurs, as far as its widest reaches.
+    room: (steps) => ({ margin: Math.ceil(Math.max(...steps.map((x) => x.sigma)) * 3), grid: 2 }),
+    whole: () => false,
+  },
+  pixelate: {
+    step: (now, H) => ({ block: timelineModel.pixelateBlock(now.strength, H) }),
+    // The blocks are counted from the picture's corner: one size has its part
+    // cut on its own grid, several are made of the whole picture.
+    room: (steps) => ({ margin: 0, grid: steps.length > 1 ? 2 : steps[0].block }),
+    whole: (steps) => steps.length > 1,
+  },
+};
+
 /**
- * V4.7. A layer's Obscure and Pixelate for the encoder, in the order they are
- * laid on: for each, the part of the source picture it touches, where it acts
- * in that part as a PNG, white on black, and the figure its filter takes.
- * Only that part is filtered, so a face in a 4K frame costs a face's worth.
- * Cached by what it shows, like a mask.
+ * V5.0 (V4.7, V4.8). A layer's VFX for the encoder, in the order they are
+ * processed: for each, the part of the source picture it touches, where it
+ * acts in that part as a PNG, white on black, and the figures its filter
+ * takes. Only that part is filtered, so a face in a 4K frame costs a face's
+ * worth. Cached by what it shows, like a mask.
  *
- * V4.8. One whose areas move between keyframes of their own goes as the
- * frames of the stretch where they do, at the project's rate, each the moment
- * at its start as the preview shows it, the way a moving mask goes. The part
- * filtered is then every part it touches over that stretch, one rectangle for
- * the whole clip, since the encoder's crop is fixed.
+ * One whose area moves between keyframes, or whose soft edge changes, goes
+ * as the frames of the stretch where it does, at the project's rate, each
+ * the moment at its start as the preview shows it, the way a moving mask
+ * goes. The part filtered is then every part it touches over that stretch,
+ * one rectangle for the whole clip, since the encoder's crop is fixed.
+ *
+ * One whose strength changes goes with its figure in `steps`, each a figure
+ * and the frames it holds for (timeline.js vfxRuns), and `on`, the frames it
+ * is not off, when it is off for some. One that is never on is left out.
  */
-async function exportCovers(l, frame) {
+async function exportVfx(l, frame) {
   const source = layerSource(l);
   const files = [];
   if (!source) return { ok: true, files };
   const W = Math.round(source.width);
   const H = Math.round(source.height);
   const fps = Number(frame && frame.fps) || 30;
-  for (const { kind, cover: whole } of timelineModel.coverList(l)) {
-    const sigma = timelineModel.obscureSigma(whole.strength, H);
-    const block = timelineModel.pixelateBlock(whole.strength, H);
-    const room = kind === 'obscure' ? { margin: Math.ceil(sigma * 3), grid: 2 } : { margin: 0, grid: block };
-    // The frames it changes over, or the one it is the whole clip long.
-    const moving = timelineModel.coverMotion(l, whole);
+  for (const v of timelineModel.vfxList(l)) {
+    const kind = VFX_EXPORT[v.kind];
+    const def = timelineModel.vfxKind(v.kind);
+    if (!kind || !def || !timelineModel.vfxEverOn(v)) continue;
+    const runs = timelineModel.vfxRuns(l, v, fps);
+    const live = runs.filter((r) => !r.at.off);
+    if (!live.length) continue;
+    // Each figure once, with every stretch of frames it holds for.
+    const figures = new Map();
+    for (const r of live) {
+      const step = kind.step(r.at, H);
+      const key = JSON.stringify(step);
+      if (!figures.has(key)) figures.set(key, { ...step, ranges: [] });
+      figures.get(key).ranges.push([r.from, r.to]);
+    }
+    const steps = [...figures.values()];
+    // The same the whole clip long needs no frames named.
+    if (runs.length === 1) delete steps[0].ranges;
+    let on = null;
+    if (live.length < runs.length) {
+      on = [];
+      for (const r of live) {
+        const last = on[on.length - 1];
+        if (last && last[1] + 1 === r.from) last[1] = r.to;
+        else on.push([r.from, r.to]);
+      }
+    }
+    const room = kind.room(steps);
+    // The frames where it acts changes, or the one it is the whole clip long.
+    const moving = timelineModel.vfxMotion(l, v);
     const total = Math.max(1, Math.round(l.duration * fps));
     const first = moving ? Math.min(total - 1, Math.max(0, Math.floor(moving.from * fps))) : 0;
     const last = moving ? Math.min(total - 1, Math.max(first, Math.ceil(moving.to * fps))) : 0;
-    const at = (i) => timelineModel.coverAt(whole, i / fps);
+    const at = (i) => timelineModel.vfxAt(v, i / fps);
     let region = null;
     for (let i = first; i <= last; i += 1) {
       region = genDraw.coverRegionUnion(region, genDraw.coverRegion(at(i), W, H, room));
@@ -425,30 +474,35 @@ async function exportCovers(l, frame) {
     canvas.width = w;
     canvas.height = h;
     const ctx = canvas.getContext('2d');
-    // Where `cover` acts in the region, white on black, as a PNG's bytes.
-    const png = async (cover) => {
-      genDraw.drawCoverMask(ink, cover, W, H);
+    // Where the VFX as it is at one moment acts in the region, white on
+    // black, as a PNG's bytes.
+    const png = async (now) => {
+      genDraw.drawCoverMask(ink, now, W, H);
       ctx.fillStyle = '#000';
       ctx.fillRect(0, 0, w, h);
       ctx.drawImage(ink.canvas, 0, 0);
       const blob = await new Promise((done) => canvas.toBlob(done, 'image/png'));
       return blob ? new Uint8Array(await blob.arrayBuffer()) : null;
     };
+    const entry = { kind: v.kind, region, steps, on, whole: kind.whole(steps) };
     if (!moving) {
-      const cover = at(0);
-      const key = JSON.stringify(['cover', cover.areas, cover.soft, cover.invert, W, H, region, w, h]);
+      const now = at(0);
+      const key = JSON.stringify(['vfxmask', now.areas, now.soft, now.invert, W, H, region, w, h]);
       let saved = await window.lwclipper.genImage(key, null);
       if (saved.ok && !saved.path) {
-        const bytes = await png(cover);
+        const bytes = await png(now);
         if (!bytes) return { ok: false, error: 'canvas toBlob gave no PNG' };
         saved = await window.lwclipper.genImage(key, bytes);
       }
       if (!saved.ok || !saved.path) return { ok: false, error: saved.error || 'no PNG path' };
-      files.push({ kind, src: saved.path, region, sigma, block });
+      files.push({ ...entry, src: saved.path });
       continue;
     }
-    const key = JSON.stringify(['coverframes', whole.areas, whole.soft, whole.invert, W, H, region, w, h,
-      l.duration, fps, first, last]);
+    // By where it acts alone, so a change of strength draws no frame again.
+    const shown = [...(def.area ? ['box', 'rotation'] : []), ...def.keyed.filter((x) => x.in === 'mask').map((x) => x.id)];
+    const key = JSON.stringify(['vfxframes', def.statics.map((x) => v[x.id]),
+      timelineModel.vfxKeysFor(v).map((q) => [q.t, shown.map((id) => q[id])]),
+      W, H, region, w, h, l.duration, fps, first, last]);
     const begun = await window.lwclipper.genFrames(key, { start: true });
     if (!begun.ok) return { ok: false, error: begun.error || 'no folder for the frames' };
     if (!begun.have) {
@@ -462,10 +516,7 @@ async function exportCovers(l, frame) {
       if (!done.ok) return { ok: false, error: done.error };
     }
     files.push({
-      kind,
-      region,
-      sigma,
-      block,
+      ...entry,
       frames: {
         pattern: begun.dir.replace(/\\/g, '/') + '/%05d.png',
         lead: first / fps,
@@ -481,20 +532,20 @@ async function exportLayers() {
   const out = [];
   for (const l of layers) {
     // V3.6. A masked picture goes with its mask.
-    // V4.7. And one with an Obscure or a Pixelate with where each acts.
+    // V4.7. And one with VFX with where each acts.
     // V4.10. And one a transition cuts with the matte of that, which goes
     // the mask's way whether it has a mask or not.
     if (l.kind !== 'gen' && l.enabled && l.type === 'video'
-      && (l.mask || timelineModel.coverList(l).length || hasTransitionMatte(l))) {
+      && (l.mask || timelineModel.vfxList(l).length || hasTransitionMatte(l))) {
       let next = l;
       if (l.mask || hasTransitionMatte(l)) {
         const m = await exportMask(l, frame);
         if (!m.ok) return m;
         if (m.file) next = { ...next, maskFile: m.file };
       }
-      const c = await exportCovers(l, frame);
+      const c = await exportVfx(l, frame);
       if (!c.ok) return c;
-      if (c.files.length) next = { ...next, coverFiles: c.files };
+      if (c.files.length) next = { ...next, vfxFiles: c.files };
       out.push(next);
       continue;
     }

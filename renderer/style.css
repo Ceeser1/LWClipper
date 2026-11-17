@@ -4349,34 +4349,352 @@ button.color-swatch:hover:not(:disabled) {
   overflow: hidden;
 }
 
-/* ---- V4.7. Obscure and Pixelate ---- */
+/* ---- V5.0. The VFX window ---- */
 
-/* The shapes, and under them Add Area and Remove Area, over the settings. */
-.cover-areas-row {
+/* The user's layout, in three parts side by side with the buttons under all
+   of them: "Menu (left, 25% window width)", "Content (center, 50% width)",
+   "Settings (right, 25% window width)". The window is the measure, so the
+   panel is as high as it and the parts divide it; a window too small for
+   them scrolls rather than squeezing them. */
+.modal__panel--vfx {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: min(1500px, 94vw);
+  height: 86vh;
+  text-align: left;
+}
+
+body.popout-body > .modal__panel--vfx {
+  height: 100vh;
+  min-width: 860px;
+  min-height: 560px;
+}
+
+.modal__panel--vfx > .modal__title {
+  flex: none;
+  margin-bottom: 8px;
+}
+
+.vfx-body {
+  flex: 1 1 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 25% 50% 25%;
+}
+
+/* A: every VFX there is, "a scrollable menu 100% height". */
+.vfx-menu {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding-right: 10px;
+  border-right: 1px solid #45454e;
+}
+
+.vfx-menu__head {
+  flex: none;
+  margin-bottom: 6px;
+  color: #c8c8d2;
+  font-size: 12px;
+  font-weight: bold;
+  text-align: center;
+}
+
+.vfx-menu__list {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* A click on a row does nothing, at the user's word: its + adds it, or a
+   double click. So the row does not light like a button, only its +. */
+.vfx-menu__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 4px 8px;
+  border-radius: 4px;
+  color: #e6e6eb;
+  user-select: none;
+}
+
+.vfx-menu__row:nth-child(odd) {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.vfx-menu__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vfx-menu__add {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  font-size: 16px;
+  font-weight: bold;
+  line-height: 1;
+}
+
+/* B: the track's VFX, the line saying which is edited, the preview and the
+   keyframes: "Top 20% height", "20-30% height", "30-80%", "80-100%". */
+.vfx-center {
+  display: grid;
+  grid-template-rows: 20% 10% 50% 20%;
+  min-width: 0;
+  min-height: 0;
+  padding: 0 10px;
+}
+
+.vfx-chain {
   display: flex;
   flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 6px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px;
+}
+
+.vfx-chain__none {
+  width: 100%;
+  align-self: center;
+  color: #b8b8c0;
+  font-style: italic;
+  text-align: center;
+}
+
+.vfx-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  box-sizing: border-box;
+  padding: 0 4px 0 10px;
+  background: #3c3c44;
+  border: 1px solid #505058;
+  border-radius: 4px;
+  color: #e6e6eb;
+  cursor: grab;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.vfx-chip:hover {
+  background: #4b4b54;
+}
+
+/* The chosen one, in the green of every "this one is in force". */
+.vfx-chip--on,
+.vfx-chip--on:hover {
+  background: #78c88c;
+  border-color: #8fd9a1;
+  color: #14210f;
+  font-weight: bold;
+}
+
+.vfx-chain[data-dragging="true"],
+.vfx-chain[data-dragging="true"] .vfx-chip {
+  cursor: grabbing;
+}
+
+/* "Each added VFX has its own red X right of its name". */
+.vfx-chip__x {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  background: #dc7878;
+  border-color: #e89090;
+  border-radius: 3px;
+  color: #210f0f;
+  font-size: 14px;
+  font-weight: bold;
+  line-height: 1;
+}
+
+button.vfx-chip__x:hover:not(:disabled) {
+  background: #e58686;
+}
+
+.vfx-editing {
+  display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  margin-bottom: 12px;
+  min-height: 0;
+  overflow: hidden;
+  color: #ebebf0;
+  font-size: 15px;
+  font-weight: bold;
+  white-space: nowrap;
 }
 
-.cover-areas-row .shape-kinds {
-  margin-bottom: 0;
-}
-
-/* Clipped like the other stages a box can be dragged off. */
-#coverStage {
+.vfx-stage-cell {
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
 }
 
-/* An area that is not the selected one: its box as a line, to click. */
-.cover-area {
+/* Clipped like the other stages a box can be dragged off. */
+#vfxStage {
+  overflow: hidden;
+}
+
+.vfx-keys-cell {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.vfx-keys-cell > .crop-keys {
+  margin: 0;
+}
+
+/* The area of a VFX that is not the chosen one: its box as a line, to click. */
+.vfx-area {
   position: absolute;
   box-sizing: border-box;
   border: 1px dashed rgba(235, 235, 240, 0.8);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
   cursor: pointer;
+}
+
+/* C: the chosen VFX's name, "Top 20% height", and its settings under it,
+   "20-100% height, maybe even scrollable". */
+.vfx-side {
+  display: grid;
+  grid-template-rows: 20% 80%;
+  min-width: 0;
+  min-height: 0;
+  padding-left: 10px;
+  border-left: 1px solid #45454e;
+}
+
+.vfx-name {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  overflow: hidden;
+  color: #ebebf0;
+  font-size: 18px;
+  font-weight: bold;
+  text-align: center;
+}
+
+.vfx-settings {
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* The user: "show static settings as slightly greenish (like 222, 255, 222)
+   first with a divider line between changeable settings per keyframe in
+   white after the divider". The same for every VFX there will be. */
+.vfx-group--static,
+.vfx-group--static .gen-check,
+.vfx-group--static .vfx-field__caption {
+  color: rgb(222, 255, 222);
+}
+
+.vfx-group--keyed,
+.vfx-group--keyed .gen-check,
+.vfx-group--keyed .vfx-field__caption,
+.vfx-group--keyed .gen-field__unit {
+  color: #ffffff;
+}
+
+.vfx-group__title {
+  margin-bottom: 8px;
+  font-size: 11px;
+  font-weight: bold;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.75;
+}
+
+.vfx-divider {
+  height: 1px;
+  margin: 12px 0;
+  background: #6a6a74;
+}
+
+.vfx-field {
+  margin-bottom: 10px;
+}
+
+.vfx-field__caption {
+  margin-bottom: 4px;
+}
+
+.vfx-field__line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.vfx-field__slider {
+  flex: 1 1 auto;
+  width: 60px;
+  min-width: 60px;
+}
+
+/* Every figure has the room of a unit after it, so the sliders are one length. */
+.vfx-field__line > .gen-field__unit {
+  flex: none;
+  width: 16px;
+}
+
+/* The shapes in as many rows as the column needs, each as wide as its name. */
+.vfx-shapes {
+  justify-content: flex-start;
+  margin-bottom: 0;
+}
+
+.vfx-shapes button {
+  min-width: 0;
+}
+
+/* The buttons under all three parts: Remove all VFX in a lighter red than a
+   single Remove, the user's "light red", then Cancel and Apply. */
+.modal__panel--vfx > .crop-actions {
+  flex: none;
+}
+
+/* The panel is as high as its window, so the row is at the bottom without
+   being stuck there, and a note over the window dims it with the rest. */
+body.popout-body > .modal__panel--vfx > .crop-actions {
+  position: static;
+  z-index: auto;
+}
+
+#vfxRemoveAllBtn {
+  background: #eaa0a0;
+  border-color: #f2b8b8;
+}
+
+#vfxRemoveAllBtn:hover:not(:disabled) {
+  background: #f0acac;
+}
+
+/* A note that only wants to be read: its one answer in the green of Apply. */
+.choice-buttons button[data-tone="go"] {
+  background: #78c88c;
+  border-color: #8fd9a1;
+  color: #14210f;
+  font-weight: bold;
+}
+
+.choice-buttons button[data-tone="go"]:hover:not(:disabled) {
+  background: #86d199;
 }
 
 /* ---- V3, 31a: the text box ---- */
