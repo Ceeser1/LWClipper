@@ -4,10 +4,11 @@ The most important changes since 1.5.5, newest first.
 
 1.5.5 (2026-09-16, tag `v1.5.5`) was the last version that was only a single-clip trimmer: paste a link or open a file, trim it, crop it, save it. That trimmer is still in the app as simple editing. Everything below was built on top of it as advanced editing, a multi-track editor in the same window.
 
-## 5.x: VFX (2026-11-17)
+## 5.x: VFX (2026-11-17, 2026-11-18)
 
-Current version: 5.1.5.
+Current version: 5.1.6.
 
+- **The headings of the VFX list fold (5.1.6).** A click on **Blur and Hide**, **Color**, **Stylize** or **Distort** in the VFX window folds its VFX away under the heading, and another click brings them back, so the list need not be scrolled through from top to bottom. Which headings are folded is remembered, for every project and the next start. The search still looks through all of them: while something is typed, a folded heading opens for what was found under it, and it is folded again once the search is empty.
 - **A small image stays small, and Crop and Mask has its settings on top (5.1.5).**
   - **An image no bigger than the frame is shown at its actual size**, centred, when it is added, instead of being blown up to fill the frame: a 256 x 256 picture in a 1080p project is 256 x 256 pixels in the middle. An image bigger than the frame is still fitted down, and a video still fills the frame. In **Render Position** such an image reads "Centred at actual size", its **Scale** of 100% is its own pixels, and **Reset Position** brings it back there. Images already on a timeline, and projects saved before, stay exactly as they were.
   - **Crop and Mask** has each view's settings over the picture and the keyframes under it, as the other windows have them. **Video Frame:** the shape buttons, the size in pixels, the Zoom slider, the picture, the keyframes. **Render Position:** the size and place, the Scale slider, the picture, the keyframes.

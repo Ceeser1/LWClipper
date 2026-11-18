@@ -55,6 +55,10 @@ const DEFAULTS = {
   // whether the window was still fitting its own height. null until the
   // window has been resized.
   windowSize: null,
+  // V5.1.6. The headings of the VFX window's list that are folded shut, by
+  // their ids (timeline.js VFX_GROUPS): ['color', 'distort']. null while all
+  // are open.
+  vfxFolded: null,
 };
 
 function settingsFile() {

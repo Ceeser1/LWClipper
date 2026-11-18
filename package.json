@@ -1,6 +1,6 @@
 {
   "name": "lwclipper",
-  "version": "5.1.5",
+  "version": "5.1.6",
   "description": "Lightweight clipper for local files and video links",
   "main": "main.js",
   "private": true,

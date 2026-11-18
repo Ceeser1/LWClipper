@@ -4476,20 +4476,69 @@ body.popout-body > .modal__panel--vfx {
   white-space: nowrap;
 }
 
-/* V5.1. The heading over a group of kinds. */
+/* V5.1. The heading over a group of kinds. V5.1.6: it is the switch that
+   folds them away, with a chevron that turns, as Project Media's title has. */
 .vfx-menu__group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin: 10px 0 4px;
-  padding: 0 4px;
+  padding: 2px 4px;
+  border-radius: 3px;
   font-size: 11px;
   font-weight: bold;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: #9a9aa6;
+  cursor: pointer;
   user-select: none;
 }
 
 .vfx-menu__group:first-child {
   margin-top: 0;
+}
+
+.vfx-menu__group:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #d2d2da;
+}
+
+/* Folded headings stand closer, there being nothing between them. */
+.vfx-menu__group--folded {
+  margin-bottom: 0;
+}
+
+.vfx-menu__group--folded + .vfx-menu__group {
+  margin-top: 4px;
+}
+
+.vfx-menu__chevron {
+  flex: none;
+}
+
+.vfx-menu__chevron::before {
+  content: '';
+  display: block;
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
+  transition: transform 0.12s;
+}
+
+.vfx-menu__group--folded .vfx-menu__chevron::before {
+  transform: rotate(-90deg);
+}
+
+/* While a search has every heading open a click on one does nothing. */
+.vfx-menu__list--search .vfx-menu__group {
+  cursor: default;
+}
+
+.vfx-menu__list--search .vfx-menu__group:hover {
+  background: none;
+  color: #9a9aa6;
 }
 
 /* V5.1.1. "let the [+] button simply be a "+" (no padding around it so it

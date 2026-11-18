@@ -679,9 +679,16 @@ function showVfxMenu() {
     const kinds = g.kinds.filter((kind) => VFX_UI[kind] && timelineModel.vfxKind(kind));
     if (!kinds.length) continue;
     if (VFX_GROUP_NAMES[g.id]) {
+      // V5.1.6. The heading is the switch that folds its kinds away.
       const head = doc.createElement('div');
       head.className = 'vfx-menu__group';
-      head.textContent = VFX_GROUP_NAMES[g.id]();
+      head.dataset.group = g.id;
+      head.setAttribute('role', 'button');
+      const chevron = doc.createElement('span');
+      chevron.className = 'vfx-menu__chevron';
+      const label = doc.createElement('span');
+      label.textContent = VFX_GROUP_NAMES[g.id]();
+      head.append(chevron, label);
       nodes.push(head);
     }
     nodes.push(...kinds.map(row));
@@ -702,21 +709,32 @@ function showVfxMenu() {
  */
 function filterVfxMenu() {
   const want = vfxMenuSearch.value.trim().toLowerCase();
+  const folded = vfxFoldedGroups();
   let head = null;
   let headShows = false;
+  let shut = false;
   let any = false;
+  // With nothing typed a heading always shows, folded or not; with a search
+  // only the ones that still have a row.
   const closeHead = () => {
-    if (head) head.hidden = !headShows;
+    if (head) head.hidden = !!want && !headShows;
   };
+  // V5.1.6. While something is typed every heading is open, whatever it was
+  // folded to, and a click on one does nothing: the search is over all kinds.
+  vfxMenu.classList.toggle('vfx-menu__list--search', !!want);
   for (const node of vfxMenu.children) {
     if (node.classList.contains('vfx-menu__group')) {
       closeHead();
       head = node;
       headShows = false;
+      shut = !want && folded.has(node.dataset.group);
+      node.classList.toggle('vfx-menu__group--folded', shut);
+      node.setAttribute('aria-expanded', String(!shut));
     } else if (node.classList.contains('vfx-menu__row')) {
       const name = node.querySelector('.vfx-menu__name').textContent.toLowerCase();
-      node.hidden = !!want && !name.includes(want);
-      if (!node.hidden) {
+      const found = !want || name.includes(want);
+      node.hidden = !found || shut;
+      if (found) {
         headShows = true;
         any = true;
       }
@@ -725,6 +743,29 @@ function filterVfxMenu() {
     }
   }
   closeHead();
+}
+
+/**
+ * V5.1.6. The user: "Make the vfx categories collapsible so you dont have to
+ * scroll through all effects all the time and let the window remember which
+ * are collapsed." The folded headings by their ids, as the settings keep
+ * them, so they are the same in every project and on the next start.
+ */
+function vfxFoldedGroups() {
+  const saved = typeof appSettings === 'object' && appSettings && appSettings.vfxFolded;
+  return new Set(Array.isArray(saved) ? saved.filter((id) => typeof id === 'string') : []);
+}
+
+function toggleVfxGroup(id) {
+  if (!id || typeof appSettings !== 'object' || !appSettings) return;
+  const folded = vfxFoldedGroups();
+  if (folded.has(id)) folded.delete(id);
+  else folded.add(id);
+  // In the menu's order, and only headings there are, so the file stays small.
+  const list = timelineModel.VFX_GROUPS.map((g) => g.id).filter((g) => folded.has(g));
+  appSettings.vfxFolded = list.length ? list : null;
+  if (window.lwclipper && window.lwclipper.setSettings) window.lwclipper.setSettings({ vfxFolded: appSettings.vfxFolded });
+  filterVfxMenu();
 }
 
 vfxMenuSearch.addEventListener('input', filterVfxMenu);
@@ -754,6 +795,10 @@ vfxMenu.addEventListener('click', (evt) => {
   }
   const row = evt.target.closest && evt.target.closest('.vfx-menu__row');
   if (row) previewVfx(row.dataset.kind);
+  // V5.1.6. A heading folds or opens its kinds; not while a search has them
+  // all open. A row is not inside its heading, so a click is one or the other.
+  const group = evt.target.closest && evt.target.closest('.vfx-menu__group');
+  if (group && !vfxMenuSearch.value.trim()) toggleVfxGroup(group.dataset.group);
 });
 vfxMenu.addEventListener('dblclick', (evt) => {
   if (evt.target.closest && evt.target.closest('.vfx-menu__add')) return;
