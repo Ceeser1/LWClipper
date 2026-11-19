@@ -391,9 +391,13 @@ async function exportMask(l, frame) {
 // go without a drawing of where it acts when that is all of the picture.
 const OPS_EXPORT = {
   // A LUT file that is gone, or is no table, is left out: the encoder would
-  // stop at it. exportVfx has read every such file by now.
+  // stop at it. exportVfx has read every such file by now. V5.3: the file
+  // the encoder is handed is the one it can read, which for a .3dl is a
+  // .cube written from the table (vfxGl.js cubeReady).
   step: (now, H, W) => ({
-    ops: vfxOps.opsOf(now.kind, now, W, H).filter((o) => o.op !== 'lut3d' || vfxGl.cube(o.file).state === 'ok'),
+    ops: vfxOps.opsOf(now.kind, now, W, H)
+      .filter((o) => o.op !== 'lut3d' || !!vfxGl.cubePath(o.file))
+      .map((o) => (o.op === 'lut3d' ? { ...o, file: vfxGl.cubePath(o.file) } : o)),
   }),
   room: (steps) => ({ margin: Math.max(...steps.map((x) => vfxOps.roomOf(x.ops).margin)), grid: 2 }),
   whole: (steps) => steps.some((x) => vfxOps.roomOf(x.ops).whole),
@@ -469,6 +473,15 @@ const VFX_EXPORT = {
   perspective: { ...OPS_EXPORT },
   bulge: { ...OPS_EXPORT },
   lut: { ...OPS_EXPORT },
+  cornerpin: { ...OPS_EXPORT },
+  polar: { ...OPS_EXPORT },
+  vibrance: { ...OPS_EXPORT },
+  halftone: { ...OPS_EXPORT },
+  curves: { ...OPS_EXPORT },
+  chromakey: { ...OPS_EXPORT },
+  lumakey: { ...OPS_EXPORT },
+  strobe: { ...OPS_EXPORT },
+  echo: { ...OPS_EXPORT },
 };
 
 /**
@@ -495,7 +508,8 @@ async function exportVfx(l, frame) {
   const W = Math.round(source.width);
   const H = Math.round(source.height);
   const fps = Number(frame && frame.fps) || 30;
-  for (const v of timelineModel.vfxList(l)) {
+  // V5.5.1. In the order they are worked, which puts an Echo first.
+  for (const v of timelineModel.vfxWorked(l)) {
     const kind = VFX_EXPORT[v.kind];
     const def = timelineModel.vfxKind(v.kind);
     if (!kind || !def || !timelineModel.vfxEverOn(v)) continue;

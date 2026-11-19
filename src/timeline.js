@@ -558,7 +558,8 @@ const timelineModel = (() => {
   //
   // More sorts of setting, all a VFX's own (they cannot blend): 'choice', one
   // of `options`; 'color', a colour as '#rrggbb'; 'file', a file's path, empty
-  // for none; and a plain number where a figure cannot blend (a speed).
+  // for none; 'curve', the curves of a Curves VFX (V5.3, VFX_CURVE_DEF); and
+  // a plain number where a figure cannot blend (a speed).
   //
   // Every one has Mix, 0 to 100, how much of the effect shows over the
   // picture as it was: it is `in: 'mask'`, a see-through of where the VFX
@@ -602,6 +603,50 @@ const timelineModel = (() => {
   const VFX_CHANNEL_ORDERS = ['rbg', 'grb', 'gbr', 'brg', 'bgr'];
   const VFX_EDGE_STYLES = ['neon', 'sketch', 'mono'];
   const VFX_FLIP_MODES = ['across', 'down', 'both', 'left', 'right', 'top', 'bottom', 'quad'];
+  // V5.2. Polar Coordinates: the picture wrapped round its middle, or one so
+  // wrapped laid out flat again.
+  const VFX_POLAR_MODES = ['wrap', 'unwrap'];
+  // V5.2. Corner Pin: the picture's four corners, each put somewhere else,
+  // from the top left round by the right. A corner may lie outside the
+  // picture by half of it.
+  const VFX_PINS = [['x1', 'y1'], ['x2', 'y2'], ['x3', 'y3'], ['x4', 'y4']];
+  // V5.3. Curves: a curve for all of red, green and blue, `m`, and one for
+  // each of them, every one a few points [value, what it becomes], 0 to 255
+  // in whole numbers, from the darkest value up. A curve that leaves the
+  // picture as it is has both its points on the diagonal.
+  const VFX_CURVE_CHANNELS = ['m', 'r', 'g', 'b'];
+  const VFX_CURVE_POINTS = 16;
+  const VFX_CURVE_FLAT = [[0, 0], [255, 255]];
+  const VFX_CURVE_DEF = { m: [[0, 0], [64, 50], [192, 206], [255, 255]], r: VFX_CURVE_FLAT, g: VFX_CURVE_FLAT, b: VFX_CURVE_FLAT };
+
+  /** One channel's curve as the model keeps it: at least two points, each value once, in order. */
+  function vfxCurvePoints(list) {
+    const byX = new Map();
+    for (const raw of Array.isArray(list) ? list : []) {
+      if (!Array.isArray(raw)) continue;
+      const x = Number(raw[0]);
+      const y = Number(raw[1]);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      byX.set(Math.round(Math.min(255, Math.max(0, x))), Math.round(Math.min(255, Math.max(0, y))));
+    }
+    const out = [...byX.entries()].sort((a, b) => a[0] - b[0]).slice(0, VFX_CURVE_POINTS);
+    return out.length >= 2 ? out : VFX_CURVE_FLAT.map((p) => [...p]);
+  }
+
+  /** The curves of a Curves VFX out of what a file or the window hands over. */
+  function vfxCurveOf(v, fallback) {
+    const from = v && typeof v === 'object' ? v : fallback;
+    const out = {};
+    for (const ch of VFX_CURVE_CHANNELS) out[ch] = vfxCurvePoints(from && from[ch]);
+    return out;
+  }
+
+  /** Whether curves leave every colour as it is. */
+  function vfxCurveFlat(c) {
+    return !c || VFX_CURVE_CHANNELS.every((ch) => !Array.isArray(c[ch]) || c[ch].every((p) => p[0] === p[1]));
+  }
+  // V5.4. Luma Key: which end of the brightness is made see-through.
+  const VFX_LUMA_MODES = ['dark', 'bright'];
   const VFX_MORE = (() => {
     const fig = (id, min, max, def) => ({ id, type: 'number', min, max, whole: true, def, in: 'filter' });
     const part = (id, max, def) => ({ id, type: 'number', min: 0, max, def, of: 'height', in: 'filter' });
@@ -611,6 +656,11 @@ const timelineModel = (() => {
     // A figure that is the VFX's own: how fast it moves cannot blend, a speed
     // changed half way would make the picture jump.
     const own = (id, min, max, def) => ({ id, type: 'number', min, max, whole: true, def });
+    // A corner's place, a fraction of the picture's width and of its height.
+    const pin = ([x, y], dx, dy) => [
+      { id: x, type: 'number', min: -0.5, max: 1.5, def: dx, of: 'width', in: 'filter' },
+      { id: y, type: 'number', min: -0.5, max: 1.5, def: dy, of: 'height', in: 'filter' },
+    ];
     // A kind by where it acts. What is its own comes first: the look or the
     // colour is what one came for. Then the shape, for a kind that has two,
     // and Invert, for one with an area. Keyed: its own figures, the point for
@@ -728,6 +778,52 @@ const timelineModel = (() => {
       bulge: point([], [fig('amount', -100, 100, 60), part('radius', 1.5, 0.35)], (s) => s.amount === 0),
       // A colour table of the user's own, a .cube file. Off until one is chosen.
       lut: box([{ id: 'file', type: 'file', def: '' }], [], (s) => !s.file),
+      // ---- V5.2 ----
+      // The picture on a surface seen at a slant: its corners dragged to the
+      // surface's. Round it the picture is see-through (`alpha`), so what is
+      // under the track shows there. It starts turned away a little, so that
+      // it shows what it does.
+      cornerpin: whole([], [...pin(VFX_PINS[0], 0.12, 0.1), ...pin(VFX_PINS[1], 0.88, 0.2), ...pin(VFX_PINS[2], 0.88, 0.8),
+        ...pin(VFX_PINS[3], 0.12, 0.9)],
+      (s) => s.x1 === 0 && s.y1 === 0 && s.x2 === 1 && s.y2 === 0 && s.x3 === 1 && s.y3 === 1 && s.x4 === 0 && s.y4 === 1,
+      { pins: VFX_PINS, alpha: true }),
+      polar: whole([pick('mode', VFX_POLAR_MODES)], [fig('amount', 0, 100, 100)], (s) => !(s.amount > 0)),
+      // The pale colours made stronger and the strong ones left: a correction.
+      vibrance: two([], [fig('vibrance', -100, 100, 60)], (s) => s.vibrance === 0),
+      // Dots as a print has them, their size by how dark the picture is there.
+      halftone: box([tick('tinted')], [part('size', 0.1, 0.014), fig('angle', 0, 90, 45)]),
+      // ---- V5.3 ----
+      // The tones bent by a curve drawn through points, for all colours and
+      // for red, green and blue alone: a correction. It starts with a little
+      // more contrast, so that it shows what it does.
+      curves: two([{ id: 'curve', type: 'curve', def: VFX_CURVE_DEF }], [], (s) => vfxCurveFlat(s.curve)),
+      // ---- V5.4. Keying ----
+      // A colour of the picture made see-through, a green or a blue screen
+      // first of all, so that the track under it shows there (`alpha`). The
+      // whole picture and with no Mix: what is to stay of a screen is a
+      // mask's business, and a key that is half on is no key. Its colour may
+      // be taken from the picture (`pick`): a real screen is never the
+      // green a colour well offers.
+      chromakey: whole([{ ...tone('color', '#00b140'), pick: true }],
+        [fig('tolerance', 0, 100, 30), fig('softness', 0, 100, 15), fig('spill', 0, 100, 60)], null, { mix: false, alpha: true }),
+      // The dark or the bright parts made see-through.
+      lumakey: whole([pick('mode', VFX_LUMA_MODES)], [fig('threshold', 0, 100, 20), fig('softness', 0, 100, 10)], null,
+        { mix: false, alpha: true }),
+      // ---- V5.5. Time ----
+      // A flash of one colour over the whole picture, again and again:
+      // Speed is how many in ten seconds, Flash Length how much of each
+      // round the flash is there, in hundredths, and Mix how strong it is.
+      strobe: whole([tone('color', '#ffffff'), own('speed', 1, 300, 40)], [fig('duration', 1, 100, 30)]),
+      // V5.5.1. The picture as it was a few frames ago laid over it, and as
+      // it was before that, each fainter than the one after it: what moves
+      // leaves copies of itself behind. How many, how many frames apart and
+      // how much fainter are the VFX's own, since the encoder keeps the
+      // frames it mixes and cannot be told another number half way. It
+      // works on the track's picture as the file has it, before every other
+      // VFX of the track whatever its place among them (`first`), and only
+      // one to a track: the frames from before are the file's, and nobody
+      // has kept what the other VFX made of them.
+      echo: whole([own('copies', 1, 5, 3), own('gap', 1, 10, 4), own('decay', 1, 100, 60)], [], null, { first: true }),
     };
   })();
 
@@ -758,12 +854,16 @@ const timelineModel = (() => {
   // V5.1. The menu's groups, each the kinds under one heading, in order.
   const VFX_GROUPS = [
     { id: 'hide', kinds: ['obscure', 'pixelate', 'dirblur', 'tiltshift'] },
-    { id: 'color', kinds: ['brightness', 'exposure', 'levels', 'shadows', 'huesat', 'temperature', 'rgb', 'mono', 'sepia',
+    { id: 'color', kinds: ['brightness', 'exposure', 'levels', 'curves', 'shadows', 'huesat', 'vibrance', 'temperature', 'rgb', 'mono', 'sepia',
       'colorize', 'duotone', 'splittone', 'colorpass', 'look', 'lut', 'channels', 'invert'] },
     { id: 'stylize', kinds: ['glow', 'dream', 'sharpen', 'clarity', 'vignette', 'bars', 'grain', 'oldfilm', 'vhs', 'crt', 'comic', 'border',
-      'scanlines', 'rgbsplit', 'posterize', 'threshold', 'solarize', 'edges', 'emboss', 'nightvision', 'thermal'] },
-    { id: 'distort', kinds: ['lens', 'bulge', 'flip', 'rotate', 'offset', 'zoom', 'perspective', 'wave', 'ripple', 'swirl', 'haze',
-      'shake', 'glitch', 'tile', 'kaleido'] },
+      'scanlines', 'halftone', 'rgbsplit', 'posterize', 'threshold', 'solarize', 'edges', 'emboss', 'nightvision', 'thermal'] },
+    { id: 'distort', kinds: ['lens', 'bulge', 'flip', 'rotate', 'offset', 'zoom', 'perspective', 'cornerpin', 'polar', 'wave', 'ripple',
+      'swirl', 'haze', 'shake', 'glitch', 'tile', 'kaleido'] },
+    // V5.4.
+    { id: 'key', kinds: ['chromakey', 'lumakey'] },
+    // V5.5.
+    { id: 'time', kinds: ['strobe', 'echo'] },
   ];
 
   // The user: no cap, "if you have 50 same vfx in a track but all at different
@@ -794,6 +894,7 @@ const timelineModel = (() => {
     if (s.type === 'choice') return oneOf(v, s.options, s.def);
     if (s.type === 'color') return typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v) ? v.toLowerCase() : s.def;
     if (s.type === 'file') return typeof v === 'string' ? v : '';
+    if (s.type === 'curve') return vfxCurveOf(v, s.def);
     const n = within(v, s.min, s.max, s.def);
     return s.whole ? Math.round(n) : n;
   }
@@ -869,6 +970,20 @@ const timelineModel = (() => {
       out.push(v);
     }
     return out;
+  }
+
+  /**
+   * V5.5.1. A layer's VFX in the order they are worked: as listed, but a
+   * kind that works on the picture as the file has it (`first`, an Echo)
+   * before all others, and of several such only the first that is switched
+   * on. The preview and the export both go by this.
+   */
+  function vfxWorked(layer) {
+    const list = vfxList(layer);
+    const isFirst = (v) => !!vfxKind(v.kind) && !!vfxKind(v.kind).first;
+    if (!list.some(isFirst)) return list;
+    const head = list.find((v) => isFirst(v) && !v.disabled);
+    return [...(head ? [head] : []), ...list.filter((v) => !isFirst(v))];
   }
 
   /** What a layer has, in the order processed. Only a picture of a file has any. */
@@ -987,9 +1102,21 @@ const timelineModel = (() => {
     return b.x <= e && b.y <= e && b.x + b.w >= 1 - e && b.y + b.h >= 1 - e;
   }
 
+  /**
+   * V5.2. Whether a layer's VFX leave parts of its picture see-through that
+   * were not: one of a kind that does (`alpha`, a Corner Pin) that is ever
+   * on. Such a picture is carried with an alpha from there on, like a PNG's.
+   */
+  function vfxGivesAlpha(layer) {
+    return vfxList(layer).some((v) => {
+      const def = vfxKind(v.kind);
+      return !!def && !!def.alpha && vfxEverOn(v);
+    });
+  }
+
   // V5.1. The kinds whose picture changes from frame to frame with no setting
   // changing: the ones with a Speed, and the ones with grain.
-  const VFX_ALONE = ['wave', 'ripple', 'shake', 'glitch', 'haze', 'grain', 'oldfilm', 'vhs'];
+  const VFX_ALONE = ['wave', 'ripple', 'shake', 'glitch', 'haze', 'grain', 'oldfilm', 'vhs', 'strobe'];
 
   /** Whether a VFX moves by itself while it is on, keyframes or none. */
   function vfxMovesAlone(v) {
@@ -1002,7 +1129,11 @@ const timelineModel = (() => {
     if (!def || v.disabled) return false;
     const list = vfxKeysFor(v);
     if (!list.length) return !def.off(v);
-    return list.some((k) => !def.off(k));
+    // V5.3. A keyframe holds only what is keyed, and a kind may be off by a
+    // setting of its own (no LUT file chosen, curves that change nothing):
+    // so each keyframe is asked with the VFX's own settings beside it. Until
+    // then an Apply LUT with keyframes was never on, and so never exported.
+    return list.some((k) => !def.off({ ...v, ...k }));
   }
 
   /** Whether a VFX changes at all over the clip: keyframes that do not all say the same. */
@@ -3838,7 +3969,13 @@ const timelineModel = (() => {
     VFX_KINDS,
     VFX_KIND_IDS,
     VFX_GROUPS,
+    VFX_CURVE_CHANNELS,
+    VFX_CURVE_POINTS,
+    vfxCurveOf,
+    vfxCurveFlat,
     VFX_TWO_SHAPES,
+    vfxGivesAlpha,
+    vfxWorked,
     VFX_PALETTES,
     VFX_LOOKS,
     VFX_EDGE_STYLES,

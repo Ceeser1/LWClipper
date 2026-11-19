@@ -59,12 +59,12 @@ function maskCtx() {
 test('every kind says where it acts, and the kinds are sorted as the user was shown', () => {
   assert.deepEqual(by('any'), ['obscure', 'pixelate']);
   assert.deepEqual(by('whole').sort(),
-    ['bars', 'border', 'crt', 'flip', 'lens', 'offset', 'perspective', 'rotate', 'shake', 'tile']);
+    ['bars', 'border', 'chromakey', 'cornerpin', 'crt', 'echo', 'flip', 'lens', 'lumakey', 'offset', 'perspective', 'polar', 'rotate', 'shake', 'strobe', 'tile']);
   assert.deepEqual(by('point').sort(), ['bulge', 'kaleido', 'swirl']);
-  assert.deepEqual(by('two').sort(), ['brightness', 'clarity', 'dirblur', 'exposure', 'haze', 'huesat', 'levels', 'rgb',
-    'ripple', 'shadows', 'sharpen', 'temperature', 'tiltshift', 'vignette', 'zoom']);
+  assert.deepEqual(by('two').sort(), ['brightness', 'clarity', 'curves', 'dirblur', 'exposure', 'haze', 'huesat', 'levels', 'rgb',
+    'ripple', 'shadows', 'sharpen', 'temperature', 'tiltshift', 'vibrance', 'vignette', 'zoom']);
   assert.deepEqual(by('box').sort(), ['channels', 'colorize', 'colorpass', 'comic', 'dream', 'duotone', 'edges', 'emboss',
-    'glitch', 'glow', 'grain', 'invert', 'look', 'lut', 'mono', 'nightvision', 'oldfilm', 'posterize', 'rgbsplit',
+    'glitch', 'glow', 'grain', 'halftone', 'invert', 'look', 'lut', 'mono', 'nightvision', 'oldfilm', 'posterize', 'rgbsplit',
     'scanlines', 'sepia', 'solarize', 'splittone', 'thermal', 'threshold', 'vhs', 'wave']);
   assert.equal(T.VFX_KIND_IDS.every((k) => ['any', 'whole', 'point', 'two', 'box'].includes(T.vfxKind(k).where)), true);
 });
@@ -75,7 +75,8 @@ test('a kind for the whole picture has no area, no shape, no Invert and no soft 
     assert.equal(def.area, false, kind);
     const all = ids([...def.statics, ...def.keyed]);
     for (const id of ['shape', 'invert', 'soft']) assert.equal(all.includes(id), false, kind + '.' + id);
-    assert.equal(all.includes('mix'), true, kind + ': Mix is how keyframes switch it off and on');
+    // V5.4. All but a key, which is on the whole clip long.
+    assert.equal(all.includes('mix'), !T.vfxKind(kind).alpha || kind === 'cornerpin', kind + ': Mix is how keyframes switch it off and on');
     assert.equal(T.vfxKeyedIds(kind).includes('box'), false, kind);
     assert.equal(T.vfxKeyedIds(kind).includes('rotation'), false, kind);
     // One kept with an area from before has none any more.
@@ -265,7 +266,8 @@ test('the window shows a kind\'s own shapes, and a crosshair for a kind about a 
   assert.ok(js.includes("const hasPoint = (v) => !!v && timelineModel.vfxKind(v.kind).where === 'point';"));
   assert.ok(js.includes('vfxPointEl.hidden = !hasPoint(chosen);'));
   assert.ok(js.includes('vfxBoxEl.hidden = !hasArea(chosen);'), 'and no box for a kind without an area');
-  assert.ok(js.includes('changeVfxKeyed({ cx: x.at, cy: y.at });'));
+  assert.ok(js.includes("dragVfxSpot(vfxPointEl, evt, 'cx', 'cy', 0, 1);"));
+  assert.ok(js.includes('changeVfxKeyed({ [xi]: x.at, [yi]: y.at });'));
   assert.ok(js.includes("node.className = 'vfx-point vfx-point--other';"), 'another VFX\'s point is there to click');
   assert.ok(js.includes("evt.target.closest('.vfx-area, .vfx-point')"));
   const css = read('renderer', 'style.css');

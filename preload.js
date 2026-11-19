@@ -43,6 +43,7 @@ contextBridge.exposeInMainWorld('lwclipper', {
   // V5.1. Apply LUT: the file picked, and a file's text read.
   openLut: () => ipcRenderer.invoke('dialog:openLut'),
   readLut: (filePath) => ipcRenderer.invoke('lut:read', filePath),
+  lutCube: (text) => ipcRenderer.invoke('lut:cube', text),
   saveAsDialog: (title, isAudio, format, isProject) =>
     ipcRenderer.invoke('dialog:saveAs', { title, isAudio, format, isProject }),
   quickSaveTarget: (title, isAudio, format) =>

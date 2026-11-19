@@ -270,8 +270,17 @@ function maskSource(l, input, fps, scale = null, k = 0) {
  * PNG's, which alphamerge would otherwise replace. A video has none, and its
  * picture is opaque wherever the mask does not cut it.
  */
+// V5.2. And a picture one of whose VFX leaves parts of it see-through, a
+// Corner Pin: from its VFX on it has an alpha like a PNG's, and everything
+// after them treats it as one.
 function ownAlpha(l) {
-  return l.kind === 'image' && timeline.seeThrough(l);
+  return (l.kind === 'image' && timeline.seeThrough(l)) || vfxGiveAlpha(l);
+}
+
+/** Whether one of the VFX a layer is handed over with gives its picture an alpha. */
+function vfxGiveAlpha(l) {
+  return l.type === 'video' && Array.isArray(l.vfxFiles)
+    && l.vfxFiles.some((f) => !!f && !!VFX_FILTERS[f.kind] && !!VFX_FILTERS[f.kind].gives);
 }
 
 // ---- V5.0. VFX (V4.7 and V4.8: Obscure and Pixelate) ----
@@ -434,6 +443,20 @@ const VFX_FILTERS = {
   perspective: { ...OWN_OPS },
   bulge: { ...OWN_OPS },
   lut: { ...RGB_OPS },
+  // V5.2. `gives`: it leaves parts of the picture see-through that were not,
+  // so the picture is carried with an alpha (ownAlpha). Its filter writes
+  // the alpha itself, on the colours as they are.
+  cornerpin: { ...OWN_OPS, straight: true, gives: true },
+  polar: { ...OWN_OPS },
+  vibrance: { ...RGB_OPS },
+  halftone: { ...YUV_OPS },
+  curves: { ...RGB_OPS },
+  // V5.4. A key leaves the picture see-through where its colour was (`gives`).
+  chromakey: { ...RGB_OPS, gives: true },
+  lumakey: { ...RGB_OPS, gives: true },
+  strobe: { ...RGB_OPS },
+  // V5.5.1. On the planes the picture comes in, where it costs least.
+  echo: { ...OWN_OPS },
 };
 
 /**

@@ -24,6 +24,7 @@ const FIRST = ['obscure', 'pixelate'];
 const LATER = T.VFX_KIND_IDS.filter((k) => !FIRST.includes(k));
 // The kinds drawn from ops: every later one but Tilt-Shift, which is Obscure's blur.
 const OPS = LATER.filter((k) => k !== 'tiltshift');
+const KEYS = ['chromakey', 'lumakey'];
 // Apply LUT does nothing until a file is chosen; with one it is a kind like the others.
 const LUT_FILE = 'C:' + String.fromCharCode(92) + 'luts' + String.fromCharCode(92) + 'look one.cube';
 const START = { lut: { file: LUT_FILE } };
@@ -49,7 +50,7 @@ test('there are forty and more kinds, every one under a heading of the menu, onc
   const listed = T.VFX_GROUPS.flatMap((g) => g.kinds);
   assert.deepEqual(listed.slice().sort(), T.VFX_KIND_IDS.slice().sort());
   assert.equal(new Set(listed).size, listed.length);
-  assert.deepEqual(T.VFX_GROUPS.map((g) => g.id), ['hide', 'color', 'stylize', 'distort']);
+  assert.deepEqual(T.VFX_GROUPS.map((g) => g.id), ['hide', 'color', 'stylize', 'distort', 'key', 'time']);
 });
 
 test('every kind drawn from ops has its row of ops, and no row is left over', () => {
@@ -67,8 +68,8 @@ test('every later kind has its own settings first and numbers a keyframe holds',
     const own = def.statics.slice(0, def.statics.length - tail.length);
     assert.equal(own.some((s) => s.id === 'shape' || s.id === 'invert'), false, kind);
     // A number among its own is a speed: it cannot blend, so no keyframe holds it.
-    assert.ok(def.statics.every((s) => ['shape', 'check', 'choice', 'color', 'number', 'file'].includes(s.type)), kind);
-    assert.ok(def.statics.every((s) => s.type !== 'number' || ['speed', 'count', 'segments'].includes(s.id)), kind);
+    assert.ok(def.statics.every((s) => ['shape', 'check', 'choice', 'color', 'number', 'file', 'curve'].includes(s.type)), kind);
+    assert.ok(def.statics.every((s) => s.type !== 'number' || ['speed', 'count', 'segments', 'copies', 'gap', 'decay'].includes(s.id)), kind);
     assert.ok(def.keyed.every((s) => s.type === 'number' && (s.in === 'mask' || s.in === 'filter')), kind);
     // The soft edge last where the kind has one, and only with an area.
     const soft = def.keyed.findIndex((s) => s.id === 'soft');
@@ -84,6 +85,11 @@ test('every kind with an area starts on all of the picture and every one has Mix
   for (const kind of OPS) {
     const def = T.vfxKind(kind);
     assert.equal(def.fill, def.area ? true : undefined, kind);
+    // V5.4. A key has no Mix: half a key is no key.
+    if (KEYS.includes(kind)) {
+      assert.equal(def.keyed.some((s) => s.id === 'mix'), false, kind);
+      continue;
+    }
     const mix = def.keyed.find((s) => s.id === 'mix');
     assert.ok(mix && mix.in === 'mask' && mix.def === 100 && mix.min === 0 && mix.max === 100, kind);
     assert.equal(now(kind, { mix: 0 }).off, true, kind);
@@ -426,8 +432,8 @@ test('the preview and the export are both run by the ops, written once', () => {
   const gl = read('renderer', 'app', 'vfxGl.js');
   const html = read('renderer', 'index.html');
   assert.ok(comp.includes('const ops = vfxOps.opsOf(v.kind, v, src.W, src.H);'));
-  assert.ok(comp.includes('vfxGl.passesOf(ops, kx, ky)'));
-  assert.ok(exp.includes('ops: vfxOps.opsOf(now.kind, now, W, H).filter('));
+  assert.ok(comp.includes('vfxGl.passesOf(ops, kx, ky, vfxDrawnAt)'));
+  assert.ok(exp.includes('ops: vfxOps.opsOf(now.kind, now, W, H)\n      .filter('));
   // A shader for every op there is a filter for.
   for (const prog of ['colour', 'hold', 'conv', 'sobel', 'blur', 'shift', 'lens', 'flip', 'mirror', 'grid', 'noise', 'screen', 'detail', 'bars', 'scroll', 'comic', 'frame', 'rotate', 'warp', 'lut3d']) {
     assert.ok(gl.includes('\n    ' + prog + ': `'), prog);
@@ -613,7 +619,7 @@ test('Apply LUT does nothing until a file is chosen, and its path reaches the en
   assert.equal(O.filtersOfOp(opsOf('lut')[0])[0], 'lut3d=file=' + O.filterPath(LUT_FILE) + ':interp=trilinear');
   // A file that is gone or is no table is left out of the export, which would stop at it.
   const exp = read('renderer', 'app', 'export.js');
-  assert.ok(exp.includes(".filter((o) => o.op !== 'lut3d' || vfxGl.cube(o.file).state === 'ok')"));
+  assert.ok(exp.includes(".filter((o) => o.op !== 'lut3d' || !!vfxGl.cubePath(o.file))"));
   assert.ok(exp.includes("if (s.type === 'file' && v[s.id]) await vfxGl.cubeReady(v[s.id]);"));
   // The window picks the file and the main process reads it.
   const main = read('main.js');

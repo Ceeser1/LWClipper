@@ -950,11 +950,12 @@ ipcMain.handle('dialog:openMaskImage', async () => {
 });
 
 // V5.1. Apply LUT: a colour table of the user's own, a .cube file.
+// V5.3. Or a .3dl file.
 ipcMain.handle('dialog:openLut', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     title: 'Choose a LUT file',
     properties: ['openFile'],
-    filters: [{ name: 'LUT (.cube)', extensions: ['cube'] }],
+    filters: [{ name: 'LUT (.cube, .3dl)', extensions: ['cube', '3dl'] }],
   });
   if (result.canceled || !result.filePaths.length) return { ok: false, cancelled: true };
   return { ok: true, path: result.filePaths[0] };
@@ -969,6 +970,26 @@ ipcMain.handle('lut:read', async (_event, filePath) => {
     return { ok: true, text: fs.readFileSync(String(filePath), 'utf8') };
   } catch {
     return { ok: false };
+  }
+});
+
+// V5.3. A table read out of a file the encoder cannot read (a .3dl), as the
+// text of a .cube: written beside the drawn pictures of an export, under a
+// name made of the text itself, so the same table is written once.
+ipcMain.handle('lut:cube', (_event, text) => {
+  try {
+    const body = String(text || '');
+    if (!body || body.length > 96 * 1024 * 1024) return { ok: false };
+    const name = 'lut-' + crypto.createHash('sha1').update(body).digest('hex').slice(0, 24) + '.cube';
+    const file = path.join(genImageDir(), name);
+    if (fs.existsSync(file)) return { ok: true, path: file };
+    fs.mkdirSync(genImageDir(), { recursive: true });
+    const part = file + '.part';
+    fs.writeFileSync(part, body);
+    fs.renameSync(part, file);
+    return { ok: true, path: file };
+  } catch (e) {
+    return { ok: false, error: String(e.message || e) };
   }
 });
 

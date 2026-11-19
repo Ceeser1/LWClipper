@@ -6,7 +6,36 @@ The most important changes since 1.5.5, newest first.
 
 ## 5.x: VFX (2026-11-17, 2026-11-18)
 
-Current version: 5.1.6.
+Current version: 5.2.0.
+
+- **Nine more VFX, 66 in all (5.2.0).** Corner Pin, Polar Coordinates, Vibrance, Halftone, Curves, Chroma Key, Luma Key, Strobe and Echo, with two new headings in the VFX window, **Keying** and **Time**. Each is described below.
+
+- **Echo (5.2.0).** A second VFX under **Time**.
+  - **Echo**: what moves leaves fading copies of itself behind. **Echoes** is how many copies (1 to 5), **Frames Apart** how many frames lie between one copy and the next (1 to 10), and **Echo Strength** how strong each copy is against the one after it: at 100 all are as strong as the picture, lower and they fade out. One frame apart with a high strength is a trail; several frames apart gives separate copies. **Mix** travels with keyframes; the other three are the same for the whole clip.
+  - An Echo works on the track's picture as the file has it, before the track's other VFX, wherever it stands in the list, and one track has one Echo: a second one is left out.
+  - The preview shows the same picture as the exported file, also standing still: the frames from before are then fetched, which takes a moment after a jump, and the picture is drawn again once they are there. While playing they are kept as they go by.
+
+- **Time: Strobe (5.2.0).** A sixth heading in the VFX window, **Time**, for VFX that go by the clip's time.
+  - **Strobe**: one colour flashes over the whole picture, again and again. **Color** is the flash's colour, **Speed** how many flashes there are in ten seconds (40 is four a second), **Flash Length** how much of each round the flash is there, and **Mix** how strong it is: at 100 the picture is the colour, lower lets the picture show through. Flash Length and Mix travel with keyframes. The flashes fall on the same frames in the preview and in the exported file.
+
+- **Keying: green screen and more (5.2.0).** A fifth heading in the VFX window, **Keying**, with two VFX that make parts of a track see-through, so the track under it shows there.
+  - **Chroma Key**: one colour becomes see-through, a green or a blue screen first of all. **Pick from Picture** and a click on the picture takes the screen's colour from there, as the mean of a few pixels; the colour well is there too. **Tolerance** is how far from that colour a colour still goes, **Softness** how gently the edge comes back, and **Spill Removal** takes the screen's green (or blue) out of what is left, such as the rim round hair. The key goes by the colour and not by its brightness, so an unevenly lit screen keys in one piece.
+  - **Luma Key**: **Remove Dark** or **Remove Bright** makes the dark or the bright end see-through, with **Threshold** and **Softness**. For a logo on black, or a white background.
+  - Both act on the whole picture and have no Mix; all their figures travel with keyframes. To keep part of the screen away, crop or mask the track. They work before and after the other VFX: a blur after a key blurs the cut-out, a Corner Pin puts it on a wall.
+  - Both are fast to export, unlike the warps.
+
+- **Curves, and LUT files of a second kind (5.2.0).**
+  - **Curves** (Color): the tones bent along a curve you draw. A click in the square puts a point on the curve and a drag moves it; dragged out of the square, or double-clicked, it is gone again. **All** is the curve for every colour, **R**, **G** and **B** are curves for red, green and blue alone, which lie faintly behind while another is being drawn, and **Reset Curve** puts the chosen one back on the diagonal. The curve runs smoothly through its points and never swings past one. Up to 16 points a curve. The curves are the same for the whole clip; Mix, the area and its soft edge travel with keyframes as for the other corrections.
+  - **Apply LUT** also takes **.3dl** files, of any size and of 8, 10, 12 or 16 bits, alongside .cube.
+  - Fixed: an Apply LUT with keyframes showed in the preview and was missing from the exported file.
+
+- **Four more VFX, one of them see-through (5.2.0).**
+  - **Corner Pin** (Distort): the picture's four corners go where they are dragged, as onto a screen or a wall seen at a slant. Each corner has a handle on the picture, with a dashed outline between the four; a handle lands on the picture's middle and edges and may be pulled off the picture by up to half of it. The corners are also there as figures (**Top Left X** and so on) and travel with keyframes. Round the pinned picture the track is see-through, so the track under it shows there. It is the first VFX that does that.
+  - **Polar Coordinates** (Distort): **Wrap into a Circle** bends the picture round its middle, its top edge in the centre and its left and right edges meeting above it; **Unwrap a Circle** lays such a picture out flat again. **Amount** goes from the picture as it is to fully wrapped.
+  - **Vibrance** (Color): strengthens the pale colours more than the strong ones, so nothing that is already strong burns out; below zero it mutes the pale colours first. A rectangle or a circle, like the other corrections.
+  - **Halftone** (Stylize): dots as in a newspaper print, bigger where the picture is darker, with **Size** and **Angle** of the grid. **Colored Dots** gives each dot its part's colour instead of black.
+  - **Bulge** is now called **Bulge and Pinch**, since a negative Amount has always pinched: a search for "pinch" finds it.
+  - Corner Pin, Polar Coordinates and Halftone are worked out pixel by pixel when exporting, like the other warps, so they are among the slower VFX to export.
 
 - **The headings of the VFX list fold (5.1.6).** A click on **Blur and Hide**, **Color**, **Stylize** or **Distort** in the VFX window folds its VFX away under the heading, and another click brings them back, so the list need not be scrolled through from top to bottom. Which headings are folded is remembered, for every project and the next start. The search still looks through all of them: while something is typed, a folded heading opens for what was found under it, and it is folded again once the search is empty.
 - **A small image stays small, and Crop and Mask has its settings on top (5.1.5).**

@@ -220,6 +220,7 @@ function releaseDecoder(entry) {
 function releaseComposite() {
   for (const entry of decoders.values()) releaseDecoder(entry);
   decoders.clear();
+  for (const id of [...echoStores.keys()]) releaseEcho(id);
   releasePlayers();
   compositeFrame = null;
   landing.clear();
@@ -442,6 +443,13 @@ function syncDecoders() {
     if (wanted.has(id)) continue;
     releaseDecoder(entry);
     decoders.delete(id);
+    releaseEcho(id);
+  }
+  // V5.5.1. And a track that has no Echo any more needs no frames kept.
+  for (const id of [...echoStores.keys()]) {
+    const l = layers.find((x) => x.id === id);
+    const first = l ? timelineModel.vfxWorked(l)[0] : null;
+    if (!first || !VFX_PREVIEW[first.kind] || !VFX_PREVIEW[first.kind].first) releaseEcho(id);
     // Nothing is going to answer for it now, so stop waiting on it.
     landing.delete(id);
   }
@@ -659,7 +667,7 @@ function shapeCover(canvas, draw) {
 // V4.7. Three more for the VFX: the effect, and two that the blur's copy and
 // Pixelate's halvings are made on.
 // V4.8. And one for the whole picture with the earlier VFX on it, see layVfx.
-const maskedSurfaces = [null, null, null, null, null, null];
+const maskedSurfaces = [null, null, null, null, null, null, null];
 function maskedSurface(i, w, h) {
   if (!maskedSurfaces[i]) maskedSurfaces[i] = new OffscreenCanvas(w, h).getContext('2d');
   const c = maskedSurfaces[i].canvas;
@@ -685,10 +693,22 @@ function maskedPicture(layer, el, from, d, at, src = null, matte = null, win = n
   const cut = !!mask && !maskPictureFailed(mask);
   // V5.0. Its VFX as their keyframes have them at `at`, in the order they
   // are processed, the ones that are off at this moment left out.
-  const effects = (src ? timelineModel.vfxList(layer) : [])
+  // V5.5.1. In the order they are worked, which puts an Echo first.
+  let effects = (src ? timelineModel.vfxWorked(layer) : [])
     .map((v) => timelineModel.vfxAt(v, at - layer.start))
     .filter((v) => !v.off && VFX_PREVIEW[v.kind]);
   if (!cut && !effects.length && !matte) return { el, from };
+  // V5.5.1. An Echo is not laid on the picture: it is the picture the rest
+  // is made of, the frame mixed with the ones before it.
+  if (effects.length && VFX_PREVIEW[effects[0].kind].first) {
+    const mixed = echoPicture(layer, el, at, effects[0]);
+    effects = effects.slice(1);
+    if (mixed) {
+      from = [from[0] * mixed.kx, from[1] * mixed.ky, from[2] * mixed.kx, from[3] * mixed.ky];
+      src = { ...src, ex: src.ex * mixed.kx, ey: src.ey * mixed.ky };
+      el = mixed.el;
+    }
+  }
   const w = Math.max(1, Math.round(d.dw));
   const h = Math.max(1, Math.round(d.dh));
   const p = maskedSurface(0, w, h);
@@ -730,6 +750,244 @@ function maskedPicture(layer, el, from, d, at, src = null, matte = null, win = n
     p.globalCompositeOperation = 'source-over';
   }
   return { el: p.canvas, from: [0, 0, w, h] };
+}
+
+// ---- V5.5.1. Echo: the frames from before ----
+//
+// An Echo mixes the frame shown with the track's frames from a little
+// earlier (vfxOps.js echoFrames says which, and how much of each). The
+// export has them: its filter keeps the frames that pass. The preview has
+// one frame, the one its decoder stands on. So each track with an Echo
+// keeps a few of its frames here, by their number in the clip at the
+// project's rate:
+//   - While playing, every frame drawn is kept, small, as it goes by.
+//   - Standing still, the ones an Echo asks for are fetched by a second
+//     decoder of the same file, one seek after the other, each waited for
+//     (several seeks of one decoder at once are what Chromium loses), and
+//     the picture is drawn again when they are there. seekDecodersTo waits
+//     for them too, so whoever waits for a frame gets the finished one.
+// Until a frame is there its share goes to the frame shown, so the picture
+// is never darker for the wait, only without that echo.
+const echoStores = new Map();
+// As many frames a track keeps, the widest a kept frame is while playing and
+// standing still, and how long a fetch waits for one seek.
+const ECHO_KEEP = 64;
+const ECHO_PLAY_W = 960;
+const ECHO_STILL_W = 1920;
+const ECHO_SEEK_MS = 4000;
+// How far into a frame's stretch of time the fetching decoder is put, in frames.
+const ECHO_INTO = 0.1;
+
+/**
+ * A track's store. Its frames are kept by their number in the clip, which
+ * says which frame of the file only while the clip starts where it did in
+ * the file, runs at the speed it did and the project has the rate it had:
+ * when any of that has changed (`sig`) the frames kept are another clip's
+ * and are let go.
+ */
+function echoStore(layer) {
+  let store = echoStores.get(layer.id);
+  if (!store) {
+    store = { frames: new Map(), el: null, url: '', busy: null, want: null, spare: [], sig: '' };
+    echoStores.set(layer.id, store);
+  }
+  const sig = [layer.src, timelineModel.sourceTimeFor(layer, layer.start), timelineModel.sourceTimeFor(layer, layer.start + 1),
+    projectFrame().fps].join('|');
+  if (store.sig !== sig) {
+    for (const kept of store.frames.values()) store.spare.push(kept.canvas);
+    store.frames.clear();
+    store.sig = sig;
+  }
+  return store;
+}
+
+/** A track's kept frames let go, with the decoder that fetched them. */
+function releaseEcho(id) {
+  const store = echoStores.get(id);
+  if (!store) return;
+  echoStores.delete(id);
+  store.want = null;
+  if (store.el) {
+    store.el.removeAttribute('src');
+    store.el.load();
+    store.el.remove();
+  }
+}
+
+/** The clip's frame number at `at` of the timeline, the first being 0. */
+function echoFrameAt(layer, at) {
+  return Math.max(0, Math.floor((at - layer.start) * projectFrame().fps + 1e-6));
+}
+
+/** A frame kept: the element's picture as it stands, no wider than `widest`. */
+function echoKeep(store, n, el, widest, rough) {
+  const k = Math.min(1, widest / Math.max(1, el.videoWidth));
+  const w = Math.max(1, Math.round(el.videoWidth * k));
+  const h = Math.max(1, Math.round(el.videoHeight * k));
+  let kept = store.frames.get(n);
+  if (!kept) {
+    // The oldest out first, and its surface used again.
+    if (store.frames.size >= ECHO_KEEP) {
+      let far = null;
+      for (const key of store.frames.keys()) if (far === null || Math.abs(key - n) > Math.abs(far - n)) far = key;
+      store.spare.push(store.frames.get(far).canvas);
+      store.frames.delete(far);
+    }
+    kept = { canvas: store.spare.pop() || new OffscreenCanvas(w, h), rough };
+    store.frames.set(n, kept);
+  }
+  if (kept.canvas.width !== w) kept.canvas.width = w;
+  if (kept.canvas.height !== h) kept.canvas.height = h;
+  const ctx = kept.canvas.getContext('2d');
+  ctx.globalCompositeOperation = 'copy';
+  ctx.drawImage(el, 0, 0, w, h);
+  kept.rough = rough;
+}
+
+/** One seek of the fetching decoder, waited for: true when its picture is there. */
+function echoSeek(el, want) {
+  return new Promise((resolve) => {
+    if (Math.abs(el.currentTime - want) < 0.0005 && el.readyState >= 2 && !el.seeking) {
+      resolve(true);
+      return;
+    }
+    const done = (ok) => {
+      el.removeEventListener('seeked', landed);
+      clearTimeout(timer);
+      resolve(ok);
+    };
+    const landed = () => done(true);
+    const timer = setTimeout(() => done(false), ECHO_SEEK_MS);
+    el.addEventListener('seeked', landed);
+    el.currentTime = want;
+  });
+}
+
+/**
+ * The frames `numbers` of a track fetched into its store, the ones not there
+ * yet (or only kept small), one after the other. A later call with other
+ * numbers takes over from the one running. Resolves when the frames asked
+ * for last are there, or cannot be had.
+ */
+function echoFetch(layer, numbers) {
+  const entry = decoders.get(layer.id);
+  if (!entry || entry.still || entry.gen || !entry.width || !entry.el.src) return Promise.resolve();
+  const store = echoStore(layer);
+  const missing = (n) => !store.frames.has(n) || store.frames.get(n).rough;
+  store.want = { layer, numbers: [...new Set(numbers)] };
+  if (!store.want.numbers.some(missing)) return Promise.resolve();
+  if (store.busy) return store.busy;
+  store.busy = (async () => {
+    if (!store.el || store.url !== entry.el.src) {
+      if (store.el) store.el.remove();
+      const v = document.createElement('video');
+      v.muted = true;
+      v.preload = 'auto';
+      v.playsInline = true;
+      store.el = v;
+      store.url = entry.el.src;
+      compositePool.appendChild(v);
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, ECHO_SEEK_MS);
+        v.addEventListener('loadeddata', () => {
+          clearTimeout(timer);
+          resolve();
+        }, { once: true });
+        v.src = store.url;
+      });
+    }
+    const fps = projectFrame().fps;
+    let got = false;
+    for (;;) {
+      if (echoStores.get(layer.id) !== store || !store.want) break;
+      const now = store.want;
+      const n = now.numbers.find(missing);
+      if (n === undefined) break;
+      // A little into the frame's own stretch of time: the frame the file
+      // has begun by the frame's moment, which is the one the export takes
+      // and the preview shows with the playhead on it. Not its middle: at
+      // double speed that is the edge between two of the file's frames
+      // (measured: 2.2 of 255 off the export there, 1.2 this way).
+      const sig = store.sig;
+      const ok = await echoSeek(store.el, timelineModel.sourceTimeFor(now.layer, now.layer.start + (n + ECHO_INTO) / fps));
+      if (echoStores.get(layer.id) !== store) break;
+      // The clip was cut or sped up meanwhile: this frame is none of its frames now.
+      if (store.sig !== sig) continue;
+      if (ok && store.el.videoWidth) {
+        echoKeep(store, n, store.el, ECHO_STILL_W, false);
+        got = true;
+      } else {
+        // One that cannot be had is not asked for again and again.
+        now.numbers = now.numbers.filter((x) => x !== n);
+      }
+    }
+    store.busy = null;
+    // The picture again, now with the frames it was missing.
+    if (got && !compositePlaying) {
+      drawComposite();
+      if (typeof paintVfxStage === 'function') paintVfxStage();
+    }
+  })();
+  return store.busy;
+}
+
+/** The numbers of the frames from before that an Echo as it is at `at` mixes, for a track. */
+function echoNeeds(layer, at) {
+  const v = timelineModel.vfxWorked(layer)[0];
+  if (!v || !VFX_PREVIEW[v.kind] || !VFX_PREVIEW[v.kind].first) return [];
+  const now = timelineModel.vfxAt(v, at - layer.start);
+  if (now.off) return [];
+  const [op] = vfxOps.opsOf(now.kind, now, 1, 1);
+  const n = echoFrameAt(layer, at);
+  return op ? vfxOps.echoFrames(op, n).slice(1).map((f) => f[0]).filter((x) => x !== n) : [];
+}
+
+/**
+ * The frame shown mixed with the frames before it, as the Echo `v` says at
+ * `at`: `{ el, kx, ky }`, a surface to read the picture from in place of
+ * the element and how many of its pixels one of the element's is. Null for
+ * a picture that has no frames (a still), which an Echo leaves as it is.
+ */
+function echoPicture(layer, el, at, v) {
+  if (!(el instanceof HTMLVideoElement) || !el.videoWidth) return null;
+  const [op] = vfxOps.opsOf(v.kind, v, 1, 1);
+  if (!op) return null;
+  const store = echoStore(layer);
+  const n = echoFrameAt(layer, at);
+  // While playing every frame that goes by is kept for the ones after it.
+  if (compositePlaying && !store.frames.has(n)) echoKeep(store, n, el, ECHO_PLAY_W, true);
+  const mix = v.mix === undefined ? 1 : v.mix / 100;
+  const parts = vfxOps.echoFrames(op, n, mix);
+  const k = Math.min(1, ECHO_STILL_W / el.videoWidth);
+  const w = Math.max(1, Math.round(el.videoWidth * k));
+  const h = Math.max(1, Math.round(el.videoHeight * k));
+  const e = maskedSurface(6, w, h);
+  e.setTransform(1, 0, 0, 1, 0, 0);
+  e.filter = 'none';
+  e.globalCompositeOperation = 'source-over';
+  e.clearRect(0, 0, w, h);
+  e.globalCompositeOperation = 'lighter';
+  let own = parts[0][1];
+  const missing = [];
+  for (const [number, share] of parts.slice(1)) {
+    // A frame that is this one (the clip's first, asked for from before it) is this one.
+    const kept = number === n ? null : store.frames.get(number);
+    if (!kept) {
+      own += share;
+      if (number !== n) missing.push(number);
+      continue;
+    }
+    if (kept.rough && !compositePlaying) missing.push(number);
+    e.globalAlpha = share;
+    e.drawImage(kept.canvas, 0, 0, w, h);
+  }
+  e.globalAlpha = Math.min(1, own);
+  e.drawImage(el, 0, 0, w, h);
+  e.globalAlpha = 1;
+  e.globalCompositeOperation = 'source-over';
+  // Standing still, what was missing is fetched and the picture drawn again.
+  if (missing.length && !compositePlaying) echoFetch(layer, parts.slice(1).map((f) => f[0]).filter((x) => x !== n));
+  return { el: e.canvas, kx: w / el.videoWidth, ky: h / el.videoHeight };
 }
 
 // V4.10. A layer's placements through a slide or a zoom, kept by the layer
@@ -844,6 +1102,16 @@ const VFX_PREVIEW = {
   perspective: { ...OPS_PREVIEW },
   bulge: { ...OPS_PREVIEW },
   lut: { ...OPS_PREVIEW },
+  cornerpin: { ...OPS_PREVIEW },
+  polar: { ...OPS_PREVIEW },
+  vibrance: { ...OPS_PREVIEW },
+  halftone: { ...OPS_PREVIEW },
+  curves: { ...OPS_PREVIEW },
+  chromakey: { ...OPS_PREVIEW },
+  lumakey: { ...OPS_PREVIEW },
+  strobe: { ...OPS_PREVIEW },
+  // V5.5.1. Not drawn as a pass: it is the picture the others are given (echoPicture).
+  echo: { room: () => ({ margin: 0 }), draw: (e, p) => e.drawImage(p.canvas, 0, 0), first: true },
 };
 
 // The moment maskedPicture is drawing, in the clip's own seconds, for a kind
@@ -889,7 +1157,7 @@ function drawVfxOps(e, p, v, el, src, w, h) {
     scale: [kx, ky],
     pic: [pad.l - src.x * kx, pad.t - src.y * ky, src.W * kx, src.H * ky],
     time: vfxDrawnAt,
-  }, vfxGl.passesOf(ops, kx, ky));
+  }, vfxGl.passesOf(ops, kx, ky, vfxDrawnAt));
   if (!out) {
     e.drawImage(x.canvas, pad.l, pad.t, w, h, 0, 0, w, h);
     return;
@@ -1916,6 +2184,9 @@ function seekDecodersTo(at) {
     // being waited for: a promise on a seeked event that cannot fire would hold
     // the trim frames up for its full ten seconds.
     if (!entry || !entry.width || entry.still) continue;
+    // V5.5.1. And the frames from before that an Echo of this track mixes.
+    const before = echoNeeds(l, at);
+    if (before.length) waits.push(echoFetch(l, before));
     const want = timelineModel.sourceTimeFor(l, at);
     // Assigning the position it already holds may produce no seeked event at
     // all, which would leave this waiting for a reply that never comes.

@@ -313,11 +313,14 @@ void main() {
     // geq: every pixel from somewhere else in the picture, by the rule
     // vfxOps.warpExpr writes for the encoder, worked out again here. 0 wave,
     // 1 ripple, 2 swirl, 3 zoom, 4 shake, 5 glitch, 6 haze, 7 tile,
-    // 8 kaleidoscope, 9 perspective, 10 bulge; uA and uB its figures.
+    // 8 kaleidoscope, 9 perspective, 10 bulge, 11 corner pin, 12 polar; uA,
+    // uB and uC its figures. `cover` is how much of the picture is left
+    // where a warp leaves parts of it see-through (corner pin).
     warp: `
 uniform float uForm;
 uniform vec4 uA;
 uniform vec4 uB;
+uniform vec4 uC;
 int imod(int a, int b) { return a - b * (a / b); }
 void main() {
   vec2 p = pix();
@@ -325,7 +328,27 @@ void main() {
   vec2 sp = (p - uPic.xy) / uScale - 0.5;
   float T = uTime;
   vec2 q = sp;
-  if (uForm < 0.5) {
+  float cover = 1.0;
+  if (uForm > 11.5) {
+    vec2 c = (size - 1.0) * 0.5;
+    vec2 hs = size * 0.5;
+    vec2 to;
+    if (uA.y > 0.5) {
+      float th = ((sp.x + 0.5) / size.x - 0.5) * 6.28319;
+      float r = (sp.y + 0.5) / size.y;
+      to = vec2(c.x - r * sin(th) * hs.x, c.y + r * cos(th) * hs.y);
+    } else {
+      vec2 o = (sp - c) / hs;
+      to = vec2((atan(-o.x, o.y) / 6.28319 + 0.5) * size.x - 0.5, length(o) * size.y - 0.5);
+    }
+    q = sp + uA.x * (to - sp);
+  } else if (uForm > 10.5) {
+    float den = uB.z * sp.x + uB.w * sp.y + uC.x;
+    float d = max(den, 0.000001);
+    q = vec2((uA.x * sp.x + uA.y * sp.y + uA.z) / d - 0.5, (uA.w * sp.x + uB.x * sp.y + uB.y) / d - 0.5);
+    float edge = min(min(q.x, size.x - 1.0 - q.x), min(q.y, size.y - 1.0 - q.y));
+    cover = clamp(edge + 1.0, 0.0, 1.0) * (den > 0.0 ? 1.0 : 0.0);
+  } else if (uForm < 0.5) {
     if (uA.w > 0.5) q.y = sp.y + uA.x * sin(uA.y * sp.x + uA.z * T);
     else q.x = sp.x + uA.x * sin(uA.y * sp.y + uA.z * T);
   } else if (uForm < 1.5) {
@@ -373,7 +396,89 @@ void main() {
     q.x = sp.x + uA.x * far * on;
   }
   q = clamp(q, vec2(0.0), size - 1.0);
-  outColor = at(uTex, (q + 0.5) * uScale + uPic.xy);
+  outColor = at(uTex, (q + 0.5) * uScale + uPic.xy) * cover;
+}`,
+    // vibrance: every colour pushed from its own grey or pulled towards it,
+    // by less the stronger it already is. The filter's arithmetic, in its order.
+    vibrance: `
+uniform float uK;
+void main() {
+  vec4 c = texture(uTex, vUv);
+  vec3 v = whole(c) * (1.0 / 255.0);
+  float strong = max(v.r, max(v.g, v.b)) - min(v.r, min(v.g, v.b));
+  float luma = v.g * 0.7152 + v.r * 0.2126 + v.b * 0.0722;
+  float k = 1.0 + uK * (1.0 - strong);
+  vec3 o = luma + (v - luma) * k;
+  outColor = back(floor(clamp(o, 0.0, 1.0) * 255.0), c.a);
+}`,
+    // Halftone: a grid of cells turned by an angle, in each a dot as big as
+    // the picture is dark at the cell's middle, on white.
+    dots: `
+uniform float uCell;
+uniform vec2 uTurn;
+uniform float uTinted;
+uniform float uInset;
+void main() {
+  vec2 p = pix();
+  float a = at(uTex, p).a;
+  vec2 size = uPic.zw / uScale;
+  vec2 sp = (p - uPic.xy) / uScale - 0.5;
+  vec2 r = vec2(sp.x * uTurn.x + sp.y * uTurn.y, sp.y * uTurn.x - sp.x * uTurn.y);
+  vec2 cell = (floor(r / uCell) + 0.5) * uCell;
+  vec2 mid = clamp(vec2(cell.x * uTurn.x - cell.y * uTurn.y, cell.x * uTurn.y + cell.y * uTurn.x), vec2(uInset), size - 1.0 - uInset);
+  vec4 m = at(uTex, (mid + 0.5) * uScale + uPic.xy);
+  vec3 v = m.a > 0.0 ? m.rgb / m.a * 255.0 : vec3(0.0);
+  float dark = clamp(1.0 - dot(v, vec3(0.2126, 0.7152, 0.0722)) / 255.0, 0.0, 1.0);
+  float k = clamp(uCell * 0.70710678 * sqrt(dark) - length(r - cell) + 0.5, 0.0, 1.0);
+  vec3 ink = uTinted > 0.5 ? v : vec3(0.0);
+  outColor = back(floor(255.0 + (ink - 255.0) * k + 0.5), a);
+}`,
+    // V5.5. flash: drawbox, filled, over all of the picture while it is on;
+    // whether it is on was worked out of the clip's time before the pass.
+    flash: `
+uniform vec3 uColor;
+uniform float uOn;
+void main() {
+  vec4 c = texture(uTex, vUv);
+  outColor = vec4(mix(c.rgb, uColor / 255.0 * c.a, uOn > 0.5 ? 1.0 : 0.0), c.a);
+}`,
+    // V5.4. key: colorchannelmixer's two rows (each product rounded, the
+    // alpha's share a whole number), colorkey's distance from the key's two
+    // figures turned into an alpha, cut down to a whole number as it is
+    // there, despill on the colour, and the alpha multiplied into the
+    // picture's own as blend=multiply does it (cut down, not rounded).
+    key: `
+uniform vec4 uRowP;
+uniform vec4 uRowQ;
+uniform vec2 uAt;
+uniform float uSim;
+uniform float uBlend;
+uniform vec2 uSpill;
+float part(float x) { return floor(x + 0.5); }
+void main() {
+  vec4 c = texture(uTex, vUv);
+  vec3 v = whole(c);
+  float p = clamp(part(v.r * uRowP.x) + part(v.g * uRowP.y) + part(v.b * uRowP.z) + uRowP.w, 0.0, 255.0);
+  float q = clamp(part(v.r * uRowQ.x) + part(v.g * uRowQ.y) + part(v.b * uRowQ.z) + uRowQ.w, 0.0, 255.0);
+  vec2 d = vec2(p, q) - uAt;
+  float diff = sqrt(dot(d, d) / 195075.0);
+  float k = uBlend > 0.0001 ? clamp((diff - uSim) / uBlend, 0.0, 1.0) : (diff > uSim ? 1.0 : 0.0);
+  float key = floor(k * 255.0);
+  if (uSpill.x > 0.5) {
+    vec3 f = v / 255.0;
+    bool blue = uSpill.x > 1.5;
+    float own = blue ? f.b : f.g;
+    float other = blue ? f.g : f.b;
+    float spill = max(own - (f.r * 0.5 + other * 0.5), 0.0);
+    // Only where there is something to take out: the other colours, and
+    // this one without any, stay the very values they were.
+    if (spill > 0.0) {
+      float made = floor(max(own - spill * uSpill.y, 0.0) * 255.0);
+      if (blue) v.b = made; else v.g = made;
+    }
+  }
+  float had = floor(c.a * 255.0 + 0.5);
+  outColor = back(v, floor(had * key / 255.0 + 0.001) / 255.0);
 }`,
     // lut3d: each colour looked up in the file's table, between its entries
     // smoothed all three ways.
@@ -556,7 +661,7 @@ void main() {
     entry.done = Promise.resolve()
       .then(() => window.lwclipper.readLut(file))
       .then((got) => {
-        const table = got && got.ok ? vfxOps.parseCube(got.text) : { ok: false };
+        const table = got && got.ok ? vfxOps.parseLut(got.text, file) : { ok: false };
         Object.assign(entry, table.ok ? { state: 'ok', ...table } : { state: 'bad' });
       })
       .catch(() => { entry.state = 'bad'; })
@@ -568,11 +673,34 @@ void main() {
     return entry;
   }
 
-  /** Whether a LUT file's table is there to be used, once it has been read. */
+  /**
+   * Whether a LUT file's table is there to be used, once it has been read.
+   * V5.3. A table out of a file the encoder cannot read as it is (a .3dl,
+   * `foreign`) is written out as a .cube for it, each time it is asked for:
+   * the folder it lies in may have been cleared meanwhile.
+   */
   async function cubeReady(file) {
     const entry = cube(file);
     await entry.done;
-    return entry.state === 'ok';
+    if (entry.state !== 'ok') return false;
+    if (entry.foreign) {
+      entry.path = '';
+      if (!entry.text) entry.text = vfxOps.cubeText(entry);
+      try {
+        const made = await window.lwclipper.lutCube(entry.text);
+        if (made && made.ok && made.path) entry.path = made.path;
+      } catch (err) {
+        entry.path = '';
+      }
+    }
+    return true;
+  }
+
+  /** The file the encoder reads a LUT from, or '' when there is none it can read. Asked after cubeReady. */
+  function cubePath(file) {
+    const entry = cube(file);
+    if (entry.state !== 'ok') return '';
+    return entry.foreign ? (entry.path || '') : file;
   }
 
   /** A LUT file read again from the disk the next time it is asked for. */
@@ -602,9 +730,10 @@ void main() {
 
   /**
    * The passes ops make, for a picture drawn `kx` by `ky` pixels to one of
-   * the source's. Each `{ prog, u, lutA, lutB }`.
+   * the source's. Each `{ prog, u, lutA, lutB }`. `time` is the moment
+   * drawn, in the clip's seconds, for an op that is on or off by it.
    */
-  function passesOf(ops, kx, ky) {
+  function passesOf(ops, kx, ky, time = 0) {
     const out = [];
     const step = [Math.max(1, kx), Math.max(1, ky)];
     const blur = (sx, sy) => {
@@ -658,7 +787,7 @@ void main() {
         const entry = cube(o.file);
         if (entry.state === 'ok') out.push({ prog: 'lut3d', cube: entry, u: { uN: entry.n, uLo: entry.lo, uHi: entry.hi } });
       } else if (o.op === 'warp') {
-        const forms = ['wave', 'ripple', 'swirl', 'zoom', 'shake', 'glitch', 'haze', 'tile', 'kaleido', 'persp', 'bulge'];
+        const forms = ['wave', 'ripple', 'swirl', 'zoom', 'shake', 'glitch', 'haze', 'tile', 'kaleido', 'persp', 'bulge', 'pin', 'polar'];
         const figures = {
           wave: [[o.a, o.k, o.s, o.vertical ? 1 : 0], [0, 0, 0, 0]],
           ripple: [[o.a, o.k, o.s, 0], [o.cx, o.cy, 0, 0]],
@@ -671,8 +800,22 @@ void main() {
           kaleido: [[o.seg, o.rot, 0, 0], [o.cx, o.cy, 0, 0]],
           persp: [[o.a, o.b, 0, 0], [o.cx, o.cy, 0, 0]],
           bulge: [[o.s, o.rad, 0, 0], [o.cx, o.cy, 0, 0]],
+          pin: o.map ? [o.map.slice(0, 4), o.map.slice(4, 8), [o.map[8], 0, 0, 0]] : null,
+          polar: [[o.a, o.unwrap ? 1 : 0, 0, 0], [0, 0, 0, 0]],
         }[o.form];
-        out.push({ prog: 'warp', u: { uForm: forms.indexOf(o.form), uA: figures[0], uB: figures[1] } });
+        out.push({ prog: 'warp', u: { uForm: forms.indexOf(o.form), uA: figures[0], uB: figures[1], uC: figures[2] || [0, 0, 0, 0] } });
+      } else if (o.op === 'flash') {
+        // Asked here, in the same arithmetic the encoder's expression has.
+        out.push({ prog: 'flash', u: { uColor: o.color, uOn: vfxOps.flashOn(o, time) ? 1 : 0 } });
+      } else if (o.op === 'key') {
+        // The alpha's share of each row as the whole number the mixer adds.
+        const row = (r) => [r[0], r[1], r[2], vfxOps.lrint(255 * r[3])];
+        out.push({ prog: 'key', u: { uRowP: row(o.rows[0]), uRowQ: row(o.rows[1]), uAt: o.at, uSim: o.sim, uBlend: o.blend,
+          uSpill: [o.spill ? (o.spill.blue ? 2 : 1) : 0, o.spill ? o.spill.k : 0] } });
+      } else if (o.op === 'vibrance') {
+        out.push({ prog: 'vibrance', u: { uK: o.k } });
+      } else if (o.op === 'dots') {
+        out.push({ prog: 'dots', u: { uCell: o.size, uTurn: [Math.cos(o.angle), Math.sin(o.angle)], uTinted: o.tinted ? 1 : 0, uInset: o.inset || 0 } });
       } else if (o.op === 'bars') {
         out.push({ prog: 'bars', u: { uPx: o.px, uVertical: o.vertical ? 1 : 0 } });
       } else if (o.op === 'scroll') {
@@ -769,5 +912,5 @@ void main() {
     }
   }
 
-  return { run, passesOf, cube, cubeReady, forgetCube };
+  return { run, passesOf, cube, cubeReady, cubePath, forgetCube };
 })();

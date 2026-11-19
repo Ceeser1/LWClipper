@@ -63,6 +63,8 @@ const vfxOthers = el('vfxOthers');
 const vfxBoxEl = el('vfxBoxEl');
 const vfxRotor = el('vfxRotor');
 const vfxPointEl = el('vfxPointEl');
+const vfxPins = el('vfxPins');
+const vfxPinFrame = el('vfxPinFrame');
 const vfxAngle = el('vfxAngle');
 const vfxGuideX = el('vfxGuideX');
 const vfxGuideY = el('vfxGuideY');
@@ -139,8 +141,22 @@ const VFX_UI = {
   tile: { name: () => t('Tile'), about: () => t('The picture several times side by side and one above the other') },
   kaleido: { name: () => t('Kaleidoscope'), about: () => t('Mirrors a wedge of the picture all the way round') },
   perspective: { name: () => t('Perspective'), about: () => t('Tilts the picture away from the viewer') },
-  bulge: { name: () => t('Bulge'), about: () => t('Blows up the picture round a point like a bump, or pinches it together') },
-  lut: { name: () => t('Apply LUT'), about: () => t('Colours from a LUT file (.cube), as colour grading tools write them') },
+  bulge: { name: () => t('Bulge and Pinch'), about: () => t('Blows up the picture round a point like a bump, or pinches it together') },
+  lut: { name: () => t('Apply LUT'), about: () => t('Colours from a LUT file (.cube or .3dl), as colour grading tools write them') },
+  // V5.2.
+  cornerpin: { name: () => t('Corner Pin'), about: () => t('Puts the four corners of the picture where you drag them, as onto a screen or a wall seen at a slant') },
+  polar: { name: () => t('Polar Coordinates'), about: () => t('Wraps the picture into a circle round its middle, or lays such a circle out flat') },
+  vibrance: { name: () => t('Vibrance'), about: () => t('Strengthens the pale colours more than the strong ones, or mutes them') },
+  halftone: { name: () => t('Halftone'), about: () => t('Dots as in a newspaper print, bigger where the picture is darker') },
+  // V5.3.
+  curves: { name: () => t('Curves'), about: () => t('Bends the tones along a curve you draw, for all colours or for red, green and blue alone') },
+  // V5.4.
+  chromakey: { name: () => t('Chroma Key'), about: () => t('Makes one colour see-through, such as a green screen, so the track under it shows there') },
+  lumakey: { name: () => t('Luma Key'), about: () => t('Makes the dark or the bright parts see-through, so the track under it shows there') },
+  // V5.5.
+  strobe: { name: () => t('Strobe'), about: () => t('Flashes one colour over the picture, again and again') },
+  // V5.5.1.
+  echo: { name: () => t('Echo'), about: () => t('What moves leaves fading copies of itself behind. Works on the track\'s picture before its other VFX, one Echo to a track') },
 };
 
 // V5.1. The headings the menu puts the kinds under (timeline.js VFX_GROUPS).
@@ -149,6 +165,8 @@ const VFX_GROUP_NAMES = {
   color: () => t('Color'),
   stylize: () => t('Stylize'),
   distort: () => t('Distort'),
+  key: () => t('Keying'),
+  time: () => t('Time'),
 };
 
 // What each setting is called, by its id, for every kind that has it.
@@ -211,6 +229,28 @@ const VFX_SETTING_LABELS = {
   // V5.1.4. The point a kind bends the picture about.
   cx: () => t('Center X:'),
   cy: () => t('Center Y:'),
+  // V5.2. The corners of a Corner Pin.
+  x1: () => t('Top Left X:'),
+  y1: () => t('Top Left Y:'),
+  x2: () => t('Top Right X:'),
+  y2: () => t('Top Right Y:'),
+  x3: () => t('Bottom Right X:'),
+  y3: () => t('Bottom Right Y:'),
+  x4: () => t('Bottom Left X:'),
+  y4: () => t('Bottom Left Y:'),
+  vibrance: () => t('Vibrance:'),
+  tinted: () => t('Colored Dots'),
+  // V5.3.
+  curve: () => t('Curve:'),
+  // V5.4.
+  tolerance: () => t('Tolerance:'),
+  spill: () => t('Spill Removal:'),
+  // V5.5.
+  duration: () => t('Flash Length:'),
+  // V5.5.1.
+  copies: () => t('Echoes:'),
+  gap: () => t('Frames Apart:'),
+  decay: () => t('Echo Strength:'),
 };
 
 // V5.1. What a figure is counted in, where that says something: shown after
@@ -228,6 +268,8 @@ const VFX_SETTING_UNITS = {
   white: '%',
   outBlack: '%',
   outWhite: '%',
+  duration: '%',
+  decay: '%',
 };
 
 // V5.1. What each option of a choice is called, by the setting's id.
@@ -264,6 +306,10 @@ const VFX_CHOICE_LABELS = {
     ice: () => t('Ice'),
   },
   mode: {
+    dark: () => t('Remove Dark'),
+    bright: () => t('Remove Bright'),
+    wrap: () => t('Wrap into a Circle'),
+    unwrap: () => t('Unwrap a Circle'),
     across: () => t('Flip Horizontal'),
     down: () => t('Flip Vertical'),
     both: () => t('Flip Both'),
@@ -570,6 +616,7 @@ function closeVfx() {
   vfxClip = null;
   vfxSel = -1;
   vfxPreviewId = null;
+  endVfxColourPick();
 }
 
 function cancelVfx() {
@@ -1080,6 +1127,8 @@ function buildVfxSettings() {
   if (want === vfxPanelFor) return;
   vfxPanelFor = want;
   vfxFields = [];
+  vfxCurveChannel = 'm';
+  endVfxColourPick();
   vfxStatics.replaceChildren();
   vfxSettings.replaceChildren();
   if (!v) return;
@@ -1197,6 +1246,7 @@ function vfxField(doc, make, s, text, keyed) {
     });
     return row;
   }
+  if (s.type === 'curve') return vfxCurveField(doc, make, s, text, change);
   if (s.type === 'color') {
     // V5.1. A colour, picked in the system's own colour window.
     const wrap = make('label', 'vfx-field__color');
@@ -1206,7 +1256,28 @@ function vfxField(doc, make, s, text, keyed) {
     wrap.appendChild(well);
     row.appendChild(wrap);
     well.addEventListener('input', () => change(well.value));
-    vfxFields.push({ s, keyed, show: (value) => { if (well.value !== value) well.value = value; } });
+    // V5.4. A colour that may be taken from the picture: a button, and then
+    // a click on the picture.
+    let pick = null;
+    if (s.pick) {
+      pick = make('button', 'vfx-color__pick', t('Pick from Picture'));
+      pick.type = 'button';
+      pick.title = t('Click a spot of the picture to take its colour');
+      pick.addEventListener('click', () => {
+        if (vfxPicking && vfxPicking.id === s.id) endVfxColourPick();
+        else beginVfxColourPick(s.id);
+        showVfxSettings(null);
+      });
+      row.appendChild(pick);
+    }
+    vfxFields.push({
+      s,
+      keyed,
+      show: (value) => {
+        if (well.value !== value) well.value = value;
+        if (pick) pick.classList.toggle('btn--active', !!vfxPicking && vfxPicking.id === s.id);
+      },
+    });
     return row;
   }
   // A number: its name, a slider and the figure to type.
@@ -1245,6 +1316,325 @@ function vfxField(doc, make, s, text, keyed) {
     show: () => showVfxSettings(null),
   });
   vfxFields.push(field);
+  return row;
+}
+
+// ---- V5.4. A colour taken from the picture ----
+
+// The setting waiting for a click on the picture, { id }, or null.
+let vfxPicking = null;
+// As many of the picture's pixels each way as the colour is the mean of: a
+// screen is grainy, and one pixel of it is not its colour.
+const VFX_PICK_SPAN = 5;
+
+function beginVfxColourPick(id) {
+  vfxPicking = { id };
+  vfxStage.classList.add('vfx-stage--picking');
+}
+
+function endVfxColourPick() {
+  vfxPicking = null;
+  vfxStage.classList.remove('vfx-stage--picking');
+}
+
+/**
+ * The picture's colour under the pointer, '#rrggbb', as it reaches the
+ * chosen VFX: with the VFX before it on it and without its own, so a key
+ * takes the colour it is going to look for. The mean of a few pixels round
+ * the spot. Null off the picture, or where it is see-through.
+ */
+function vfxColourAt(evt) {
+  const entry = vfxFrameSource();
+  const live = timelineModel.layerById(layers, vfxLayerId);
+  if (!entry || !live || !vfxPic || !vfxDraft || vfxSel < 0) return null;
+  const r = stageFrameRect(vfxStage);
+  const stage = vfxStage.getBoundingClientRect();
+  const W = vfxPic.width;
+  const H = vfxPic.height;
+  const x = (evt.clientX - stage.left - vfxStage.clientLeft - r.left) / r.s;
+  const y = (evt.clientY - stage.top - vfxStage.clientTop - r.top) / r.s;
+  if (!(x >= 0 && y >= 0 && x < W && y < H)) return null;
+  const k = Math.min(1, VFX_STAGE_MAX / Math.max(W, H));
+  const shown = { ...live, mask: null, keyframes: [], vfx: vfxListOfDraft(vfxDraft.slice(0, vfxSel)) };
+  const pic = maskedPicture(shown, entry.el, [0, 0, entry.width, entry.height],
+    { dw: W * k, dh: H * k }, live.start + vfxLocalT(),
+    { x: 0, y: 0, w: W, h: H, W, H, ex: entry.width / W, ey: entry.height / H });
+  const [sx, sy, sw, sh] = pic.from;
+  const n = VFX_PICK_SPAN;
+  // The few pixels round the spot, held inside the picture, each read as it is.
+  const px = Math.min(W - n, Math.max(0, Math.round(x - n / 2)));
+  const py = Math.min(H - n, Math.max(0, Math.round(y - n / 2)));
+  const ctx = new OffscreenCanvas(n, n).getContext('2d', { willReadFrequently: true });
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(pic.el, sx + (px / W) * sw, sy + (py / H) * sh, (n / W) * sw, (n / H) * sh, 0, 0, n, n);
+  const data = ctx.getImageData(0, 0, n, n).data;
+  const sum = [0, 0, 0];
+  let weight = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    const a = data[i + 3] / 255;
+    sum[0] += data[i] * a;
+    sum[1] += data[i + 1] * a;
+    sum[2] += data[i + 2] * a;
+    weight += a;
+  }
+  if (!(weight > n * n * 0.1)) return null;
+  return '#' + sum.map((c) => Math.min(255, Math.max(0, Math.round(c / weight))).toString(16).padStart(2, '0')).join('');
+}
+
+// A press on the picture while a colour is waiting for one takes the colour
+// there, before anything else on the picture hears of the press.
+vfxStage.addEventListener('pointerdown', (evt) => {
+  if (!vfxPicking || evt.button !== 0) return;
+  evt.preventDefault();
+  evt.stopPropagation();
+  const id = vfxPicking.id;
+  const colour = vfxColourAt(evt);
+  // A press beside the picture leaves the colour waiting.
+  if (!colour) return;
+  endVfxColourPick();
+  changeVfxStatic({ [id]: colour });
+}, true);
+
+// Escape gives the wait up, and only that: the window stays. Heard on the
+// window's panel, which is what travels into a window of its own, before
+// that window's own Escape closes it.
+vfxStage.closest('.modal__panel').addEventListener('keydown', (evt) => {
+  if (!vfxPicking || evt.key !== 'Escape') return;
+  evt.preventDefault();
+  evt.stopPropagation();
+  endVfxColourPick();
+  showVfxSettings(null);
+}, true);
+
+// V5.3. Curves. The square the curves are drawn in, in the window's pixels,
+// the room round it that lets a point on its edge be taken hold of, how near
+// a press has to be to a point to mean it, and how far outside the square a
+// point is dragged to be removed.
+const VFX_CURVE_SIZE = 180;
+const VFX_CURVE_EDGE = 9;
+const VFX_CURVE_REACH = 10;
+const VFX_CURVE_DROP = 28;
+const VFX_CURVE_COLOURS = { m: '#f0f0f4', r: '#ff6464', g: '#5fd35f', b: '#6c9dff' };
+// Which of the curves is being drawn: the one for all colours, or red's,
+// green's or blue's. The window's own, back to the first for another VFX.
+let vfxCurveChannel = 'm';
+
+/**
+ * V5.3. The setting of a Curves VFX: a square with the curves in it, the
+ * chosen one with its points to drag, and beside it which curve is chosen.
+ * A press on the square puts a point there, a point dragged far out of it
+ * is taken away again, as is one double-clicked.
+ */
+function vfxCurveField(doc, make, s, text, change) {
+  const row = make('div', 'vfx-field vfx-field--curve');
+  row.appendChild(make('div', 'vfx-field__caption', text));
+  const line = make('div', 'vfx-curve');
+  const pad = make('canvas', 'vfx-curve__pad');
+  const side = make('div', 'vfx-curve__side');
+  const picks = make('div', 'gen-choice shape-kinds vfx-shapes');
+  const names = { m: t('All'), r: 'R', g: 'G', b: 'B' };
+  for (const ch of timelineModel.VFX_CURVE_CHANNELS) {
+    const b = make('button', 'vfx-curve__channel vfx-curve__channel--' + ch, names[ch]);
+    b.type = 'button';
+    b.dataset.channel = ch;
+    b.addEventListener('click', () => {
+      vfxCurveChannel = ch;
+      showVfxSettings(null);
+    });
+    picks.appendChild(b);
+  }
+  const reset = make('button', 'vfx-curve__reset', t('Reset Curve'));
+  reset.type = 'button';
+  const readout = make('div', 'vfx-curve__readout');
+  const hint = make('div', 'vfx-curve__hint', t('Click to add a point, drag it out of the square to remove it'));
+  side.append(picks, reset, readout, hint);
+  line.append(pad, side);
+  row.appendChild(line);
+
+  const flat = () => [[0, 0], [255, 255]];
+  const curveNow = () => {
+    const v = vfxCurrent();
+    return timelineModel.vfxCurveOf(v ? v[s.id] : null, s.def);
+  };
+  const span = VFX_CURVE_SIZE - 2 * VFX_CURVE_EDGE;
+  const toPad = (p) => [VFX_CURVE_EDGE + (p[0] / 255) * span, VFX_CURVE_EDGE + (1 - p[1] / 255) * span];
+  // Where a pointer is in the square's own pixels, and as a value and what it becomes.
+  const placeOf = (evt) => {
+    const box = pad.getBoundingClientRect();
+    const k = VFX_CURVE_SIZE / Math.max(1, box.width);
+    const x = (evt.clientX - box.left) * k;
+    const y = (evt.clientY - box.top) * k;
+    return { x, y, vx: ((x - VFX_CURVE_EDGE) / span) * 255, vy: (1 - (y - VFX_CURVE_EDGE) / span) * 255 };
+  };
+  let held = null;       // the point being dragged: { rest: the others, at: its place among them }
+  let lit = -1;          // the place of the point shown as taken hold of
+
+  const draw = (curve) => {
+    const ratio = Math.max(1, (doc.defaultView && doc.defaultView.devicePixelRatio) || 1);
+    const size = Math.round(VFX_CURVE_SIZE * ratio);
+    if (pad.width !== size) {
+      pad.width = size;
+      pad.height = size;
+    }
+    const ctx = pad.getContext('2d');
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    ctx.clearRect(0, 0, VFX_CURVE_SIZE, VFX_CURVE_SIZE);
+    const lo = VFX_CURVE_EDGE;
+    const hi = VFX_CURVE_EDGE + span;
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = '#3d3d47';
+    ctx.beginPath();
+    for (let i = 0; i <= 4; i += 1) {
+      const at = Math.round(lo + (span * i) / 4) + 0.5;
+      ctx.moveTo(at, lo);
+      ctx.lineTo(at, hi);
+      ctx.moveTo(lo, at);
+      ctx.lineTo(hi, at);
+    }
+    ctx.stroke();
+    // The diagonal: a curve on it changes nothing.
+    ctx.strokeStyle = '#55555f';
+    ctx.beginPath();
+    ctx.moveTo(lo, hi);
+    ctx.lineTo(hi, lo);
+    ctx.stroke();
+    const trace = (ch, alpha, width) => {
+      const fn = vfxOps.smoothThrough(curve[ch]);
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = VFX_CURVE_COLOURS[ch];
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      for (let x = 0; x <= 255; x += 1) {
+        const [px, py] = toPad([x, Math.min(255, Math.max(0, fn(x)))]);
+        if (x === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    };
+    // The curves not chosen faintly behind, where they do something.
+    for (const ch of timelineModel.VFX_CURVE_CHANNELS) {
+      if (ch !== vfxCurveChannel && !curve[ch].every((p) => p[0] === p[1])) trace(ch, 0.4, 1);
+    }
+    trace(vfxCurveChannel, 1, 1.75);
+    curve[vfxCurveChannel].forEach((p, i) => {
+      const [px, py] = toPad(p);
+      ctx.beginPath();
+      ctx.arc(px, py, i === lit ? 5 : 4, 0, Math.PI * 2);
+      ctx.fillStyle = i === lit ? '#ffffff' : VFX_CURVE_COLOURS[vfxCurveChannel];
+      ctx.fill();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = '#16161a';
+      ctx.stroke();
+    });
+  };
+
+  /** The place of the chosen curve's point a press at `at` means, or -1. */
+  const pointAt = (points, at) => {
+    let best = -1;
+    let dist = VFX_CURVE_REACH;
+    points.forEach((p, i) => {
+      const [px, py] = toPad(p);
+      const d = Math.hypot(px - at.x, py - at.y);
+      if (d <= dist) {
+        dist = d;
+        best = i;
+      }
+    });
+    return best;
+  };
+  const put = (points) => change({ ...curveNow(), [vfxCurveChannel]: points });
+  /** The dragged point where the pointer is: between its neighbours, or gone when far outside. */
+  const dragTo = (evt) => {
+    const at = placeOf(evt);
+    const { rest, index } = held;
+    const far = Math.max(-at.x, at.x - VFX_CURVE_SIZE, -at.y, at.y - VFX_CURVE_SIZE);
+    if (far > VFX_CURVE_DROP && rest.length >= 2) {
+      lit = -1;
+      readout.textContent = '';
+      put(rest);
+      return;
+    }
+    const before = index > 0 ? rest[index - 1][0] + 1 : 0;
+    const after = index < rest.length ? rest[index][0] - 1 : 255;
+    const x = Math.round(Math.min(after, Math.max(before, at.vx)));
+    const y = Math.round(Math.min(255, Math.max(0, at.vy)));
+    lit = index;
+    readout.textContent = x + ' → ' + y;
+    put([...rest.slice(0, index), [x, y], ...rest.slice(index)]);
+  };
+  pad.addEventListener('pointerdown', (evt) => {
+    if (evt.button !== 0 || !vfxCurrent()) return;
+    const points = curveNow()[vfxCurveChannel];
+    const at = placeOf(evt);
+    let index = pointAt(points, at);
+    let rest = null;
+    if (index >= 0) {
+      rest = points.filter((p, i) => i !== index);
+    } else {
+      // A new point, where there is room for one between two others.
+      const x = Math.round(Math.min(255, Math.max(0, at.vx)));
+      if (points.length >= timelineModel.VFX_CURVE_POINTS) return;
+      index = points.findIndex((p) => p[0] >= x);
+      if (index < 0) index = points.length;
+      const before = index > 0 ? points[index - 1][0] + 1 : 0;
+      const after = index < points.length ? points[index][0] - 1 : 255;
+      if (points[index] && points[index][0] === x) rest = points.filter((p, i) => i !== index);
+      else if (after < before) return;
+      else rest = points;
+    }
+    evt.preventDefault();
+    held = { rest, index };
+    pad.setPointerCapture(evt.pointerId);
+    dragTo(evt);
+  });
+  pad.addEventListener('pointermove', (evt) => {
+    if (held) {
+      dragTo(evt);
+      return;
+    }
+    const over = vfxCurrent() ? pointAt(curveNow()[vfxCurveChannel], placeOf(evt)) : -1;
+    if (over !== lit) {
+      lit = over;
+      draw(curveNow());
+    }
+  });
+  const letGo = (evt) => {
+    if (!held) return;
+    held = null;
+    lit = -1;
+    readout.textContent = '';
+    if (pad.hasPointerCapture(evt.pointerId)) pad.releasePointerCapture(evt.pointerId);
+    draw(curveNow());
+  };
+  pad.addEventListener('pointerup', letGo);
+  pad.addEventListener('pointercancel', letGo);
+  pad.addEventListener('pointerleave', () => {
+    if (held || lit < 0) return;
+    lit = -1;
+    draw(curveNow());
+  });
+  pad.addEventListener('dblclick', (evt) => {
+    if (!vfxCurrent()) return;
+    const points = curveNow()[vfxCurveChannel];
+    const index = pointAt(points, placeOf(evt));
+    if (index < 0 || points.length <= 2) return;
+    lit = -1;
+    put(points.filter((p, i) => i !== index));
+  });
+  reset.addEventListener('click', () => {
+    if (vfxCurrent()) put(flat());
+  });
+  vfxFields.push({
+    s,
+    keyed: false,
+    show: (value) => {
+      const curve = timelineModel.vfxCurveOf(value, s.def);
+      for (const b of picks.children) b.classList.toggle('btn--active', b.dataset.channel === vfxCurveChannel);
+      reset.disabled = curve[vfxCurveChannel].length === 2 && curve[vfxCurveChannel].every((p) => p[0] === p[1]);
+      draw(curve);
+    },
+  });
   return row;
 }
 
@@ -1399,6 +1789,22 @@ function placeVfxBoxes() {
   const hasPoint = (v) => !!v && timelineModel.vfxKind(v.kind).where === 'point';
   vfxBoxEl.hidden = !hasArea(chosen);
   vfxPointEl.hidden = !hasPoint(chosen);
+  // V5.2. A Corner Pin's corners, each where it is at the playhead.
+  const pins = chosen ? timelineModel.vfxKind(chosen.kind).pins || null : null;
+  vfxPins.hidden = !pins;
+  // An svg has no `hidden` of its own to set: the attribute is what the style goes by.
+  vfxPinFrame.toggleAttribute('hidden', !pins);
+  if (pins) {
+    const now = vfxShown(chosen, false);
+    const spots = pins.map(([x, y]) => [r.left + now[x] * r.s, r.top + now[y] * r.s]);
+    spots.forEach(([x, y], i) => {
+      const node = vfxPins.children[i];
+      if (!node) return;
+      node.style.left = x + 'px';
+      node.style.top = y + 'px';
+    });
+    vfxPinFrame.firstElementChild.setAttribute('points', spots.map((p) => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' '));
+  }
   // Each where it is at the playhead.
   if (hasArea(chosen)) placeVfxNode(vfxBoxEl, vfxShown(chosen, false), r);
   if (hasPoint(chosen)) placeVfxPoint(vfxPointEl, vfxShown(chosen, false), r);
@@ -1676,25 +2082,49 @@ function vfxPointNow() {
  * holds.
  */
 function dragVfxPoint(evt) {
-  const start = vfxPointNow();
-  if (!start) return;
+  if (vfxPointNow()) dragVfxSpot(vfxPointEl, evt, 'cx', 'cy', 0, 1);
+}
+
+/**
+ * V5.2. A place on the picture that the chosen VFX keeps as two figures,
+ * `xi` and `yi`, moved by a drag of `node` that began at `evt`: a
+ * point's crosshair, or one corner of a Corner Pin. Held to `lo` to `hi`
+ * of the picture's width and height, and landing on its middle and edges.
+ */
+function dragVfxSpot(node, evt, xi, yi, lo, hi) {
+  const first = vfxCurrent();
+  if (!first) return;
+  const start = vfxShown(first);
   const s = stageFrameRect(vfxStage).s;
   const x0 = evt.clientX;
   const y0 = evt.clientY;
   const reach = TEXT_BOX_SNAP / s;
   const land = (at, size) => {
-    const held = Math.min(size, Math.max(0, at));
+    const held = Math.min(size * hi, Math.max(size * lo, at));
     const line = [0, size / 2, size].find((to) => Math.abs(held - to) <= reach);
     return line === undefined ? { at: Math.round(held), snap: null } : { at: Math.round(line), snap: line };
   };
-  beginDrag(vfxPointEl, evt, (ev) => {
-    const x = land(start.cx + (ev.clientX - x0) / s, vfxPic.width);
-    const y = land(start.cy + (ev.clientY - y0) / s, vfxPic.height);
+  beginDrag(node, evt, (ev) => {
+    const x = land(start[xi] + (ev.clientX - x0) / s, vfxPic.width);
+    const y = land(start[yi] + (ev.clientY - y0) / s, vfxPic.height);
     showVfxGuides(x.snap, y.snap);
-    const now = vfxPointNow();
-    if (now && (now.cx !== x.at || now.cy !== y.at)) changeVfxKeyed({ cx: x.at, cy: y.at });
+    const v = vfxCurrent();
+    if (!v) return;
+    const now = vfxShown(v);
+    if (now[xi] !== x.at || now[yi] !== y.at) changeVfxKeyed({ [xi]: x.at, [yi]: y.at });
   }, () => showVfxGuides(null, null));
 }
+
+// V5.2. A corner of a Corner Pin pressed: it goes where it is dragged, also
+// off the picture by up to half of it.
+vfxPins.addEventListener('pointerdown', (evt) => {
+  const node = evt.target.closest && evt.target.closest('.vfx-pin');
+  const v = vfxCurrent();
+  const pins = v ? timelineModel.vfxKind(v.kind).pins : null;
+  const pair = node && pins ? pins[Number(node.dataset.pin)] : null;
+  if (evt.button !== 0 || !pair) return;
+  dragVfxSpot(node, evt, pair[0], pair[1], -0.5, 1.5);
+});
 
 vfxPointEl.addEventListener('pointerdown', (evt) => {
   if (evt.button !== 0) return;
