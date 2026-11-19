@@ -59,6 +59,9 @@ function compositor() {
     let fps = 30;
     const SCRUB_PIXELS = ${pixels[1]};
     const projectFrame = () => ({ fps, width: 1920, height: 1080 });
+    // V5.5.2. Whether a layer is on, Solo and all, as clips.js has it.
+    let soloSeen = { list: null, types: new Set() };
+    ${fn(CLIPS, 'layerOn')}
     const painted = [];
     // A shape is noted as one, and whether it lies over the followed file.
     function drawLayerInto(ctx, canvas, shown, crop, render, at, shape) {

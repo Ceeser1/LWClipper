@@ -265,7 +265,8 @@ test('a sound is stretched with its pitch kept, in steps a half to two wide, bef
 test('Ctrl on a clip\'s edge changes its speed, and on a still it is the fine trim it was', () => {
   const drag = CLIPS.slice(CLIPS.indexOf('function bindClipDrag('), CLIPS.indexOf('// ---- V4.11. The speed of a clip, shown ----'));
   assert.match(drag, /const stretchy = !!edge && !timelineModel\.isStill\(layer\);/);
-  assert.match(drag, /const modeOf = \(ev\) => \(stretchy && ev\.ctrlKey \? 'speed' : 'trim'\);/);
+  // V5.5.2. Unless Alt was held at the press, which is a slip or a roll.
+  assert.match(drag, /const modeOf = \(ev\) => altMode\(ev\) \|\| \(stretchy && ev\.ctrlKey \? 'speed' : 'trim'\);/);
   assert.match(drag, /drag\.mode === 'speed'\s+\? timelineModel\.stretchGroup\(layers, layerId, edge, value\)\s+: timelineModel\.trimGroup\(layers, layerId, edge, value\)/);
   // Pressed or let go mid drag, the gesture carries on from where the clip is.
   assert.match(drag, /if \(factor !== drag\.factor \|\| mode !== drag\.mode\) \{/);
@@ -293,8 +294,10 @@ test('the speed is written beside the pointer while dragging and stays in the cl
 test('the preview plays each clip at its speed, a sound with its pitch kept', () => {
   // V4.13. Through holdToClock, which sets the element's rate to the layer's
   // speed, bent a little toward the clock while it is off it.
-  assert.match(COMPOSITOR, /holdToClock\(v, timelineModel\.sourceTimeFor\(l, compositeAt\), timelineModel\.speedOf\(l\), COMPOSITE_SLACK, VIDEO_BEND\);/);
-  assert.match(COMPOSITOR, /const next = by \? rate \* \(1 \+ by\) : rate;\s+if \(el\.playbackRate !== next\) el\.playbackRate = next;/);
-  assert.match(COMPOSITOR, /const rate = timelineModel\.speedOf\(l\);\s+if \(!a\.preservesPitch\) a\.preservesPitch = true;/);
+  // V5.5.2. Times the playback speed (elementRate), as far as an element goes.
+  assert.match(COMPOSITOR, /holdToClock\(v, timelineModel\.sourceTimeFor\(l, compositeAt\), elementRate\(l\), COMPOSITE_SLACK, VIDEO_BEND\);/);
+  assert.match(COMPOSITOR, /const r = timelineModel\.speedOf\(l\) \* playRate;/);
+  assert.match(COMPOSITOR, /const next = by \? Math\.min\(ELEMENT_RATE_MAX, Math\.max\(ELEMENT_RATE_MIN, rate \* \(1 \+ by\)\)\) : rate;\s+if \(el\.playbackRate !== next\) el\.playbackRate = next;/);
+  assert.match(COMPOSITOR, /const rate = elementRate\(l\);\s+if \(!a\.preservesPitch\) a\.preservesPitch = true;/);
   assert.match(COMPOSITOR, /holdToClock\(a, want, rate, AUDIO_SYNC_SLACK, AUDIO_BEND\);/);
 });

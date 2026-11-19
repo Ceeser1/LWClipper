@@ -44,7 +44,10 @@ const projectHistory = (() => {
   const LIMIT = 100;
 
   // The per-layer settings undo neither records nor restores.
-  const LIVE_FIELDS = ['enabled', 'volume'];
+  // V5.5.2. A row's Lock and Solo with them: like Enabled they are how the
+  // rows are being looked at and listened to, not an edit, so an undo leaves
+  // them as they are.
+  const LIVE_FIELDS = ['enabled', 'volume', 'locked', 'solo'];
 
   /**
    * A fresh history sitting on one state, which is the one Ctrl+Z at the very

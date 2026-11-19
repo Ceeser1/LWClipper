@@ -842,7 +842,7 @@ function seedCropFrame(layer) {
   const entry = decoders.get(layer.id);
   // A still is already on the only frame it has.
   if (!entry || entry.still) return;
-  if (layer.enabled && timelineModel.covers(layer, compositeAt)) return;
+  if (layerOn(layer) && timelineModel.covers(layer, compositeAt)) return;
   const onSeeked = () => {
     entry.el.removeEventListener('seeked', onSeeked);
     cropFrozen = null;

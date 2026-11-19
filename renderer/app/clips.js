@@ -40,6 +40,28 @@ function layersOfType(type) {
   return layers.filter((l) => l.type === type);
 }
 
+// ---- V5.5.2. Lock and Solo, as the window reads them ----
+
+// The kinds a row is soloed in, worked out once for each list `layers` is.
+let soloSeen = { list: null, types: new Set() };
+
+/**
+ * Whether a layer is shown or heard now: switched on, and not quietened by
+ * another row's Solo (timelineModel.layerLive). What every part of the
+ * preview asks where it used to ask `enabled`.
+ */
+function layerOn(l) {
+  if (!l || !l.enabled) return false;
+  if (soloSeen.list !== layers) soloSeen = { list: layers, types: timelineModel.soloTypes(layers) };
+  return !soloSeen.types.has(l.type) || !!l.solo;
+}
+
+/** Whether the clip with this id is on a locked row, which nothing may choose or change. */
+function layerLocked(id) {
+  const l = id && timelineModel.layerById(layers, id);
+  return !!l && !!l.locked;
+}
+
 // V2.9. The row a layer is on, counted from 1. Its lane once arrangeLanes has
 // seen it, which setLayers makes sure of; the old count among its own kind for
 // the moment in between.
@@ -106,7 +128,8 @@ function selectionIds() {
  * and keys act on, the last of them when it is not one of them.
  */
 function setLayerSelection(ids, primary) {
-  const list = [...new Set(ids)].filter((id) => timelineModel.layerById(layers, id));
+  // V5.5.2. Nothing on a locked row is chosen.
+  const list = [...new Set(ids)].filter((id) => timelineModel.layerById(layers, id) && !layerLocked(id));
   selectedLayerIds = list.length > 1 ? new Set(list) : new Set();
   selectedLayerId = list.includes(primary) ? primary : (list[list.length - 1] || null);
   paintLayerSelection();
@@ -116,12 +139,15 @@ function setLayerSelection(ids, primary) {
 
 /** Shift and click: a clip in or out of the chosen ones. */
 function toggleLayerSelection(id) {
+  if (layerLocked(id)) return;
   const ids = selectionIds();
   if (ids.includes(id)) setLayerSelection(ids.filter((one) => one !== id), selectedLayerId);
   else setLayerSelection([...ids, id], id);
 }
 
 function selectLayer(id) {
+  // V5.5.2. A clip on a locked row is not chosen.
+  if (id && layerLocked(id)) return;
   if (selectedLayerId === id && !selectedLayerIds.size) return;
   selectedLayerIds = new Set();
   selectedLayerId = id;
@@ -147,7 +173,11 @@ function setLayers(next, restoring) {
   // order as the stacking order and the rows are drawn from the lanes, so this
   // is the one place the two are made to agree.
   // V4.3. And every join still end to end on one row, broken where it is not.
-  const arranged = timelineModel.normalizeJoins(timelineModel.arrangeLanes(next));
+  let arranged = timelineModel.normalizeJoins(timelineModel.arrangeLanes(next));
+  // V5.5.2. Every clip of a row with the row's Lock and Solo: a clip dragged
+  // or pasted onto a row takes the row's, not the one it came from. Not on a
+  // restore, which puts back exactly what was saved.
+  if (!restoring) arranged = timelineModel.settleRowFlags(settledLayers, arranged);
   // And the transitions brought up to date with whatever the gesture did to the
   // overlaps on each lane. Not on a restore, undo or a project opening, whose
   // fades are exactly what was saved and are put back as they were rather than
@@ -156,11 +186,12 @@ function setLayers(next, restoring) {
   settledLayers = layers;
   // V4.5. A file new to the timeline joins Project Media.
   if (typeof noteProjectMediaLayers === 'function') noteProjectMediaLayers();
-  if (selectedLayerId && !timelineModel.layerById(layers, selectedLayerId)) {
+  // V5.5.2. Nor one that is on a locked row now.
+  if (selectedLayerId && (!timelineModel.layerById(layers, selectedLayerId) || layerLocked(selectedLayerId))) {
     selectedLayerId = null;
   }
   if (selectedLayerIds.size) {
-    const kept = [...selectedLayerIds].filter((id) => timelineModel.layerById(layers, id));
+    const kept = [...selectedLayerIds].filter((id) => timelineModel.layerById(layers, id) && !layerLocked(id));
     selectedLayerIds = kept.length > 1 ? new Set(kept) : new Set();
     if (selectedLayerId === null || (kept.length && !kept.includes(selectedLayerId))) {
       selectedLayerId = kept[kept.length - 1] || null;
@@ -221,6 +252,9 @@ function addLayerFromMedia(type, data, lane, start = 0) {
   // not instead of it. Everything that asks whether a layer is a picture asks
   // type === 'video' and keeps working; the handful of places that have to know
   // it is one frame rather than a file ask kind.
+  // V5.5.2. A locked row takes nothing: what was let go over it goes onto
+  // a row of its own, as onto the Add a new Layer block.
+  if (lane !== undefined && lane !== null && timelineModel.laneLocked(layers, type, lane)) lane = undefined;
   const image = type === 'video' && !!data.isImage;
   const paired = type === 'video' && !image && !!data.hasAudio;
   const groupId = paired ? timelineModel.newGroupId() : null;
@@ -364,6 +398,13 @@ function buildLaneRow(type, lane, members) {
   row.dataset.lane = String(lane);
   if (members.every((l) => !l.enabled)) row.classList.add('layer-row--off');
   if (members.some((l) => layerIsSelected(l.id))) row.classList.add('layer-row--selected');
+  // V5.5.2. Locked: its clips take no press and say so; soloed, or quietened
+  // by another row's Solo.
+  const locked = members.some((l) => l.locked);
+  const soloed = members.some((l) => l.solo);
+  if (locked) row.classList.add('layer-row--locked');
+  if (soloed) row.classList.add('layer-row--solo');
+  else if (timelineModel.soloTypes(layers).has(type)) row.classList.add('layer-row--quiet');
 
   const head = document.createElement('div');
   head.className = 'layer-head';
@@ -398,13 +439,17 @@ function buildLaneRow(type, lane, members) {
     top.appendChild(down);
   }
 
-  top.appendChild(makeButton('layer-btn layer-btn--delete', '✕', t('Delete layer'), () => {
+  const remove = makeButton('layer-btn layer-btn--delete', '✕', t('Delete layer'), () => {
     // The whole row. A clip grouped with something on another row loses its
     // partner by this and the partner keeps its marker, so it is visible which
     // one it was: the design's rule since Step 14, which removeLane keeps by
     // doing nothing clever, the way removeLayer did.
     deleteRow(type, lane);
-  }));
+  });
+  // V5.5.2. A locked row stays, clips and all, until it is unlocked.
+  remove.disabled = locked;
+  if (locked) remove.title = t('Unlock the row to delete it');
+  top.appendChild(remove);
   head.appendChild(top);
 
   const controls = document.createElement('div');
@@ -427,7 +472,26 @@ function buildLaneRow(type, lane, members) {
   enabledLabel.appendChild(document.createTextNode(t('Enabled')));
   controls.appendChild(enabledLabel);
 
+  // V5.5.2. Solo and Lock, small toggles after Enabled. Enabled is the row's
+  // mute already, so there is no third.
+  const solo = makeButton('layer-btn layer-toggle layer-toggle--solo', 'S',
+    soloed ? t('Solo is on: only the soloed rows of this kind are seen or heard. Click to end it.')
+      : t('Solo: only this row of its kind is seen or heard, in the preview and in the file'),
+    () => setRowFlag(type, lane, 'solo', !soloed));
+  solo.setAttribute('aria-pressed', String(soloed));
+  controls.appendChild(solo);
+  const lock = makeButton('layer-btn layer-toggle layer-toggle--lock', '',
+    locked ? t('Locked: nothing on this row can be chosen or changed. Click to unlock.')
+      : t('Lock the row: nothing on it can be chosen, moved or changed'),
+    () => setRowFlag(type, lane, 'locked', !locked));
+  lock.appendChild(lockIcon(locked));
+  lock.setAttribute('aria-pressed', String(locked));
+  controls.appendChild(lock);
+
   // Per-row volume, which is what replaces the single global slider.
+  // V5.5.2. On a line of its own under Enabled, Solo and Lock, where it has
+  // the head's width; beside them it had none left.
+  let levelRow = null;
   if (type === 'audio') {
     // Showing the selected clip's level when it is on this row, since that is
     // the one being looked at, and the first clip's otherwise. Moving it sets
@@ -460,10 +524,13 @@ function buildLaneRow(type, lane, members) {
       // Written straight into the list, so nothing else is going to notice.
       updateProjectUi();
     });
-    controls.appendChild(vol);
-    controls.appendChild(readout);
+    levelRow = document.createElement('div');
+    levelRow.className = 'layer-head__row layer-head__row--level';
+    levelRow.appendChild(vol);
+    levelRow.appendChild(readout);
   }
   head.appendChild(controls);
+  if (levelRow) head.appendChild(levelRow);
 
   const track = document.createElement('div');
   track.className = 'layer-track';
@@ -478,10 +545,50 @@ function buildLaneRow(type, lane, members) {
   // a row always did. A press on a clip selects that clip itself, and stops
   // there, so it never reaches this.
   row.addEventListener('pointerdown', () => {
-    if (members.some((l) => layerIsSelected(l.id))) return;
+    if (locked || members.some((l) => layerIsSelected(l.id))) return;
     selectLayer(members[0].id);
   });
   return row;
+}
+
+/**
+ * V5.5.2. A row's Lock or Solo switched. Not an undo step, as Enabled is not
+ * (history.js LIVE_FIELDS). Locking lets go of whatever was chosen on it.
+ */
+function setRowFlag(type, lane, flag, on) {
+  if (busy || !timelineDriving()) return;
+  setLayers(timelineModel.setLane(layers, type, lane, { [flag]: !!on }));
+  if (flag === 'locked' && on) {
+    const off = new Set(layers.filter((l) => l.type === type && l.lane === lane).map((l) => l.id));
+    const kept = selectionIds().filter((id) => !off.has(id));
+    if (kept.length !== selectionIds().length) setLayerSelection(kept, selectedLayerId);
+  }
+}
+
+/** V5.5.2. A small padlock, shut or open, drawn in the button's own colour. */
+function lockIcon(shut) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', '0 0 12 12');
+  svg.setAttribute('width', '11');
+  svg.setAttribute('height', '11');
+  svg.setAttribute('aria-hidden', 'true');
+  const shackle = document.createElementNS(ns, 'path');
+  // Shut, both ends of the bow go into the body; open, its right end is up.
+  shackle.setAttribute('d', shut ? 'M3.5 5.5V3.8a2.5 2.5 0 0 1 5 0v1.7' : 'M3.5 5.5V3.8a2.5 2.5 0 0 1 5 0');
+  shackle.setAttribute('fill', 'none');
+  shackle.setAttribute('stroke', 'currentColor');
+  shackle.setAttribute('stroke-width', '1.4');
+  const body = document.createElementNS(ns, 'rect');
+  body.setAttribute('x', '2');
+  body.setAttribute('y', '5.5');
+  body.setAttribute('width', '8');
+  body.setAttribute('height', '5.5');
+  body.setAttribute('rx', '1');
+  body.setAttribute('fill', 'currentColor');
+  svg.appendChild(shackle);
+  svg.appendChild(body);
+  return svg;
 }
 
 // ---- V3.4. A row held and dragged ----
@@ -612,7 +719,8 @@ function buildLayerClip(track, layer) {
   const seamAt = (side) => (side === 'start' || side === 'in'
     ? joinPlace === 'mid' || joinPlace === 'last'
     : joinPlace === 'mid' || joinPlace === 'first');
-  if (!layer.enabled) clip.classList.add('layer-clip--off');
+  // V5.5.2. Off by its own box or by another row's Solo.
+  if (!layerOn(layer)) clip.classList.add('layer-clip--off');
   if (layerIsSelected(layer.id)) clip.classList.add('layer-clip--selected');
   // Step 17. The file's own name with its extension. This was layer.src, the
   // whole path, which is longer than a tooltip usefully is; layer.name is not
@@ -889,7 +997,9 @@ function laneTargetAt(type, fromLane, clientY) {
     const track = row.querySelector('.layer-track');
     if (!track) return null;
     const lane = Number(row.dataset.lane);
-    return lane === fromLane ? null : { lane, track };
+    // V5.5.2. A locked row takes nothing: the clip stays on its own.
+    if (lane === fromLane || timelineModel.laneLocked(layers, type, lane)) return null;
+    return { lane, track };
   }
   return null;
 }
@@ -1052,21 +1162,41 @@ function bindClipDrag(clip, layerId) {
   clip.addEventListener('pointerdown', (evt) => {
     if (evt.button !== 0 || busy) return;
     const layer = timelineModel.layerById(layers, layerId);
-    if (!layer) return;
+    // V5.5.2. A clip on a locked row takes no press (the stylesheet passes
+    // it to the track under it, which moves the playhead).
+    if (!layer || layer.locked) return;
     // The stage underneath would scrub, and the row above would select on the
     // way past. Selecting here instead means the press does one thing.
     evt.stopPropagation();
     evt.preventDefault();
     const grip = evt.target.closest && evt.target.closest('.layer-clip__edge');
     const edge = grip ? grip.dataset.edge : null;
+    // V5.5.2. Alt held at the press: on the clip a slip (and with Ctrl a
+    // slide), on an edge where another clip meets it a roll of that cut. An
+    // edge that meets nothing is trimmed as ever. Read once, at the press.
+    const altEdit = evt.altKey;
+    const rollWith = altEdit && edge ? timelineModel.cutNeighbour(layers, layerId, edge) : null;
+    const altMode = (ev) => {
+      if (!altEdit) return null;
+      if (edge) return rollWith ? 'roll' : null;
+      return ev.ctrlKey ? 'slide' : 'slip';
+    };
+    // The two sides of a rolled cut.
+    const rollLeft = rollWith ? (edge === 'end' ? layerId : rollWith.id) : null;
+    const rollRight = rollWith ? (edge === 'end' ? rollWith.id : layerId) : null;
+    const rangeOf = (mode, list) => {
+      if (mode === 'slip') return timelineModel.slipGroupRange(list, layerId);
+      if (mode === 'slide') return timelineModel.slideRange(list, layerId);
+      return timelineModel.rollRange(list, rollLeft, rollRight);
+    };
     // V3.8.2. Shift and click chooses clips one by one and moves nothing.
-    if (evt.shiftKey && !edge) {
+    if (evt.shiftKey && !edge && !altEdit) {
       toggleLayerSelection(layerId);
       return;
     }
     // A press on one of several chosen clips keeps them, so they can all be
     // carried; they are narrowed to it only if the press turns out to be a click.
-    const together = !edge && selectedLayerIds.has(layerId);
+    const together = !edge && !altEdit && selectedLayerIds.has(layerId);
     if (together) {
       if (selectedLayerId !== layerId) {
         selectedLayerId = layerId;
@@ -1087,8 +1217,14 @@ function bindClipDrag(clip, layerId) {
     // the hundred times finer drag; Shift stays the ten times finer one. A
     // still has no speed, and its edge with Ctrl is trimmed finely as before.
     const stretchy = !!edge && !timelineModel.isStill(layer);
-    const modeOf = (ev) => (stretchy && ev.ctrlKey ? 'speed' : 'trim');
-    const factorOf = (ev) => (stretchy && ev.ctrlKey ? (ev.shiftKey ? FINE_SHIFT : 1.0) : modifierFactor(ev));
+    const modeOf = (ev) => altMode(ev) || (stretchy && ev.ctrlKey ? 'speed' : 'trim');
+    // V5.5.2. In a slip, a slide or a roll Ctrl is the slide, so only Shift
+    // makes it finer.
+    const factorOf = (ev) => {
+      if (altMode(ev)) return ev.shiftKey ? FINE_SHIFT : 1.0;
+      return stretchy && ev.ctrlKey ? (ev.shiftKey ? FINE_SHIFT : 1.0) : modifierFactor(ev);
+    };
+    const altEditing = (mode) => mode === 'slip' || mode === 'slide' || mode === 'roll';
 
     const rect = timelineLane.getBoundingClientRect();
     // The fit is frozen for the duration of the drag. A layer dragged
@@ -1112,7 +1248,16 @@ function bindClipDrag(clip, layerId) {
       // never has one: an edge belongs to the row its clip is on.
       target: null,
       ghost: null,
+      // V5.5.2. A slip, slide or roll is counted from the list as it was when
+      // it began (`base`), by `shift` seconds, inside `range`.
+      base: layers,
+      range: null,
+      shift: 0,
     };
+    if (altEditing(drag.mode)) {
+      drag.anchorValue = 0;
+      drag.range = rangeOf(drag.mode, layers);
+    }
     clip.classList.add('layer-clip--dragging');
     document.body.classList.add(edge ? 'layer-trimming' : 'layer-dragging');
     setDragHint(drag.factor);
@@ -1137,6 +1282,20 @@ function bindClipDrag(clip, layerId) {
       showSpeedTip(drag.at.x, drag.at.y, timelineModel.speedOf(now));
     };
     const apply = (value) => {
+      // V5.5.2.
+      if (altEditing(drag.mode)) {
+        drag.shift = Math.min(drag.range.hi, Math.max(drag.range.lo, value));
+        if (drag.mode === 'slip') layers = timelineModel.slipGroup(drag.base, layerId, drag.shift);
+        else if (drag.mode === 'slide') layers = timelineModel.slideGroup(drag.base, layerId, drag.shift);
+        else layers = timelineModel.rollCut(drag.base, rollLeft, rollRight, drag.shift);
+        drawTimeline();
+        updatePlayhead();
+        showEditTip(drag.at.x, drag.at.y, drag.mode, drag.shift);
+        // The picture under the playhead follows, which is how a slip is
+        // aimed. Not while playing, which moves the picture on by itself.
+        if (!compositePlaying) seekComposite(compositeAt);
+        return;
+      }
       layers = edge
         ? (drag.mode === 'speed'
           ? timelineModel.stretchGroup(layers, layerId, edge, value)
@@ -1156,7 +1315,11 @@ function bindClipDrag(clip, layerId) {
           edge ? 0 : Math.abs(ev.clientY - drag.anchorY));
         if (far < TIMELINE_DRAG_SLOP) {
           // Not a drag yet, but Ctrl may have gone down or up meanwhile.
+          const was = drag.mode;
           drag.mode = modeOf(ev);
+          // V5.5.2. A slip that became a slide before it moved is measured
+          // as a slide.
+          if (altEditing(drag.mode) && drag.mode !== was) drag.range = rangeOf(drag.mode, layers);
           drag.factor = factorOf(ev);
           speedDragIds = drag.mode === 'speed'
             ? new Set(timelineModel.groupOf(layers, layerId).map((l) => l.id))
@@ -1176,7 +1339,16 @@ function bindClipDrag(clip, layerId) {
         const now = timelineModel.layerById(layers, layerId);
         if (!now) return;
         drag.anchorX = ev.clientX;
-        drag.anchorValue = valueOf(now);
+        if (altEditing(mode) && mode !== drag.mode) {
+          // V5.5.2. From a slip to a slide or back: the one so far is kept and
+          // the other counted on from it.
+          drag.base = layers;
+          drag.range = rangeOf(mode, layers);
+          drag.anchorValue = 0;
+          drag.shift = 0;
+        } else {
+          drag.anchorValue = altEditing(mode) ? drag.shift : valueOf(now);
+        }
         drag.factor = factor;
         drag.mode = mode;
         setDragHint(factor);
@@ -1186,6 +1358,11 @@ function bindClipDrag(clip, layerId) {
       const delta = ((ev.clientX - drag.anchorX) / tlView.scale) * drag.factor;
       const here = timelineModel.layerById(layers, layerId);
       if (!here) return;
+      // V5.5.2. A slip, a slide or a roll stays on its row and snaps to nothing.
+      if (altEditing(drag.mode)) {
+        apply(drag.anchorValue + delta);
+        return;
+      }
       // The row first, because the neighbours to snap to are the ones on the row
       // the clip will land on.
       if (!edge && !together) drag.target = laneTargetAt(here.type, here.lane, ev.clientY);
@@ -1213,7 +1390,8 @@ function bindClipDrag(clip, layerId) {
       if (ev.key !== 'Control' && ev.key !== 'Shift') return;
       onMove({ clientX: drag.at.x, clientY: drag.at.y, ctrlKey: ev.ctrlKey, shiftKey: ev.shiftKey });
     };
-    if (stretchy) {
+    // V5.5.2. Ctrl turns a slip into a slide while the pointer holds still too.
+    if (stretchy || altEdit) {
       window.addEventListener('keydown', onKey, true);
       window.addEventListener('keyup', onKey, true);
       showSpeed();
@@ -1226,6 +1404,7 @@ function bindClipDrag(clip, layerId) {
       window.removeEventListener('keydown', onKey, true);
       window.removeEventListener('keyup', onKey, true);
       hideSpeedTip();
+      hideEditTip();
       speedDragIds = new Set();
       clip.classList.remove('layer-clip--dragging');
       document.body.classList.remove('layer-dragging', 'layer-trimming');
@@ -1272,6 +1451,39 @@ function bindClipDrag(clip, layerId) {
     };
     beginDrag(clip, evt, onMove, onUp);
   });
+}
+
+// ---- V5.5.2. A slip, slide or roll, shown ----
+
+let editTip = null;
+
+/** How far, signed, in seconds to two places: +0.53, -1.20, 0.00. */
+function signedSeconds(s) {
+  const v = Math.round(s * 100) / 100;
+  return (v > 0 ? '+' : '') + (v === 0 ? '0.00' : v.toFixed(2));
+}
+
+/** The figure beside the pointer while a clip is slipped, slid or rolled. */
+function showEditTip(x, y, mode, shift) {
+  if (!editTip) {
+    editTip = document.createElement('div');
+    editTip.className = 'edit-tip';
+    document.body.appendChild(editTip);
+  }
+  const n = signedSeconds(shift);
+  // One call each, so the checker sees the three literals.
+  if (mode === 'slip') editTip.textContent = t('Slip: {n} s', { n });
+  else if (mode === 'slide') editTip.textContent = t('Slide: {n} s', { n });
+  else editTip.textContent = t('Roll: {n} s', { n });
+  editTip.hidden = false;
+  const w = editTip.offsetWidth;
+  const h = editTip.offsetHeight;
+  editTip.style.left = Math.max(4, Math.min(x + 14, window.innerWidth - w - 4)) + 'px';
+  editTip.style.top = Math.max(4, Math.min(y + 16, window.innerHeight - h - 4)) + 'px';
+}
+
+function hideEditTip() {
+  if (editTip) editTip.hidden = true;
 }
 
 // ---- V4.11. The speed of a clip, shown ----

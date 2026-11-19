@@ -103,6 +103,56 @@ let compositeAt = 0;          // where the playhead is, in timeline seconds
 let compositePlaying = false;
 let compositeRaf = null;
 let compositeLast = 0;
+
+// ---- V5.5.2. Playback speed ----
+//
+// How fast the preview plays, a second of the timeline to this many of the
+// clock: the roadmap's J/K/L shuttle in the form this app can have it, since
+// Chromium cannot play a file backwards and J and L are Join and Loop. The
+// clock runs at it and every element is set going at it times its clip's own
+// speed, the sound with its pitch kept. The preview only: an export is always
+// written at the project's own pace. Not saved; every start is at x1.
+const PLAY_RATES = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4];
+let playRate = 1;
+
+// What a media element will take. Outside it Chromium refuses the rate, so
+// an element that would need more is held to the clock by seeking instead.
+const ELEMENT_RATE_MIN = 0.0625;
+const ELEMENT_RATE_MAX = 16;
+
+/** A layer's element rate: its own speed at the playback speed, as far as an element goes. */
+function elementRate(l) {
+  const r = timelineModel.speedOf(l) * playRate;
+  return Math.min(ELEMENT_RATE_MAX, Math.max(ELEMENT_RATE_MIN, r));
+}
+
+/** The playback speed one step faster (+1) or slower (-1), or back to x1 (0). */
+function stepPlayRate(dir) {
+  const at = PLAY_RATES.indexOf(playRate);
+  const next = !dir ? 1 : PLAY_RATES[Math.min(PLAY_RATES.length - 1, Math.max(0, (at < 0 ? 3 : at) + dir))];
+  setPlayRate(next);
+}
+
+function setPlayRate(rate) {
+  const next = PLAY_RATES.includes(rate) ? rate : 1;
+  if (next === playRate) {
+    updateSpeedReadout();
+    return;
+  }
+  playRate = next;
+  updateSpeedReadout();
+  // Running, everything is placed again at the new rate and the clock held
+  // until it runs, as at Play.
+  if (compositePlaying) seekComposite(compositeAt);
+}
+
+/** "x2" in the timeline's header while the preview does not play at x1. */
+function updateSpeedReadout() {
+  const readout = el('speedReadout');
+  if (!readout) return;
+  readout.hidden = playRate === 1;
+  readout.textContent = t('Playback x{n}', { n: String(playRate) });
+}
 // V4.13. The clock held at a start or a jump until what it is anchored to has
 // begun to run: { el, from, rate, at, since }, or null. See beginStartHold.
 let startHold = null;
@@ -1623,7 +1673,7 @@ function parkDecoders() {
     // Mid-scrub, only the top covering file moves, and above 1080p not even
     // that. Everything else is landed when the pointer rests or comes up.
     if (moving && (!only || l.id !== only.id)) continue;
-    if (!entry.width || !l.enabled || !timelineModel.covers(l, compositeAt)) continue;
+    if (!entry.width || !layerOn(l) || !timelineModel.covers(l, compositeAt)) continue;
     const want = timelineModel.sourceTimeFor(l, compositeAt);
     if (Math.abs(entry.el.currentTime - want) < 0.001) continue;
     entry.el.currentTime = want;
@@ -1650,7 +1700,8 @@ function followDecoders() {
     if (phase === 'on' || phase === 'roll') {
       // V4.11. At the layer's speed, and lost by as much more of the source
       // as goes by in the same time at it.
-      holdToClock(v, timelineModel.sourceTimeFor(l, compositeAt), timelineModel.speedOf(l), COMPOSITE_SLACK, VIDEO_BEND);
+      // V5.5.2. And at the playback speed.
+      holdToClock(v, timelineModel.sourceTimeFor(l, compositeAt), elementRate(l), COMPOSITE_SLACK, VIDEO_BEND);
       if (v.paused) v.play().catch(() => {});
     } else {
       if (!v.paused) v.pause();
@@ -1677,7 +1728,7 @@ function followDecoders() {
  * clip ran up to a quarter second behind from there on (measured).
  */
 function rollPhase(l) {
-  if (!l.enabled) return 'off';
+  if (!layerOn(l)) return 'off';
   if (timelineModel.covers(l, compositeAt)) return 'on';
   const ahead = l.start - compositeAt;
   if (!(ahead > 0) || ahead > PREROLL_S) return 'off';
@@ -1724,7 +1775,7 @@ function holdToClock(el, want, rate, slack, bend) {
   const by = Math.abs(drift) > bend.dead
     ? Math.round(Math.max(-bend.most, Math.min(bend.most, -drift * bend.gain)) * 100) / 100
     : 0;
-  const next = by ? rate * (1 + by) : rate;
+  const next = by ? Math.min(ELEMENT_RATE_MAX, Math.max(ELEMENT_RATE_MIN, rate * (1 + by))) : rate;
   if (el.playbackRate !== next) el.playbackRate = next;
 }
 
@@ -1756,7 +1807,7 @@ function ensureMixBus() {
 // immediate for the same reason: the gain is set here and nothing has to wait
 // for an element to react.
 function playerGain(layer) {
-  if (!layer.enabled) return 0;
+  if (!layerOn(layer)) return 0;
   // V2.2. The fade multiplies the layer's own volume rather than replacing it,
   // so a track set to 40% fades in to 40% and not to 100%. That is also what
   // composer.js writes: afade sits before the volume filter in the chain.
@@ -1853,7 +1904,7 @@ function parkPlayers() {
     const entry = players.get(l.id);
     if (!entry) continue;
     if (!entry.el.paused) entry.el.pause();
-    if (place && l.enabled && timelineModel.covers(l, compositeAt)) {
+    if (place && layerOn(l) && timelineModel.covers(l, compositeAt)) {
       placeElement(entry.el, timelineModel.sourceTimeFor(l, compositeAt));
     }
   }
@@ -1882,7 +1933,8 @@ function followPlayers(force) {
       const want = timelineModel.sourceTimeFor(l, compositeAt);
       // V4.11. At the layer's speed, its pitch kept, which is what the file's
       // atempo does too.
-      const rate = timelineModel.speedOf(l);
+      // V5.5.2. And at the playback speed.
+      const rate = elementRate(l);
       if (!a.preservesPitch) a.preservesPitch = true;
       if (force) {
         placeElement(a, want);
@@ -2364,9 +2416,12 @@ function beginStartHold() {
   startHold = null;
   const pick = (type, pool) => {
     for (const l of layers) {
-      if (l.type !== type || !l.enabled || !timelineModel.covers(l, compositeAt)) continue;
+      if (l.type !== type || !layerOn(l) || !timelineModel.covers(l, compositeAt)) continue;
       const entry = pool.get(l.id);
       if (!entry || entry.still) continue;
+      // The source's seconds to one of the timeline, which is what turns how
+      // far the element has got into how far the clock has (not the element
+      // rate, which the playback speed is in as well).
       return { el: entry.el, rate: timelineModel.speedOf(l) };
     }
     return null;
@@ -2407,7 +2462,8 @@ function compositeTick() {
   }
   const total = compositeTotal();
   const was = compositeAt;
-  compositeAt = Math.min(total, compositeAt + (now - compositeLast) / 1000);
+  // V5.5.2. At the playback speed.
+  compositeAt = Math.min(total, compositeAt + ((now - compositeLast) / 1000) * playRate);
   compositeLast = now;
   // V4.0. Loop selection, before Play selection's stop point below, which is
   // the same out marker: with the loop on, reaching it starts the selection
@@ -2478,7 +2534,7 @@ function compositeDrawDue() {
   // A window's draft is drawn as it is edited, so it counts as moving.
   let moving = popoutPreviews.size > 0;
   for (const l of layers) {
-    if (l.type !== 'video' || !l.enabled || !timelineModel.covers(l, compositeAt)) continue;
+    if (l.type !== 'video' || !layerOn(l) || !timelineModel.covers(l, compositeAt)) continue;
     if (!moving && layerMovesAt(l, compositeAt)) moving = true;
     const entry = decoders.get(l.id);
     if (!entry || entry.still) continue;

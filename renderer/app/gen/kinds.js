@@ -264,6 +264,15 @@ function openClipMenu(evt, track) {
   item(t('Add Keyframe'), keyable, () => addKeyframeAt(layer.id, at - layer.start));
   item(t('Delete Keyframe'), !!layer && !!keyEl, () => deleteKeyframe(layer.id, keyEl.dataset.keyId));
   item(t('Edit Keyframe'), !!layer && !!keyEl, () => editKeyframe(layer.id, keyEl.dataset.keyId));
+  // V5.5.2. How the move comes into the keyframe and leaves it, ticked when
+  // it eases. On a keyframe only, so they are there only when one was clicked.
+  if (layer && keyEl) {
+    const k = timelineModel.keyframesFor(layer).find((o) => o.id === keyEl.dataset.keyId);
+    if (k) {
+      item((k.easeIn ? '✓ ' : '') + t('Ease in'), !busy, () => toggleKeyframeEase(layer.id, k.id, 'easeIn'));
+      item((k.easeOut ? '✓ ' : '') + t('Ease out'), !busy, () => toggleKeyframeEase(layer.id, k.id, 'easeOut'));
+    }
+  }
   item(t('Split here'), !!layer && timelineModel.canSplitAt(layer, at),
     () => splitSelected(at));
   // V4.3. Join the chosen clips; on a joined one, take it apart again.

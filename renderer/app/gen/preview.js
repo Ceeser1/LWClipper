@@ -135,7 +135,7 @@ function paintGenPreview(stage, canvas, id, gen, quick) {
       drawDraft();
       continue;
     }
-    if (!l.enabled || !timelineModel.covers(l, compositeAt)) continue;
+    if (!layerOn(l) || !timelineModel.covers(l, compositeAt)) continue;
     const alpha = timelineModel.layerAlphaAt(l, compositeAt);
     if (alpha <= 0) continue;
     ctx.globalAlpha = alpha;

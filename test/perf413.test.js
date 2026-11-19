@@ -23,6 +23,7 @@ const ROOT = path.join(__dirname, '..');
 const read = (...p) => fs.readFileSync(path.join(ROOT, ...p), 'utf8');
 const COMPOSITOR = read('renderer', 'app', 'compositor.js');
 const COMPOSER = read('src', 'composer.js');
+const CLIPS = read('renderer', 'app', 'clips.js');
 
 /** A function's source, from its name to its closing brace. */
 function fn(source, name) {
@@ -52,7 +53,13 @@ const sound = (id, extra = {}) => timeline.createLayer({
 function playback() {
   const names = ['rollPhase', 'rollsEarly', 'readyPlace', 'placeElement', 'holdToClock', 'beginStartHold', 'startHeld'];
   const body = `
-    ${consts(['COMPOSITE_SLACK', 'PREROLL_S', 'ROLL_S', 'VIDEO_BEND', 'AUDIO_BEND', 'START_HOLD_MS'])}
+    ${consts(['COMPOSITE_SLACK', 'PREROLL_S', 'ROLL_S', 'VIDEO_BEND', 'AUDIO_BEND', 'START_HOLD_MS',
+    'ELEMENT_RATE_MIN', 'ELEMENT_RATE_MAX'])}
+    // V5.5.2. The playback speed, and whether a layer is on, Solo and all.
+    let playRate = 1;
+    let soloSeen = { list: null, types: new Set() };
+    ${fn(CLIPS, 'layerOn')}
+    ${fn(COMPOSITOR, 'elementRate')}
     let layers = [];
     const decoders = new Map();
     const players = new Map();
@@ -203,7 +210,7 @@ test('playback is started held, a jump while running holds it again, and a pause
 test('standing still the sound is put where the playhead is, but not while it is dragged', () => {
   const park = fn(COMPOSITOR, 'parkPlayers');
   assert.match(park, /const place = !scrubMoving\(\);/);
-  assert.match(park, /if \(place && l\.enabled && timelineModel\.covers\(l, compositeAt\)\) \{\s+placeElement\(entry\.el, timelineModel\.sourceTimeFor\(l, compositeAt\)\);/);
+  assert.match(park, /if \(place && layerOn\(l\) && timelineModel\.covers\(l, compositeAt\)\) \{\s+placeElement\(entry\.el, timelineModel\.sourceTimeFor\(l, compositeAt\)\);/);
   // The end of a drag and its rest place it.
   assert.match(fn(COMPOSITOR, 'endScrub'), /landDecoders\(\);[\s\S]*parkPlayers\(\);/);
   assert.match(fn(COMPOSITOR, 'restScrub'), /landDecoders\(\);\s+parkPlayers\(\);/);

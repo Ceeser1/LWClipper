@@ -1344,8 +1344,25 @@ function refreshHints() {
   // more urgent thing to say, and a composite that has stopped changing looks
   // exactly like one that has frozen.
   const behind = catchingUp() ? t('Catching up...') : null;
-  timelineHint.textContent = fine || behind || t(TIMELINE_HINT_IDLE);
+  // V5.5.2. What Alt does on the timeline, while it is held.
+  const alt = altHeld && timelineDriving()
+    ? t('Alt: drag a clip to slip it, with Ctrl as well to slide it, or the edge where two clips meet to roll the cut')
+    : null;
+  timelineHint.textContent = fine || alt || behind || t(TIMELINE_HINT_IDLE);
 }
+
+// V5.5.2. Whether Alt is down, for the hint above.
+let altHeld = false;
+
+function noteAlt(down) {
+  if (altHeld === down) return;
+  altHeld = down;
+  refreshHints();
+}
+
+window.addEventListener('keydown', (evt) => { if (evt.key === 'Alt') noteAlt(true); }, true);
+window.addEventListener('keyup', (evt) => { if (evt.key === 'Alt') noteAlt(false); }, true);
+window.addEventListener('blur', () => noteAlt(false));
 
 slider.onDragStateChange = setDragHint;
 

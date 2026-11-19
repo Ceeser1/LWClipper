@@ -18,6 +18,9 @@
 // loads this as a plain script beside app.js, where a top-level const shares
 // one scope with every other script. evenDown is declared in both files.
 const layerGeometry = (() => {
+  // V5.5.2. The model, for the ease between keyframes (timeline.js keyEase),
+  // which the window has loaded before this file and node requires.
+  const model = typeof timelineModel !== 'undefined' ? timelineModel : require('./timeline');
   // H.264 refuses odd dimensions, and ffmpeg's crop filter masks the low bit off
   // x and y itself on a subsampled format because a chroma plane has no sample to
   // start from there. Rounding here means the numbers we emit are the numbers
@@ -625,12 +628,21 @@ const layerGeometry = (() => {
     };
   }
 
+  /** V5.5.2. A keyframe's ease, only the fields it has. */
+  function easeFields(k) {
+    const out = {};
+    if (k && k.easeIn) out.easeIn = true;
+    if (k && k.easeOut) out.easeOut = true;
+    return out;
+  }
+
   function keyedPlacements(layer, source, project) {
     const list = layer && Array.isArray(layer.keyframes) ? layer.keyframes : [];
     const out = [];
     for (const k of list) {
       const p = placeLayer({ source, crop: k.crop, render: k.render, project, ownSize: !!layer.ownSize });
-      if (p) out.push({ t: k.t, src: p.src, dest: p.dest, rotation: turnOf(k.rotation) });
+      // V5.5.2. With its ease, which the blend after it and the export read.
+      if (p) out.push({ t: k.t, src: p.src, dest: p.dest, rotation: turnOf(k.rotation), ...easeFields(k) });
     }
     return out;
   }
@@ -658,7 +670,8 @@ const layerGeometry = (() => {
     while (keyed[i + 1].t <= at) i += 1;
     const a = keyed[i];
     const b = keyed[i + 1];
-    const u = (at - a.t) / (b.t - a.t);
+    // V5.5.2. Bent by the ease of the two keyframes.
+    const u = model.keyEase(a, b, (at - a.t) / (b.t - a.t));
     // V3.4. The turn goes the short way round, as a text's does.
     return {
       src: blendRect(a.src, b.src, u),
@@ -776,10 +789,23 @@ const layerGeometry = (() => {
    * the list too, moved by the transition where they fall inside one. Null
    * without `steps`, timeline.js transitionSteps, or when it cannot be placed.
    */
+  // V5.5.2. Straight pieces to an eased stretch in shownKeys: at 48, a move
+  // across a 1920 pixel frame is within half a pixel of the curve.
+  const EASE_STEPS = 48;
+
   function shownKeys(layer, source, project, steps) {
     if (!Array.isArray(steps) || !steps.length) return null;
     const base = keyedPlacements(layer, source, project);
-    const times = [...new Set([...steps.map((s) => s.t), ...base.map((k) => k.t)])].sort((a, b) => a - b);
+    // V5.5.2. A stretch between two keyframes that eases is a curve, and this
+    // list is blended in straight lines (here and in the export), so it is
+    // cut into EASE_STEPS of them.
+    const eased = [];
+    for (let i = 0; i + 1 < base.length; i += 1) {
+      if (!model.easeKind(base[i], base[i + 1])) continue;
+      const span = base[i + 1].t - base[i].t;
+      for (let j = 1; j < EASE_STEPS; j += 1) eased.push(Math.round((base[i].t + span * j / EASE_STEPS) * 1e6) / 1e6);
+    }
+    const times = [...new Set([...steps.map((s) => s.t), ...base.map((k) => k.t), ...eased])].sort((a, b) => a - b);
     // How far a half has got at `t`: between the two steps either side of it.
     const progress = (half, t) => {
       const mine = steps.filter((s) => s.half === half);

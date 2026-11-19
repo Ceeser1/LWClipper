@@ -6701,3 +6701,108 @@ body.advanced .media-section {
 .splitter--off::before {
   display: none;
 }
+
+/* ---- V5.5.2. Lock, Solo, ease, slip, roll and slide, playback speed ---- */
+
+/* Solo and Lock beside Enabled: dim when off, lit when on. Solo is yellow,
+   as it is in most editors; Lock a cold blue. */
+.layer-toggle {
+  color: #8a8a94;
+  font-weight: bold;
+}
+
+.layer-toggle--solo[aria-pressed="true"] {
+  background: #c8a42c;
+  border-color: #e0c050;
+  color: #1a1a1e;
+}
+
+.layer-toggle--lock[aria-pressed="true"] {
+  background: #3c5a86;
+  border-color: #6c8cc0;
+  color: #e6eefc;
+}
+
+/* An audio row's volume on a line of its own, so the head is three lines
+   there: the name, Enabled with Solo and Lock, the level. Tighter, so the
+   three fit the row's 72 pixels. */
+.layer-row--audio .layer-head {
+  gap: 2px;
+}
+
+.layer-head__row--level {
+  height: 14px;
+}
+
+/* A locked row: hatched across its track, and nothing on it takes a press,
+   so a press there goes to the track under it and moves the playhead. */
+.layer-row--locked .layer-track {
+  background-image: repeating-linear-gradient(135deg,
+    rgba(120, 150, 200, 0.10) 0 6px, transparent 6px 12px);
+}
+
+.layer-row--locked .layer-track > * {
+  pointer-events: none;
+}
+
+/* A row another row's Solo quietens goes as quiet as a switched-off one. */
+.layer-row--quiet .layer-clip {
+  opacity: 0.35;
+}
+
+.layer-row--quiet .layer-name {
+  color: #77777f;
+}
+
+/* A keyframe that eases: the side of the diamond the move eases on is
+   rounded, the left for easing in, the right for easing out (the square is
+   turned a quarter, so its bottom left corner is the diamond's left). */
+.clip-key--ease-in::before {
+  border-bottom-left-radius: 50%;
+}
+
+.clip-key--ease-out::before {
+  border-top-right-radius: 50%;
+}
+
+/* The figure beside the pointer while a clip is slipped, slid or rolled. */
+.edit-tip {
+  position: fixed;
+  z-index: 60;
+  pointer-events: none;
+  padding: 1px 7px 2px;
+  border-radius: 3px;
+  background: rgba(14, 14, 18, 0.86);
+  color: #f2f4fa;
+  font-size: 11px;
+  font-weight: bold;
+  line-height: 1.4;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.edit-tip[hidden] {
+  display: none;
+}
+
+/* The playback speed in the timeline's header, beside the other readouts,
+   only while it is not x1. */
+.speed-readout {
+  color: #e0c050;
+  font-size: 12px;
+  font-weight: bold;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.speed-readout[hidden] {
+  display: none;
+}
+
+/* The loop readout carries keyframe-readout as well, so this is the bar after
+   either of them. */
+.keyframe-readout:not([hidden]) ~ .speed-readout:not([hidden])::before {
+  content: '|';
+  margin: 0 10px;
+  color: #6e6e78;
+}

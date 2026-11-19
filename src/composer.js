@@ -187,8 +187,20 @@ function holdFrames(frames, fps) {
 // How many moments are still written one `if` inside the other.
 const PIECEWISE_CHAIN = 60;
 
+/** V5.5.2. timeline.js keyEase as an expression of the share `u` (itself an expression). */
+function easeExpr(kind, u) {
+  if (kind === 'out') return '(' + u + '*' + u + ')';
+  if (kind === 'in') return '(' + u + '*(2-' + u + '))';
+  if (kind === 'both') return '(' + u + '*' + u + '*(3-2*' + u + '))';
+  return u;
+}
+
 /** An ffmpeg expression of t: the values at the times, blended between them. */
-function piecewise(times, values) {
+//
+// V5.5.2. `keys`, when given, are the moments themselves, each of which may
+// ease in or out (timeline.js keyEase): a stretch whose ends ease is bent by
+// the very curve the preview bends it by, said in the expression itself.
+function piecewise(times, values, keys = null) {
   const num = (v) => fixed(v);
   // V4.10. One number the whole way is that number: a slide to the right
   // never changes its height, and a transition's dozen moments would
@@ -199,7 +211,8 @@ function piecewise(times, values) {
     const b = values[i + 1];
     if (a === b) return num(a);
     const span = times[i + 1] - times[i];
-    return '(' + num(a) + '+' + num(b - a) + '*clip((t-' + num(times[i]) + ')/' + num(span) + '\\,0\\,1))';
+    const u = 'clip((t-' + num(times[i]) + ')/' + num(span) + '\\,0\\,1)';
+    return '(' + num(a) + '+' + num(b - a) + '*' + easeExpr(keys ? timeline.easeKind(keys[i], keys[i + 1]) : null, u) + ')';
   };
   // Gravity (5.3.0). A fall is a moment for every bend of its path, hundreds
   // of them, and the one `if` inside the other below is refused by the
@@ -740,7 +753,7 @@ function unionOf(rects) {
  */
 function movingLayer(graph, l, n, motion, prev, { input, fps, source, projW, projH, mask, head, from }) {
   const times = motion.map((k) => l.start + k.t);
-  const at = (pick) => piecewise(times, motion.map(pick));
+  const at = (pick) => piecewise(times, motion.map(pick), motion);
   // 1. The fixed cut. Every crop is even and inside the source already, so
   // their union is too.
   const cut = unionOf(motion.map((k) => k.src));
@@ -833,7 +846,7 @@ function movingLayer(graph, l, n, motion, prev, { input, fps, source, projW, pro
  */
 function movingTurnedLayer(graph, l, n, motion, prev, { input, fps, source, mask, head, from }) {
   const times = motion.map((k) => l.start + k.t);
-  const at = (pick) => piecewise(times, motion.map(pick));
+  const at = (pick) => piecewise(times, motion.map(pick), motion);
   const cut = unionOf(motion.map((k) => k.src));
   const whole = source && cut.x === 0 && cut.y === 0
     && cut.width >= evenDown(Number(source.width)) && cut.height >= evenDown(Number(source.height));

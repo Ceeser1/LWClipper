@@ -746,5 +746,20 @@
   "Velocity:": "Velocity:",
   "Rotational Speed:": "Rotational Speed:",
   "Drag:": "Drag:",
-  "Bounciness:": "Bounciness:"
+  "Bounciness:": "Bounciness:",
+  "Unlock the row to delete it": "Unlock the row to delete it",
+  "Solo is on: only the soloed rows of this kind are seen or heard. Click to end it.": "Solo is on: only the soloed rows of this kind are seen or heard. Click to end it.",
+  "Solo: only this row of its kind is seen or heard, in the preview and in the file": "Solo: only this row of its kind is seen or heard, in the preview and in the file",
+  "Locked: nothing on this row can be chosen or changed. Click to unlock.": "Locked: nothing on this row can be chosen or changed. Click to unlock.",
+  "Lock the row: nothing on it can be chosen, moved or changed": "Lock the row: nothing on it can be chosen, moved or changed",
+  "Slip: {n} s": "Slip: {n} s",
+  "Slide: {n} s": "Slide: {n} s",
+  "Roll: {n} s": "Roll: {n} s",
+  "Alt: drag a clip to slip it, with Ctrl as well to slide it, or the edge where two clips meet to roll the cut": "Alt: drag a clip to slip it, with Ctrl as well to slide it, or the edge where two clips meet to roll the cut",
+  "Ease in": "Ease in",
+  "Ease out": "Ease out",
+  "Playback x{n}": "Playback x{n}",
+  "Faster playback": "Faster playback",
+  "Slower playback": "Slower playback",
+  "Normal playback speed": "Normal playback speed"
 }

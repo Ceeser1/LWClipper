@@ -1229,8 +1229,9 @@ const genDraw = (() => {
     while (list[i + 1].t <= at) i += 1;
     const a = list[i];
     const b = list[i + 1];
+    // V5.5.2. Bent by the two keyframes' ease (timeline.js keyEase).
     return blendGen(model.withKeyed(layer.gen, a), model.withKeyed(layer.gen, b),
-      (at - a.t) / (b.t - a.t), width, height);
+      model.keyEase(a, b, (at - a.t) / (b.t - a.t)), width, height);
   }
 
   /**

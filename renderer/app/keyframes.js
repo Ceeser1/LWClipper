@@ -271,6 +271,22 @@ function editKeyframe(layerId, id) {
   else openCrop(layer.id);
 }
 
+/**
+ * V5.5.2. A keyframe's Ease in or Ease out ticked or unticked, one undo step.
+ * Asked first while a window has the clip's keyframes open, since it holds
+ * them all and its Accept would put them back.
+ */
+function toggleKeyframeEase(layerId, keyId, field) {
+  const layer = timelineModel.layerById(layers, layerId);
+  const k = layer && timelineModel.keyframesFor(layer).find((o) => o.id === keyId);
+  if (!k || busy) return false;
+  return confirmPopoutConflict(keyframeWindowConflicts(layerId), () => {
+    setLayers(timelineModel.setKeyframeEase(layers, layerId, keyId, { [field]: !k[field] }));
+    commitHistory();
+    return true;
+  });
+}
+
 /** Del or Backspace with a keyframe chosen. */
 function deleteSelectedKeyframe() {
   if (!selectedKeyframe) return false;
@@ -298,6 +314,9 @@ function buildClipKeyframes(track, layer) {
   for (const k of timelineModel.keyframesFor(layer)) {
     const key = document.createElement('div');
     key.className = 'clip-key';
+    // V5.5.2. A rounded side where it eases.
+    if (k.easeIn) key.classList.add('clip-key--ease-in');
+    if (k.easeOut) key.classList.add('clip-key--ease-out');
     key.dataset.layerId = layer.id;
     key.dataset.keyId = k.id;
     key.title = t('Keyframe, click to go to it, drag to move it, double-click to edit it');

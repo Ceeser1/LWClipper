@@ -6,7 +6,20 @@ The most important changes since 1.5.5, newest first.
 
 ## 5.x: VFX (2026-11-17, 2026-11-18)
 
-Current version: 5.5.1.
+Current version: 5.5.2.
+
+- **Lock and Solo per row (5.5.2).** Each row's head has two small buttons after **Enabled**, which is already the row's mute (an audio row unticked is silent, a video row unticked is not drawn):
+  - **S, Solo**: while any row of a kind is soloed, only the soloed rows of that kind are seen (video) or heard (audio); the other rows of that kind go quiet and dim, and the other kind is left as it is. It counts in the exported file as well, so what is exported is what the preview shows.
+  - **The padlock, Lock**: nothing on a locked row can be chosen, moved, trimmed or changed, its track is hatched, and a click on it only moves the playhead. Nothing is put on it either: a clip dragged over it stays on its own row, and a file, a Project Media tile or a paste let go over it goes onto a new row. A grouped sound on a locked row stays where it is while its picture is moved, Delete and close gap passes a locked row by, and its delete button waits until it is unlocked.
+  - Both are kept in the project. Like Enabled and Volume they are not undo steps, and an undo leaves them as they are. A clip dragged onto a row takes that row's Solo.
+- **Slip, slide and roll (5.5.2).** Three edits held with **Alt**, each one undo step, with the seconds beside the pointer:
+  - **Alt and drag a clip: slip.** The clip stays where it is and as long as it is, and the part of its file it shows moves under it: dragged right, an earlier part. Its sound goes with it, and its keyframes stay on the frames they were set on. The preview follows while the playhead is on the clip.
+  - **Alt and Ctrl and drag a clip: slide.** The clip moves with what it shows, and the clips it meets on either side get longer or shorter to match, so nothing else on the row moves. Ctrl can be pressed or let go during the drag.
+  - **Alt and drag the edge where two clips meet: roll.** The cut between them moves: one gets longer by what the other loses, and the rest of the row stays. An edge with nothing meeting it is trimmed as before.
+  - Each stops where a file has nothing more to show and where a clip would get shorter than a clip may be. Shift makes it ten times finer. While Alt is held the timeline's hint line says what it does.
+- **Ease in and out (5.5.2).** A keyframe's right-click menu on the timeline has **Ease in** and **Ease out**. Ease out makes the move leaving the keyframe start slowly, ease in makes the move arriving at it slow down into it, and both together make it start and end slowly. It bends everything a keyframe moves: position, size, crop, turn, mask, and a text's, shape's or bar's keyed settings. The diamond is rounded on the side that eases. The exported file moves along the very same curve as the preview.
+- **Playback speed (5.5.2).** **Playback > Faster playback** (**Ctrl+Up**) and **Slower playback** (**Ctrl+Down**) play the preview at x0.25, x0.5, x0.75, x1, x1.5, x2, x3 or x4, sound with its pitch kept, and **Normal playback speed** goes back to x1. The timeline's header says the speed while it is not x1. It changes only the preview, never the exported file, and every start is at x1.
+- **For development (5.5.2).** `dev/harness/edit552.js` checks all of the above in the real window, with real mouse drags and clicks, and the eased move against the exported file.
 
 - **Gravity is now Simple Physics (5.5.1).** The VFX is called **Simple Physics**, since it does more than fall. It is still under Physics, and projects that have it open as before.
 - **Gravity as a setting (5.5.1).** Each keyframe of Simple Physics has a **Gravity** slider from -3.00 to 3.00 G, 1.00 G by default, which is how hard it pulled until now. At 2 G the picture falls twice as hard, at 0 G nothing pulls and it floats on as it was thrown, and below 0 it falls up onto the top of the frame and bounces and rolls there by the same rules. A later keyframe can change it, the other way round too. The figure can be typed with a point or a comma.

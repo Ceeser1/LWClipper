@@ -261,7 +261,8 @@ function pasteAt(at, type, lane) {
   if (!timelineDriving() || busy || !layerClipboard) return false;
   const primary = layerClipboard.items.find((l) => l.id === layerClipboard.primary)
     || layerClipboard.items[0];
-  const onto = type === primary.type ? lane : null;
+  // V5.5.2. Not onto a locked row: onto a row of its own instead.
+  const onto = type === primary.type && !timelineModel.laneLocked(layers, type, lane) ? lane : null;
   const had = new Set(layers.map((l) => l.id));
   const next = timelineModel.pasteInto(layers, layerClipboard, at, onto);
   if (next === layers) return false;

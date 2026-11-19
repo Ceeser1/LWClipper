@@ -1513,6 +1513,12 @@ const timelineModel = (() => {
       // createLayer does not name is a field the project open path drops.
       speed,
       enabled: props.enabled === undefined ? true : !!props.enabled,
+      // V5.5.2. The row's Lock and Solo, held on each of its clips the way
+      // Enabled is (setLane writes all of them). Declared here for the reason
+      // groupId is: a field createLayer does not name is a field the project
+      // open path drops. False on everything written before them.
+      locked: props.locked === true,
+      solo: props.solo === true,
       volume: props.volume === undefined ? 1 : props.volume,
       // Set and read by grouping in Step 14. Declared here because the
       // serialisable shape wants settling in one place, not because anything
@@ -2249,11 +2255,109 @@ const timelineModel = (() => {
    */
   function layersAt(layers, t) {
     const hits = [];
+    // V5.5.2. And not quietened by another row's Solo.
+    const solo = soloTypes(layers);
     for (let i = layers.length - 1; i >= 0; i -= 1) {
       const l = layers[i];
-      if (l.enabled && covers(l, t)) hits.push(l);
+      if (l.enabled && covers(l, t) && (!solo.has(l.type) || l.solo)) hits.push(l);
     }
     return hits;
+  }
+
+  // ---- V5.5.2. Lock and Solo ----
+  //
+  // Two buttons on a row's head, beside its Enabled box, which is the row's
+  // mute already (an audio row unticked is silent, a video row unticked is
+  // not drawn). Held on every clip of the row, as Enabled is, so a row moved
+  // up or down, or a row taken out above it, carries them along with nothing
+  // to renumber.
+  //
+  // Solo: while any row of a kind is soloed, only the soloed rows of that
+  // kind are heard (audio) or drawn (video), the other kind as it was. In the
+  // preview and in the file alike, the rule that preview and export agree.
+  //
+  // Lock: nothing on the row can be chosen, moved, trimmed or changed, and
+  // nothing is put on it. What reaches it through another clip is stopped at
+  // its edge: a grouped sound on a locked row stays where it is while its
+  // picture is moved (groupOf and linkedOf leave it out), and a ripple edit
+  // passes it by.
+
+  /** The kinds ('video', 'audio') that have a soloed row just now. */
+  function soloTypes(layers) {
+    const out = new Set();
+    for (const l of layers) if (l.solo) out.add(l.type);
+    return out;
+  }
+
+  /** Whether a layer is shown or heard: switched on, and not quietened by a Solo. */
+  function layerLive(layers, l, solo = soloTypes(layers)) {
+    return !!l && !!l.enabled && (!solo.has(l.type) || !!l.solo);
+  }
+
+  /**
+   * The layers as they are drawn and heard: every one a Solo quietens is
+   * handed on switched off, so whatever reads `enabled` reads the Solo too.
+   * The very list when nothing is soloed.
+   */
+  function withSolo(layers) {
+    const solo = soloTypes(layers);
+    if (!solo.size) return layers;
+    return layers.map((l) => (l.enabled && solo.has(l.type) && !l.solo ? { ...l, enabled: false } : l));
+  }
+
+  /** Whether the row `lane` of `type` is locked: any clip on it says so. */
+  function laneLocked(layers, type, lane) {
+    const at = laneValue(lane);
+    if (at === null) return false;
+    return layers.some((l) => l.type === type && l.lane === at && l.locked);
+  }
+
+  /**
+   * Lock and Solo held true to the rows after an edit: every clip on a row
+   * has the row's. `before` is the list the edit started from.
+   *
+   * A row's own are those of the clips that were on it before (its
+   * residents). One that has none is a row the edit made or emptied and
+   * filled again: its clips keep theirs only when they are the whole of one
+   * row moved there (the arrows, a row taken out above it), and otherwise
+   * start unlocked and unsoloed, so a clip dragged off a soloed row onto an
+   * empty one does not solo it, and a pasted copy does not bring a lock.
+   * Hands back the list it was given when nothing changes.
+   */
+  function settleRowFlags(before, after) {
+    const was = new Map(before.map((l) => [l.id, l]));
+    const fix = new Map();
+    for (const type of ['video', 'audio']) {
+      const lanes = new Map();
+      for (const l of after) {
+        if (l.type !== type || laneValue(l.lane) === null) continue;
+        if (!lanes.has(l.lane)) lanes.set(l.lane, []);
+        lanes.get(l.lane).push(l);
+      }
+      for (const [lane, members] of lanes) {
+        const residents = members.filter((m) => {
+          const b = was.get(m.id);
+          return b && b.type === type && b.lane === lane;
+        });
+        let flags;
+        if (residents.length) {
+          flags = { locked: residents.some((r) => r.locked), solo: residents.some((r) => r.solo) };
+        } else {
+          const from = new Set(members.map((m) => (was.has(m.id) ? was.get(m.id).lane : undefined)));
+          const origin = from.size === 1 ? [...from][0] : undefined;
+          const whole = origin !== undefined && origin !== null
+            && before.every((b) => b.type !== type || b.lane !== origin || members.some((m) => m.id === b.id));
+          flags = whole
+            ? { locked: members.some((m) => m.locked), solo: members.some((m) => m.solo) }
+            : { locked: false, solo: false };
+        }
+        for (const m of members) {
+          if (!!m.locked !== flags.locked || !!m.solo !== flags.solo) fix.set(m.id, flags);
+        }
+      }
+    }
+    if (!fix.size) return after;
+    return after.map((l) => (fix.has(l.id) ? { ...l, ...fix.get(l.id) } : l));
   }
 
   /**
@@ -2345,10 +2449,12 @@ const timelineModel = (() => {
     for (const span of spans.reverse()) {
       const length = round(span.end - span.start);
       wanted = round(wanted + length);
-      const moves = (l) => l.start >= span.end - 1e-6;
+      // V5.5.2. A locked row neither moves nor holds the others back.
+      const moves = (l) => !l.locked && l.start >= span.end - 1e-6;
       let shift = length;
       const rows = new Map();
       for (const l of next) {
+        if (l.locked) continue;
         const key = l.type + ':' + l.lane;
         const row = rows.get(key) || { first: Infinity, held: -Infinity };
         if (moves(l)) row.first = Math.min(row.first, l.start);
@@ -2380,9 +2486,11 @@ const timelineModel = (() => {
     const shift = round(Math.max(0, Number(by) || 0));
     if (!(shift > 0)) return layers;
     const from = round(Number(at) || 0) - 1e-6;
-    if (!layers.some((l) => l.start >= from)) return layers;
+    // V5.5.2. A locked row stays where it is.
+    const moves = (l) => !l.locked && l.start >= from;
+    if (!layers.some(moves)) return layers;
     // A join whose pieces are no longer end to end is no join (normalizeJoins).
-    return normalizeJoins(layers.map((l) => (l.start >= from ? { ...l, start: round(l.start + shift) } : l)));
+    return normalizeJoins(layers.map((l) => (moves(l) ? { ...l, start: round(l.start + shift) } : l)));
   }
 
   function replace(layers, id, fn) {
@@ -3044,8 +3152,11 @@ const timelineModel = (() => {
     const t = Number(v.t);
     if (!Number.isFinite(t)) return null;
     const base = { id: typeof v.id === 'string' && v.id ? v.id : newKeyframeId(), t: round(t) };
+    // V5.5.2. Its ease, written only when it has one, so a keyframe with none
+    // is the keyframe it always was.
+    const ease = easeOf(v);
     if (layer && layer.kind === 'gen') {
-      return { ...base, ...genKeyOf(v, genOf(layer.gen).form) };
+      return { ...base, ...genKeyOf(v, genOf(layer.gen).form), ...ease };
     }
     return {
       ...base,
@@ -3057,6 +3168,7 @@ const timelineModel = (() => {
       // V3.6. The mask's box and soft edge at that moment, or null for the
       // layer's own.
       mask: maskKeyOf(v.mask),
+      ...ease,
     };
   }
 
@@ -3103,7 +3215,11 @@ const timelineModel = (() => {
   function putKeyframe(layers, id, keyframe) {
     return replace(layers, id, (l) => {
       if (!keyframable(l)) return l;
-      const k = keyframeOf(keyframe, l);
+      // V5.5.2. A keyframe written again without a word about its ease (a
+      // window's Accept) keeps the ease it had.
+      const old = keyframe && keyframe.id ? keyframesFor(l).find((o) => o.id === keyframe.id) : null;
+      const keep = old && keyframe.easeIn === undefined && keyframe.easeOut === undefined ? easeOf(old) : {};
+      const k = keyframeOf({ ...keyframe, ...keep }, l);
       if (!k) return l;
       const rest = keyframesFor(l).filter((o) => o.id !== k.id && o.t !== k.t);
       return { ...l, keyframes: keyframesOf([...rest, k], l) };
@@ -3240,7 +3356,8 @@ const timelineModel = (() => {
     while (list[i + 1].t <= at) i += 1;
     const a = maskKeyAt(layer, list[i]);
     const b = maskKeyAt(layer, list[i + 1]);
-    const u = (at - list[i].t) / (list[i + 1].t - list[i].t);
+    // V5.5.2. Bent by the two keyframes' ease.
+    const u = keyEase(list[i], list[i + 1], (at - list[i].t) / (list[i + 1].t - list[i].t));
     const lerp = (p, q) => p + (q - p) * u;
     return put({
       box: { x: lerp(a.box.x, b.box.x), y: lerp(a.box.y, b.box.y), w: lerp(a.box.w, b.box.w), h: lerp(a.box.h, b.box.h) },
@@ -3277,6 +3394,76 @@ const timelineModel = (() => {
       ...l,
       mask: null,
       keyframes: keyframesFor(l).map((k) => (k.mask ? { ...k, mask: null } : k)),
+    }));
+  }
+
+  // ---- V5.5.2. Ease between keyframes ----
+  //
+  // A keyframe may ease in, the move coming to it slowing down into it, and
+  // ease out, the move leaving it starting slowly. Between two keyframes the
+  // share of the way gone, u from 0 to 1 along the time between them, is bent
+  // by the two ends of that stretch, the earlier one's ease out and the later
+  // one's ease in:
+  //
+  //   neither     u                (a straight line, as before)
+  //   out only    u * u            (starts slowly)
+  //   in only     u * (2 - u)      (ends slowly)
+  //   both        u * u * (3 - 2u) (starts and ends slowly)
+  //
+  // Never past either end, so a picture never overshoots a keyframe. The same
+  // four are written into the export's expressions of t (composer.js
+  // piecewise) and bend every blend of the preview (geometry.js placementAt,
+  // maskAt, genDraw.js genAt), so the two cannot differ. Hold and step
+  // keyframes stay declined: two keyframes close together are a jump.
+
+  /** A keyframe's ease fields as it is written: only the true ones. */
+  function easeOf(v) {
+    const out = {};
+    if (v && v.easeIn === true) out.easeIn = true;
+    if (v && v.easeOut === true) out.easeOut = true;
+    return out;
+  }
+
+  /** How the stretch from keyframe `a` to keyframe `b` bends: null, 'out', 'in' or 'both'. */
+  function easeKind(a, b) {
+    const out = !!(a && a.easeOut);
+    const inn = !!(b && b.easeIn);
+    if (out && inn) return 'both';
+    if (out) return 'out';
+    return inn ? 'in' : null;
+  }
+
+  /** The share of the way from `a` to `b` at a share `u` of the time between them. */
+  function keyEase(a, b, u) {
+    const x = Math.min(1, Math.max(0, Number(u) || 0));
+    switch (easeKind(a, b)) {
+      case 'out': return x * x;
+      case 'in': return x * (2 - x);
+      case 'both': return x * x * (3 - 2 * x);
+      default: return x;
+    }
+  }
+
+  /**
+   * A keyframe's ease set: `ease` holds easeIn and easeOut, each true, false
+   * or left out to stay as it is. The list it was given when there is no
+   * such keyframe.
+   */
+  function setKeyframeEase(layers, id, keyId, ease) {
+    const layer = layerById(layers, id);
+    if (!layer || !keyframesFor(layer).some((k) => k.id === keyId)) return layers;
+    return replace(layers, id, (l) => ({
+      ...l,
+      keyframes: keyframesFor(l).map((k) => {
+        if (k.id !== keyId) return k;
+        const out = { ...k };
+        for (const f of ['easeIn', 'easeOut']) {
+          if (!ease || ease[f] === undefined) continue;
+          if (ease[f]) out[f] = true;
+          else delete out[f];
+        }
+        return out;
+      }),
     }));
   }
 
@@ -3427,7 +3614,9 @@ const timelineModel = (() => {
     const layer = layerById(layers, id);
     if (!layer) return [];
     if (!layer.groupId) return [layer];
-    return layers.filter((l) => l.groupId === layer.groupId);
+    // V5.5.2. A partner on a locked row is not carried along: it stays as
+    // it is, which is what the row's Lock is for.
+    return layers.filter((l) => l.groupId === layer.groupId && (l === layer || !l.locked));
   }
 
   /**
@@ -3628,7 +3817,9 @@ const timelineModel = (() => {
     for (const item of order) {
       // A piece of the copied clip's own join goes on the row it went on.
       const samePiece = item !== primary && primary.joinId && item.joinId === primary.joinId;
-      const want = item === primary ? laneValue(lane) : (samePiece ? primaryLane : laneValue(item.lane));
+      const asked = item === primary ? laneValue(lane) : (samePiece ? primaryLane : laneValue(item.lane));
+      // V5.5.2. A locked row takes nothing: a row of its own instead.
+      const want = asked !== null && laneLocked(next, item.type, asked) ? null : asked;
       const onto = want !== null ? want : laneCount(next, item.type);
       if (item === primary) primaryLane = onto;
       next = arrangeLanes([...next, {
@@ -3803,6 +3994,216 @@ const timelineModel = (() => {
     return next;
   }
 
+  // ---- V5.5.2. Slip, roll and slide ----
+  //
+  // Three ways of changing a cut without changing how long what is around it
+  // runs, each held with Alt on the timeline (clips.js bindClipDrag):
+  //
+  //   slip   Alt and drag a clip: the part of its source it shows moves under
+  //          it, while its place and its length stay. Dragged right, the
+  //          picture goes right with the pointer, so an earlier part shows.
+  //   roll   Alt and drag the edge where two clips of a row meet: the cut
+  //          between them moves, the one getting longer by what the other
+  //          loses, and nothing else on the row moves.
+  //   slide  Alt and Ctrl and drag a clip: it moves, and the clips it meets
+  //          on either side give and take the length, so the row around it
+  //          stays where it is.
+  //
+  // Each takes the clips' groups along (a picture's own sound), and leaves
+  // anything on a locked row as it is, as a move does (groupOf). A shift is
+  // in timeline seconds and counted from the list handed in, so a drag hands
+  // in the list as it was when the drag began and the whole way so far.
+  //
+  // Keyframes and VFX keyframes stay with the source, the way a trimmed
+  // start leaves them (trimLayer): on a slipped clip they move with the
+  // picture, on a slid clip with the clip, and on the clip whose start a roll
+  // or a slide moves they hold where they are on the timeline.
+
+  // Two clips of a row meet when one ends this close to where the other
+  // starts. A frame step can leave a little more than JOIN_EPS between them.
+  const CUT_EPS = 0.001;
+
+  /** How far a layer's picture can be slipped, as timeline seconds: { lo, hi }. */
+  function slipRange(layer) {
+    if (!layer || isStill(layer)) return { lo: 0, hi: 0 };
+    const speed = speedOf(layer);
+    // Right by s shows the source from sourceIn - s * speed: not before 0,
+    // and with the clip's length of it still to come.
+    const hi = layer.sourceIn / speed;
+    const lo = (layer.sourceIn + layer.duration * speed - layer.sourceDuration) / speed;
+    return { lo: round(Math.min(0, lo)), hi: round(Math.max(0, hi)) };
+  }
+
+  function slipped(l, shift) {
+    if (isStill(l) || !shift) return l;
+    const speed = speedOf(l);
+    const most = Math.max(0, l.sourceDuration - l.duration * speed);
+    return {
+      ...l,
+      sourceIn: round(clamp(l.sourceIn - shift * speed, 0, most)),
+      keyframes: shiftKeyframes(l, shift),
+      ...shiftVfxKeys(l, shift),
+    };
+  }
+
+  /** Everything a slip of `id` moves the source of: its join and groups, stills left out. */
+  function slipMembers(layers, id) {
+    return linkedOf(layers, id).filter((m) => !isStill(m));
+  }
+
+  /** The shift a slip of `id` can take, every member's range intersected. */
+  function slipGroupRange(layers, id) {
+    const members = slipMembers(layers, id);
+    if (!members.length) return { lo: 0, hi: 0 };
+    let lo = -Infinity;
+    let hi = Infinity;
+    for (const m of members) {
+      const r = slipRange(m);
+      lo = Math.max(lo, r.lo);
+      hi = Math.min(hi, r.hi);
+    }
+    return lo > hi ? { lo: 0, hi: 0 } : { lo, hi };
+  }
+
+  /**
+   * The source under `id` and its group slipped by `shift` timeline seconds,
+   * as far as every one of them has source for. Hands back the list it was
+   * given when nothing moves (a still has no source to slip).
+   */
+  function slipGroup(layers, id, shift) {
+    const layer = layerById(layers, id);
+    if (!layer || isStill(layer) || layer.locked) return layers;
+    const r = slipGroupRange(layers, id);
+    const s = round(clamp(Number(shift) || 0, r.lo, r.hi));
+    if (!s) return layers;
+    const ids = new Set(slipMembers(layers, id).map((m) => m.id));
+    return layers.map((l) => (ids.has(l.id) ? slipped(l, s) : l));
+  }
+
+  /**
+   * The clip on the same row that `id` meets at its `edge`: the one starting
+   * where it ends ('end'), or ending where it starts ('start'). Never a piece
+   * of its own join. Null when nothing meets it there.
+   */
+  function cutNeighbour(layers, id, edge) {
+    const layer = layerById(layers, id);
+    if (!layer || laneValue(layer.lane) === null) return null;
+    const at = edge === 'end' ? endOf(layer) : layer.start;
+    let best = null;
+    let gap = Infinity;
+    for (const o of layers) {
+      if (o.id === layer.id || o.type !== layer.type || o.lane !== layer.lane) continue;
+      if (layer.joinId && o.joinId === layer.joinId) continue;
+      const d = Math.abs((edge === 'end' ? o.start : endOf(o)) - at);
+      if (d <= CUT_EPS && d < gap) {
+        best = o;
+        gap = d;
+      }
+    }
+    return best;
+  }
+
+  // The two sides of a cut, each with its own group, nothing in both.
+  function cutSides(layers, leftId, rightId) {
+    const left = groupOf(layers, leftId);
+    const leftIds = new Set(left.map((m) => m.id));
+    const right = groupOf(layers, rightId).filter((m) => !leftIds.has(m.id));
+    return { left, right };
+  }
+
+  /** The shift a roll of the cut between `leftId` and `rightId` can take. */
+  function rollRange(layers, leftId, rightId) {
+    const { left, right } = cutSides(layers, leftId, rightId);
+    let lo = -Infinity;
+    let hi = Infinity;
+    for (const m of left) {
+      const r = trimRange(m, 'end');
+      lo = Math.max(lo, r.lo);
+      hi = Math.min(hi, r.hi);
+    }
+    for (const m of right) {
+      const r = trimRange(m, 'start');
+      lo = Math.max(lo, r.lo);
+      hi = Math.min(hi, r.hi);
+    }
+    return lo > hi ? { lo: 0, hi: 0 } : { lo, hi };
+  }
+
+  /**
+   * The cut between `leftId` (ending there) and `rightId` (starting there)
+   * moved by `shift`: the left clip's end and the right clip's start go
+   * together, with their groups, as far as both have source for and both
+   * keep a clip's least length. The list it was given when nothing moves.
+   */
+  function rollCut(layers, leftId, rightId, shift) {
+    const a = layerById(layers, leftId);
+    const b = layerById(layers, rightId);
+    if (!a || !b || a.locked || b.locked) return layers;
+    const r = rollRange(layers, leftId, rightId);
+    const s = round(clamp(Number(shift) || 0, r.lo, r.hi));
+    if (!s) return layers;
+    const { left, right } = cutSides(layers, leftId, rightId);
+    let next = layers;
+    for (const m of left) next = trimLayer(next, m.id, 'end', round(endOf(m) + s));
+    for (const m of right) next = trimLayer(next, m.id, 'start', round(m.start + s));
+    return next;
+  }
+
+  /**
+   * What a slide of `id` touches: the clips that move (its join and groups)
+   * and the groups of the clip before and the clip after it on its row.
+   */
+  function slideParts(layers, id) {
+    const moving = linkedOf(layers, id);
+    const ids = new Set(moving.map((m) => m.id));
+    const chain = joinOf(layers, id);
+    const before = chain.length ? cutNeighbour(layers, chain[0].id, 'start') : null;
+    const after = chain.length ? cutNeighbour(layers, chain[chain.length - 1].id, 'end') : null;
+    const left = before ? groupOf(layers, before.id).filter((m) => !ids.has(m.id)) : [];
+    const leftIds = new Set(left.map((m) => m.id));
+    const right = after ? groupOf(layers, after.id).filter((m) => !ids.has(m.id) && !leftIds.has(m.id)) : [];
+    return { moving, left, right };
+  }
+
+  /** The shift a slide of `id` can take: { lo, hi }. */
+  function slideRange(layers, id) {
+    const { moving, left, right } = slideParts(layers, id);
+    if (!moving.length) return { lo: 0, hi: 0 };
+    let lo = -Math.min(...moving.map((m) => m.start));
+    let hi = Infinity;
+    for (const m of left) {
+      const r = trimRange(m, 'end');
+      lo = Math.max(lo, r.lo);
+      hi = Math.min(hi, r.hi);
+    }
+    for (const m of right) {
+      const r = trimRange(m, 'start');
+      lo = Math.max(lo, r.lo);
+      hi = Math.min(hi, r.hi);
+    }
+    return lo > hi ? { lo: 0, hi: 0 } : { lo, hi };
+  }
+
+  /**
+   * `id` with its group moved by `shift`, the clip ending where it starts
+   * giving or taking that much at its end, and the clip starting where it
+   * ends at its start. A side with nothing meeting it is free, as a move is.
+   * The list it was given when nothing moves.
+   */
+  function slideGroup(layers, id, shift) {
+    const layer = layerById(layers, id);
+    if (!layer || layer.locked) return layers;
+    const r = slideRange(layers, id);
+    const s = round(clamp(Number(shift) || 0, r.lo, r.hi));
+    if (!s) return layers;
+    const { moving, left, right } = slideParts(layers, id);
+    let next = layers;
+    for (const m of left) next = trimLayer(next, m.id, 'end', round(endOf(m) + s));
+    for (const m of right) next = trimLayer(next, m.id, 'start', round(m.start + s));
+    const ids = new Set(moving.map((m) => m.id));
+    return next.map((l) => (ids.has(l.id) ? { ...l, start: round(Math.max(0, l.start + s)) } : l));
+  }
+
   // ---- V4.3. Joining ----
   //
   // The user: "Join selected tracks - J (This will combine end of track N with
@@ -3864,7 +4265,8 @@ const timelineModel = (() => {
       if (l.joinId) near.push(...layers.filter((o) => o.joinId === l.joinId));
       if (l.groupId) near.push(...layers.filter((o) => o.groupId === l.groupId));
       for (const o of near) {
-        if (seen.has(o.id)) continue;
+        // V5.5.2. Nothing on a locked row comes along (groupOf's rule).
+        if (seen.has(o.id) || o.locked) continue;
         seen.add(o.id);
         queue.push(o);
       }
@@ -4087,6 +4489,24 @@ const timelineModel = (() => {
     layerById,
     indexOfLayer,
     layersAt,
+    // V5.5.2.
+    soloTypes,
+    layerLive,
+    withSolo,
+    laneLocked,
+    settleRowFlags,
+    CUT_EPS,
+    slipGroup,
+    slipRange,
+    slipGroupRange,
+    cutNeighbour,
+    rollRange,
+    rollCut,
+    slideRange,
+    slideGroup,
+    keyEase,
+    easeKind,
+    setKeyframeEase,
     totalDuration,
     TAIL_REACH,
     trimCeiling,

@@ -746,5 +746,20 @@
   "Velocity:": "Geschwindigkeit:",
   "Rotational Speed:": "Drehgeschwindigkeit:",
   "Drag:": "Widerstand:",
-  "Bounciness:": "Sprungkraft:"
+  "Bounciness:": "Sprungkraft:",
+  "Unlock the row to delete it": "Zum Löschen die Spur entsperren",
+  "Solo is on: only the soloed rows of this kind are seen or heard. Click to end it.": "Solo ist an: nur die Solo-Spuren dieser Art sind zu sehen oder zu hören. Klicken zum Beenden.",
+  "Solo: only this row of its kind is seen or heard, in the preview and in the file": "Solo: nur diese Spur ihrer Art ist zu sehen oder zu hören, in der Vorschau und in der Datei",
+  "Locked: nothing on this row can be chosen or changed. Click to unlock.": "Gesperrt: auf dieser Spur kann nichts gewählt oder geändert werden. Klicken zum Entsperren.",
+  "Lock the row: nothing on it can be chosen, moved or changed": "Spur sperren: nichts auf ihr kann gewählt, verschoben oder geändert werden",
+  "Slip: {n} s": "Inhalt verschieben: {n} s",
+  "Slide: {n} s": "Clip verschieben: {n} s",
+  "Roll: {n} s": "Schnitt verschieben: {n} s",
+  "Alt: drag a clip to slip it, with Ctrl as well to slide it, or the edge where two clips meet to roll the cut": "Alt: einen Clip ziehen verschiebt seinen Inhalt, mit Strg dazu den Clip zwischen seinen Nachbarn, die Kante zwischen zwei Clips verschiebt den Schnitt",
+  "Ease in": "Sanft hinein",
+  "Ease out": "Sanft heraus",
+  "Playback x{n}": "Wiedergabe x{n}",
+  "Faster playback": "Schnellere Wiedergabe",
+  "Slower playback": "Langsamere Wiedergabe",
+  "Normal playback speed": "Normale Wiedergabegeschwindigkeit"
 }

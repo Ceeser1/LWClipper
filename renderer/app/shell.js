@@ -723,7 +723,7 @@ function outputIsAudio() {
     // put anything at all.
     if (!layers.length) return false;
     // V3. A generated layer is a picture with no file behind it.
-    return !layers.some((l) => l.type === 'video' && l.enabled && (l.src || l.kind === 'gen'));
+    return !layers.some((l) => l.type === 'video' && layerOn(l) && (l.src || l.kind === 'gen'));
   }
   if (!media) return false;
   return !!media.isAudio || !videoEnabledToggle.checked;

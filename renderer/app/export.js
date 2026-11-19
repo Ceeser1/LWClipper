@@ -641,7 +641,9 @@ async function exportVfx(l, frame) {
 async function exportLayers() {
   const frame = projectFrame();
   const out = [];
-  for (const l of layers) {
+  // V5.5.2. With the rows' Solo in: a row it quietens goes to the file
+  // switched off, as the preview leaves it out.
+  for (const l of timelineModel.withSolo(layers)) {
     // V3.6. A masked picture goes with its mask.
     // V4.7. And one with VFX with where each acts.
     // V4.10. And one a transition cuts with the matte of that, which goes

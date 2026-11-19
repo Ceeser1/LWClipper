@@ -252,7 +252,8 @@ test('Ctrl+A chooses every clip, Shift and a dragged range choose', () => {
   const actions = read('renderer', 'app', 'actions.js');
   assert.ok(/keys: \['Ctrl\+A'\], guard: 'letters', take: true/.test(actions));
   assert.ok(edit.includes('function selectAllClips() {\n  window.getSelection().removeAllRanges();'));
-  assert.ok(clips.includes('if (evt.shiftKey && !edge)') && clips.includes('toggleLayerSelection(layerId)'));
+  // V5.5.2. Not with Alt held, which slips the clip instead.
+  assert.ok(clips.includes('if (evt.shiftKey && !edge && !altEdit)') && clips.includes('toggleLayerSelection(layerId)'));
   assert.ok(tl.includes('chooseInRange(') && tl.includes('timeline-marquee'));
   assert.ok(tl.includes('snapMarkerToTrackEdge(value, isStart)'), 'the markers snap to track edges');
 });

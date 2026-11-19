@@ -170,6 +170,20 @@ const ACTIONS = [
     checked: () => loopSelection,
     enabled: () => true, run: () => { loopSelection = !loopSelection; updateLoopReadout(); },
   },
+  {
+    // V5.5.2. How fast the preview plays (compositor.js PLAY_RATES).
+    id: 'play.faster', menu: 'playback', label: () => t('Faster playback'), keys: ['Ctrl+Up'], guard: 'arrows', stop: true,
+    enabled: () => timelineDriving() && playRate < PLAY_RATES[PLAY_RATES.length - 1], run: () => stepPlayRate(1),
+  },
+  {
+    id: 'play.slower', menu: 'playback', label: () => t('Slower playback'), keys: ['Ctrl+Down'], guard: 'arrows', stop: true,
+    enabled: () => timelineDriving() && playRate > PLAY_RATES[0], run: () => stepPlayRate(-1),
+  },
+  {
+    id: 'play.normal', menu: 'playback', label: () => t('Normal playback speed'), keys: [],
+    checked: () => playRate === 1,
+    enabled: () => timelineDriving(), run: () => stepPlayRate(0),
+  },
   { divider: 'playback' },
   {
     id: 'play.toStart', menu: 'playback', label: () => t('To playback start'), keys: ['Shift+Left'], guard: 'arrows', stop: true,
