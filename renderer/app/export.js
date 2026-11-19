@@ -294,7 +294,10 @@ async function exportMask(l, frame) {
   const source = layerSource(l);
   if (!source) return { ok: true, file: null };
   const steps = timelineModel.transitionSteps(l);
-  const shown = steps.length ? layerGeometry.shownKeys(l, source, frame, steps) : null;
+  // Gravity (5.3.0). A picture that falls has the list of its fall, as the
+  // encoder does.
+  const shown = layerGravity.keysOf(l, source, frame)
+    || (steps.length ? layerGeometry.shownKeys(l, source, frame, steps) : null);
   const motion = shown || layerGeometry.motionOf(l, source, frame);
   const still = layerGeometry.placementAt(l, 0, source, frame);
   const dests = motion ? motion.map((k) => k.dest) : (still ? [still.dest] : []);
@@ -370,7 +373,7 @@ async function exportMask(l, frame) {
     return { ok: true, file: { src: saved.path } };
   }
   const key = JSON.stringify(['maskframes', l.mask, timelineModel.keyframesFor(l).map((k) => [k.t, k.mask]),
-    l.duration, fps, w, h, runs, pictureSize, transitionKey(l)]);
+    l.duration, fps, w, h, runs, pictureSize, transitionKey(l), timelineModel.gravityOf(l)]);
   const wrote = await writeFrameRuns(key, runs, async (i) => {
     draw(i / fps);
     return canvasPng(canvas);
@@ -482,6 +485,8 @@ const VFX_EXPORT = {
   lumakey: { ...OPS_EXPORT },
   strobe: { ...OPS_EXPORT },
   echo: { ...OPS_EXPORT },
+  // Gravity (5.3.0). Never on for a picture's pixels, so never asked.
+  gravity: { ...OPS_EXPORT },
 };
 
 /**

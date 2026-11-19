@@ -700,5 +700,15 @@
   "What moves leaves fading copies of itself behind. Works on the track's picture before its other VFX, one Echo to a track": "Was sich bewegt, zieht verblassende Kopien hinter sich her. Wirkt auf das Bild der Spur vor ihren anderen VFX, ein Echo je Spur",
   "Echoes:": "Echos:",
   "Frames Apart:": "Abstand in Bildern:",
-  "Echo Strength:": "Echostärke:"
+  "Echo Strength:": "Echostärke:",
+  "Physics": "Physik",
+  "Gravity": "Schwerkraft",
+  "Lets the picture fall to the bottom of the frame, bounce, turn and roll. It starts at its first keyframe: double-click the keyframe bar where the picture should let go. Seen in the main preview after Apply, one Gravity to a track": "Lässt das Bild auf den unteren Rand des Ausgabebilds fallen, springen, sich drehen und rollen. Es beginnt am ersten Keyframe: Doppelklick auf die Keyframe-Leiste, wo das Bild losgelassen werden soll. Zu sehen in der Hauptvorschau nach Übernehmen, eine Schwerkraft pro Spur",
+  "Collision Shape:": "Kollisionsform:",
+  "Rectangle": "Rechteck",
+  "Edge Collision": "Randkollision",
+  "Velocity:": "Geschwindigkeit:",
+  "Rotational Speed:": "Drehgeschwindigkeit:",
+  "Drag:": "Widerstand:",
+  "Bounciness:": "Sprungkraft:"
 }

@@ -29,6 +29,7 @@ const {
 const geometry = require('./geometry');
 const timeline = require('./timeline');
 const vfxOps = require('./vfxOps');
+const gravity = require('./gravity');
 const toolPaths = require('./toolPaths');
 const exportWindow = require('./exportWindow');
 const progress = require('./progress');
@@ -172,6 +173,9 @@ function holdFrames(frames, fps) {
   return parts.length ? parts.join(',') : null;
 }
 
+// How many moments are still written one `if` inside the other.
+const PIECEWISE_CHAIN = 60;
+
 /** An ffmpeg expression of t: the values at the times, blended between them. */
 function piecewise(times, values) {
   const num = (v) => fixed(v);
@@ -186,6 +190,20 @@ function piecewise(times, values) {
     const span = times[i + 1] - times[i];
     return '(' + num(a) + '+' + num(b - a) + '*clip((t-' + num(times[i]) + ')/' + num(span) + '\\,0\\,1))';
   };
+  // Gravity (5.3.0). A fall is a moment for every bend of its path, hundreds
+  // of them, and the one `if` inside the other below is refused by the
+  // encoder somewhere between 90 and 120 deep (measured, 2026-11-19). A long
+  // list is asked by halves instead, which is never deeper than a dozen and
+  // picks the very same piece for every t: 3601 moments rendered as fast as
+  // two. A short list keeps the form it always had, to the letter.
+  if (values.length > PIECEWISE_CHAIN) {
+    const half = (lo, hi) => {
+      if (hi - lo <= 1) return seg(lo);
+      const mid = (lo + hi) >> 1;
+      return 'if(lt(t\\,' + num(times[mid]) + ')\\,' + half(lo, mid) + '\\,' + half(mid, hi) + ')';
+    };
+    return '(' + half(0, values.length - 1) + ')';
+  }
   let expr = seg(values.length - 2);
   for (let i = values.length - 3; i >= 0; i -= 1) {
     expr = 'if(lt(t\\,' + num(times[i + 1]) + ')\\,' + seg(i) + '\\,' + expr + ')';
@@ -457,6 +475,9 @@ const VFX_FILTERS = {
   strobe: { ...RGB_OPS },
   // V5.5.1. On the planes the picture comes in, where it costs least.
   echo: { ...OWN_OPS },
+  // Gravity (5.3.0). It has no filter: it is where the picture is laid
+  // (gravity.js keysOf), and is never handed over as a VFX's file.
+  gravity: { ...OWN_OPS },
 };
 
 /**
@@ -808,7 +829,18 @@ function movingTurnedLayer(graph, l, n, motion, prev, { input, fps, source, mask
   // A multiple of four, so its half is even: overlay rounds an odd position on
   // a subsampled picture to an even one, which measured two pixels high.
   const side = Math.ceil(Math.max(...motion.map((k) => Math.hypot(k.dest.width, k.dest.height))) / 4) * 4 + 4;
-  const half = side / 2;
+  // Gravity (5.3.0) found: an even half is not enough. The picture is laid
+  // in the square at the half less half the picture, and where half the
+  // picture's width or height is odd that is an odd place again, cut down to
+  // an even one, and so is the place the square then goes on the frame. A
+  // picture 160 by 90 came to rest two pixels above where the preview had
+  // it, and exactly on its place sideways (measured, 2026-11-19). So each
+  // way the square is a pixel wider either side when that makes its half and
+  // the picture's of one kind, by the size the picture ends with.
+  const ends = motion[motion.length - 1].dest;
+  const odd = (v) => Math.abs(Math.round(v)) % 2 === 1;
+  const halfX = side / 2 + (odd(side / 2 - ends.width / 2) ? 1 : 0);
+  const halfY = side / 2 + (odd(side / 2 - ends.height / 2) ? 1 : 0);
 
   const sx = at((k) => k.src.x);
   const sy = at((k) => k.src.y);
@@ -835,20 +867,20 @@ function movingTurnedLayer(graph, l, n, motion, prev, { input, fps, source, mask
     "scale=w='max(2\\,round(" + cut.width + '*' + kx + "))':h='max(2\\,round(" + cut.height + '*' + ky
       + "))':eval=frame",
   ]) + '[' + tag('mv') + ']');
-  graph.push(canvas('black@0', side, side, 'yuva420p') + '[' + tag('mc') + ']');
-  graph.push('[' + tag('mc') + '][' + tag('mv') + "]overlay=x='" + half + '-' + dw + '/2-(' + sx + '-' + cut.x + ')*' + kx
-    + "':y='" + half + '-' + dh + '/2-(' + sy + '-' + cut.y + ')*' + ky
+  graph.push(canvas('black@0', 2 * halfX, 2 * halfY, 'yuva420p') + '[' + tag('mc') + ']');
+  graph.push('[' + tag('mc') + '][' + tag('mv') + "]overlay=x='" + halfX + '-' + dw + '/2-(' + sx + '-' + cut.x + ')*' + kx
+    + "':y='" + halfY + '-' + dh + '/2-(' + sy + '-' + cut.y + ')*' + ky
     + "':eval=frame:eof_action=pass:format=yuv420[" + tag('mp') + ']');
   graph.push((mask === undefined ? canvas('white', 16, 16, 'gray') : maskSource(l, mask, fps))
     + ",scale=w='max(1\\,round(" + dw + "))':h='max(1\\,round(" + dh + "))':eval=frame[" + tag('mw') + ']');
-  graph.push(canvas('black', side, side, 'gray') + '[' + tag('md') + ']');
-  graph.push('[' + tag('md') + '][' + tag('mw') + "]overlay=x='round(" + half + '-' + dw + "/2)':y='round(" + half + '-' + dh
+  graph.push(canvas('black', 2 * halfX, 2 * halfY, 'gray') + '[' + tag('md') + ']');
+  graph.push('[' + tag('md') + '][' + tag('mw') + "]overlay=x='round(" + halfX + '-' + dw + "/2)':y='round(" + halfY + '-' + dh
     + "/2)':eval=frame:eof_action=pass[" + tag('mm') + ']');
 
   const fades = timeline.alphaFadesOf(l);
   const alpha = timeline.alphaOf(l);
   const label = 'v' + n;
-  const turnFilter = "rotate=a='" + turn + "':ow=" + side + ':oh=' + side + ':c=none';
+  const turnFilter = "rotate=a='" + turn + "':ow=" + 2 * halfX + ':oh=' + 2 * halfY + ':c=none';
   const merge = keepOwnAlpha(graph, l, tag);
   if (hasCurvedFade(l)) {
     graph.push(merge + 'alphamerge[' + tag('mf') + ']');
@@ -866,8 +898,8 @@ function movingTurnedLayer(graph, l, n, motion, prev, { input, fps, source, mask
     ]) + '[' + label + ']');
   }
   const next = 'bg' + n;
-  graph.push('[' + prev + '][' + label + "]overlay=x='round(" + dx + '+' + dw + '/2-' + half + ")':y='round("
-    + dy + '+' + dh + '/2-' + half + ")':eval=frame:eof_action=pass:"
+  graph.push('[' + prev + '][' + label + "]overlay=x='round(" + dx + '+' + dw + '/2-' + halfX + ")':y='round("
+    + dy + '+' + dh + '/2-' + halfY + ")':eval=frame:eof_action=pass:"
     + enableExpr(from === undefined ? l.start : from, timeline.endOf(l))
     + '[' + next + ']');
   return next;
@@ -913,6 +945,8 @@ function windowSkip(l, win, sources, project) {
   if (l.maskFile && l.maskFile.frames) return null;
   if (hasCurvedFade(l)) return null;
   if (l.kind !== 'gen' && timeline.transitionSteps(l).length) return null;
+  // Gravity (5.3.0). A fall is counted from its keyframe.
+  if (timeline.gravityOf(l)) return null;
   if (geometry.motionOf(l, sources[l.src] || null, project)) return null;
   if (timeline.isStill(l)) return { k: skip.k, still: true };
   if (timeline.speedOf(l) !== 1 || !(skip.ss > l.sourceIn) || typeof skip.raw !== 'string') return null;
@@ -1086,8 +1120,11 @@ function buildComposeArgs({
       // V4.10. Or through a slide or a zoom: the same kind of list, from the
       // same sum the preview draws by. A generated layer's transition is in
       // the frames the window drew, so it is not placed again here.
+      // Gravity (5.3.0). Or as it falls: the same kind of list again, with
+      // whatever moved the picture before the fall at its head.
       const steps = l.kind === 'gen' ? [] : timeline.transitionSteps(l);
-      const motion = (steps.length && geometry.shownKeys(l, sources[l.src] || null, project, steps))
+      const motion = gravity.keysOf(l, sources[l.src] || null, project)
+        || (steps.length && geometry.shownKeys(l, sources[l.src] || null, project, steps))
         || geometry.motionOf(l, sources[l.src] || null, project);
       // V4.7. What the layer's chain starts from, its VFX laid on.
       const from = vfxHead(graph, l, n, indexOf.get(l.id), fps, vfxInputsOf.get(l.id), sources[l.src] || null, vfxGraphs);
@@ -1509,4 +1546,5 @@ async function render({
 
 module.exports = {
   buildComposeArgs, outputSpan, enableExpr, sourceSizes, render, spillGraph, GRAPH_ARG_MAX, tempoFilters, windowSkip,
+  piecewise, PIECEWISE_CHAIN,
 };

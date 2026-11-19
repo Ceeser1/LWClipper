@@ -59,7 +59,7 @@ function maskCtx() {
 test('every kind says where it acts, and the kinds are sorted as the user was shown', () => {
   assert.deepEqual(by('any'), ['obscure', 'pixelate']);
   assert.deepEqual(by('whole').sort(),
-    ['bars', 'border', 'chromakey', 'cornerpin', 'crt', 'echo', 'flip', 'lens', 'lumakey', 'offset', 'perspective', 'polar', 'rotate', 'shake', 'strobe', 'tile']);
+    ['bars', 'border', 'chromakey', 'cornerpin', 'crt', 'echo', 'flip', 'gravity', 'lens', 'lumakey', 'offset', 'perspective', 'polar', 'rotate', 'shake', 'strobe', 'tile']);
   assert.deepEqual(by('point').sort(), ['bulge', 'kaleido', 'swirl']);
   assert.deepEqual(by('two').sort(), ['brightness', 'clarity', 'curves', 'dirblur', 'exposure', 'haze', 'huesat', 'levels', 'rgb',
     'ripple', 'shadows', 'sharpen', 'temperature', 'tiltshift', 'vibrance', 'vignette', 'zoom']);
@@ -76,7 +76,8 @@ test('a kind for the whole picture has no area, no shape, no Invert and no soft 
     const all = ids([...def.statics, ...def.keyed]);
     for (const id of ['shape', 'invert', 'soft']) assert.equal(all.includes(id), false, kind + '.' + id);
     // V5.4. All but a key, which is on the whole clip long.
-    assert.equal(all.includes('mix'), !T.vfxKind(kind).alpha || kind === 'cornerpin', kind + ': Mix is how keyframes switch it off and on');
+    // Gravity (5.3.0). Nor one that moves the picture, which starts at a keyframe.
+    assert.equal(all.includes('mix'), !T.vfxKind(kind).moves && (!T.vfxKind(kind).alpha || kind === 'cornerpin'), kind + ': Mix is how keyframes switch it off and on');
     assert.equal(T.vfxKeyedIds(kind).includes('box'), false, kind);
     assert.equal(T.vfxKeyedIds(kind).includes('rotation'), false, kind);
     // One kept with an area from before has none any more.

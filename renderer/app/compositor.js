@@ -999,7 +999,10 @@ function shownKeysFor(layer, source, frame) {
   const kept = shownKeysCache.get(layer);
   if (kept && kept.key === key) return kept.keys;
   const steps = timelineModel.transitionSteps(layer);
-  const keys = steps.length ? layerGeometry.shownKeys(layer, source, frame, steps) : null;
+  // Gravity (5.3.0). A picture that falls is placed by its fall, worked out
+  // once for the layer as it is and kept like a transition's list.
+  const keys = layerGravity.keysOf(layer, source, frame)
+    || (steps.length ? layerGeometry.shownKeys(layer, source, frame, steps) : null);
   shownKeysCache.set(layer, { key, keys });
   return keys;
 }
@@ -1112,6 +1115,8 @@ const VFX_PREVIEW = {
   strobe: { ...OPS_PREVIEW },
   // V5.5.1. Not drawn as a pass: it is the picture the others are given (echoPicture).
   echo: { room: () => ({ margin: 0 }), draw: (e, p) => e.drawImage(p.canvas, 0, 0), first: true },
+  // Gravity (5.3.0). Not drawn at all: it is where the picture is put (shownKeysFor).
+  gravity: { room: () => ({ margin: 0 }), draw: (e, p) => e.drawImage(p.canvas, 0, 0) },
 };
 
 // The moment maskedPicture is drawing, in the clip's own seconds, for a kind
@@ -2499,6 +2504,8 @@ function compositeDrawDue() {
 function layerMovesAt(l, at) {
   if (timelineModel.keyframesFor(l).length > 1) return true;
   if (timelineModel.transitionAt(l, at)) return true;
+  // Gravity (5.3.0). Or it is falling.
+  if (timelineModel.gravityOf(l)) return true;
   // V5.1. Or one that moves by itself: a wave on a still picture has no next
   // picture of the file to be drawn for.
   if (timelineModel.vfxList(l).some((v) => timelineModel.vfxMoves(v) || timelineModel.vfxMovesAlone(v))) return true;

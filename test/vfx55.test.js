@@ -37,7 +37,7 @@ test('Strobe is for the whole picture, with a colour and a speed of its own and 
   assert.equal(now('strobe', { mix: 0 }).off, true);
   // Its picture changes with no setting changing, so the preview keeps drawing it.
   assert.equal(T.vfxMovesAlone(T.vfxOf({ kind: 'strobe' })), true);
-  assert.deepEqual(T.VFX_GROUPS[T.VFX_GROUPS.length - 1], { id: 'time', kinds: ['strobe', 'echo'] });
+  assert.deepEqual(T.VFX_GROUPS.find((g) => g.id === 'time'), { id: 'time', kinds: ['strobe', 'echo'] });
 });
 
 test('a flash is there for the first part of every round of the clip\'s time', () => {

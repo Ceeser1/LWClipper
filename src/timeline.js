@@ -647,6 +647,8 @@ const timelineModel = (() => {
   }
   // V5.4. Luma Key: which end of the brightness is made see-through.
   const VFX_LUMA_MODES = ['dark', 'bright'];
+  // Gravity (5.3.0). What the picture falls as: a rectangle or a circle.
+  const VFX_BODIES = ['box', 'ball'];
   const VFX_MORE = (() => {
     const fig = (id, min, max, def) => ({ id, type: 'number', min, max, whole: true, def, in: 'filter' });
     const part = (id, max, def) => ({ id, type: 'number', min: 0, max, def, of: 'height', in: 'filter' });
@@ -824,6 +826,20 @@ const timelineModel = (() => {
       // one to a track: the frames from before are the file's, and nobody
       // has kept what the other VFX made of them.
       echo: whole([own('copies', 1, 5, 3), own('gap', 1, 10, 4), own('decay', 1, 100, 60)], [], null, { first: true }),
+      // ---- Gravity (5.3.0). Physics ----
+      // The picture falls onto the bottom of the render frame from the VFX's
+      // first keyframe on, as a rectangle or a circle (src/gravity.js). The
+      // user: "You must set a keyframe where it enables gravity"; one without
+      // a keyframe does nothing. It changes where the picture is and nothing
+      // in it (`moves`), so for every drawing of a picture's pixels it is
+      // off, and it has no Mix. A keyframe's figures are a throw: Velocity in
+      // hundredths of the frame's height a second, to the right, Rotational
+      // Speed in degrees a second, clockwise, and how much it grips and
+      // bounces from then on. They hold until the next keyframe and never
+      // blend (`hold`): half way between two throws is not half a throw.
+      gravity: whole([pick('body', VFX_BODIES), tick('walls')],
+        [fig('velocity', -300, 300, 0), fig('spin', -1440, 1440, 0), fig('drag', 0, 100, 50), fig('bounce', 0, 100, 50)],
+        () => true, { mix: false, moves: true, hold: true }),
     };
   })();
 
@@ -864,6 +880,8 @@ const timelineModel = (() => {
     { id: 'key', kinds: ['chromakey', 'lumakey'] },
     // V5.5.
     { id: 'time', kinds: ['strobe', 'echo'] },
+    // Gravity (5.3.0).
+    { id: 'physics', kinds: ['gravity'] },
   ];
 
   // The user: no cap, "if you have 50 same vfx in a track but all at different
@@ -997,6 +1015,39 @@ const timelineModel = (() => {
   }
 
   /**
+   * Gravity (5.3.0). The keyframe of a VFX whose figures are in force at `t`
+   * of the clip: the last at or before it, and the first before them all.
+   * Null without keyframes.
+   */
+  function vfxKeyHeld(v, t) {
+    const list = vfxKeysFor(v);
+    if (!list.length) return null;
+    const at = Number.isFinite(Number(t)) ? Number(t) : 0;
+    let held = list[0];
+    for (const k of list) if (k.t <= at) held = k;
+    return held;
+  }
+
+  /**
+   * Gravity (5.3.0). What lets a layer's picture fall, or null: the first
+   * VFX of a kind that moves the picture, when it is switched on and has a
+   * keyframe. `{ id, body, walls, throws }`, each throw a keyframe's moment
+   * and figures as the window shows them. One to a track: a second is left
+   * out, as a second Echo is.
+   */
+  function gravityOf(layer) {
+    const v = vfxList(layer).find((o) => !!vfxKind(o.kind) && !!vfxKind(o.kind).moves && !o.disabled);
+    const keys = vfxKeysFor(v);
+    if (!v || !keys.length) return null;
+    return {
+      id: v.id,
+      body: v.body,
+      walls: !!v.walls,
+      throws: keys.map((k) => ({ t: k.t, velocity: k.velocity, spin: k.spin, drag: k.drag, bounce: k.bounce })),
+    };
+  }
+
+  /**
    * Which of its kind a VFX is on its track, counted from 1 in the order
    * processed: the user's "Pixelate, Pixelate (2)".
    */
@@ -1037,6 +1088,8 @@ const timelineModel = (() => {
   function vfxValuesAt(v, t) {
     const list = vfxKeysFor(v);
     if (!list.length) return vfxValuesCopy(v.kind, v);
+    // Gravity (5.3.0). Figures that hold from one keyframe to the next.
+    if (vfxKind(v.kind).hold) return vfxValuesCopy(v.kind, vfxKeyHeld(v, t));
     const at = Number.isFinite(Number(t)) ? Number(t) : 0;
     if (at <= list[0].t) return vfxValuesCopy(v.kind, list[0]);
     const last = list[list.length - 1];
@@ -1239,6 +1292,15 @@ const timelineModel = (() => {
     const list = vfxKeysFor(v);
     const gone = list.find((k) => k.id === id);
     if (!gone) return v;
+    // Gravity (5.3.0). Where a keyframe is a throw, one alone is the usual
+    // case and each stands for itself: only the one deleted goes, and the
+    // last leaves the VFX with its figures.
+    if (vfxKind(v.kind).hold) {
+      const left = list.filter((k) => k !== gone);
+      if (left.length) return { ...v, keys: left };
+      const { keys: _held, ...own } = v;
+      return { ...own, ...vfxValuesCopy(v.kind, gone) };
+    }
     if (gone === list[0] && list.length > 2) {
       const second = list[1];
       return { ...v, keys: list.map((k) => (k === gone ? { id: k.id, t: k.t, ...vfxValuesCopy(v.kind, second) } : k)) };
@@ -3991,6 +4053,8 @@ const timelineModel = (() => {
     vfxListOf,
     vfxList,
     vfxKeysFor,
+    vfxKeyHeld,
+    gravityOf,
     vfxNumber,
     vfxNoteDue,
     vfxValuesAt,

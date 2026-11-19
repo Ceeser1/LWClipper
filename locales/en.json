@@ -700,5 +700,15 @@
   "What moves leaves fading copies of itself behind. Works on the track's picture before its other VFX, one Echo to a track": "What moves leaves fading copies of itself behind. Works on the track's picture before its other VFX, one Echo to a track",
   "Echoes:": "Echoes:",
   "Frames Apart:": "Frames Apart:",
-  "Echo Strength:": "Echo Strength:"
+  "Echo Strength:": "Echo Strength:",
+  "Physics": "Physics",
+  "Gravity": "Gravity",
+  "Lets the picture fall to the bottom of the frame, bounce, turn and roll. It starts at its first keyframe: double-click the keyframe bar where the picture should let go. Seen in the main preview after Apply, one Gravity to a track": "Lets the picture fall to the bottom of the frame, bounce, turn and roll. It starts at its first keyframe: double-click the keyframe bar where the picture should let go. Seen in the main preview after Apply, one Gravity to a track",
+  "Collision Shape:": "Collision Shape:",
+  "Rectangle": "Rectangle",
+  "Edge Collision": "Edge Collision",
+  "Velocity:": "Velocity:",
+  "Rotational Speed:": "Rotational Speed:",
+  "Drag:": "Drag:",
+  "Bounciness:": "Bounciness:"
 }

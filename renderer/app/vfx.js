@@ -157,6 +157,8 @@ const VFX_UI = {
   strobe: { name: () => t('Strobe'), about: () => t('Flashes one colour over the picture, again and again') },
   // V5.5.1.
   echo: { name: () => t('Echo'), about: () => t('What moves leaves fading copies of itself behind. Works on the track\'s picture before its other VFX, one Echo to a track') },
+  // Gravity (5.3.0).
+  gravity: { name: () => t('Gravity'), about: () => t('Lets the picture fall to the bottom of the frame, bounce, turn and roll. It starts at its first keyframe: double-click the keyframe bar where the picture should let go. Seen in the main preview after Apply, one Gravity to a track') },
 };
 
 // V5.1. The headings the menu puts the kinds under (timeline.js VFX_GROUPS).
@@ -167,6 +169,7 @@ const VFX_GROUP_NAMES = {
   distort: () => t('Distort'),
   key: () => t('Keying'),
   time: () => t('Time'),
+  physics: () => t('Physics'),
 };
 
 // What each setting is called, by its id, for every kind that has it.
@@ -251,6 +254,13 @@ const VFX_SETTING_LABELS = {
   copies: () => t('Echoes:'),
   gap: () => t('Frames Apart:'),
   decay: () => t('Echo Strength:'),
+  // Gravity (5.3.0).
+  body: () => t('Collision Shape:'),
+  walls: () => t('Edge Collision'),
+  velocity: () => t('Velocity:'),
+  spin: () => t('Rotational Speed:'),
+  drag: () => t('Drag:'),
+  bounce: () => t('Bounciness:'),
 };
 
 // V5.1. What a figure is counted in, where that says something: shown after
@@ -270,6 +280,10 @@ const VFX_SETTING_UNITS = {
   outWhite: '%',
   duration: '%',
   decay: '%',
+  velocity: '%',
+  spin: '°',
+  drag: '%',
+  bounce: '%',
 };
 
 // V5.1. What each option of a choice is called, by the setting's id.
@@ -318,6 +332,11 @@ const VFX_CHOICE_LABELS = {
     top: () => t('Mirror Top'),
     bottom: () => t('Mirror Bottom'),
     quad: () => t('Mirror Four Ways'),
+  },
+  // Gravity (5.3.0). What the picture falls as.
+  body: {
+    box: () => t('Rectangle'),
+    ball: () => t('Circle'),
   },
 };
 
@@ -481,6 +500,12 @@ function vfxKeyEditing() {
   if (!v || !v.keys) return null;
   const at = vfxLocalT();
   const near = timelineModel.vfxKeyNear(v, at, keyframeReach());
+  // Gravity (5.3.0). Where a keyframe's figures hold until the next one, an
+  // edit goes to the one in force and never makes one.
+  if (!near && timelineModel.vfxKind(v.kind).hold) {
+    const held = timelineModel.vfxKeyHeld(v, at);
+    return { id: held.id, t: held.t };
+  }
   return near ? { id: near.id, t: near.t } : { id: null, t: at };
 }
 
@@ -1676,6 +1701,14 @@ function changeVfxKeyed(props) {
   }
   const at = vfxLocalT();
   const near = timelineModel.vfxKeyNear(v, at, keyframeReach());
+  // Gravity (5.3.0). A keyframe that is a throw: the one in force is changed,
+  // wherever the playhead is after it. A new one would throw the picture
+  // again, and that is asked for on the keyframe bar, not by a slider.
+  if (timelineModel.vfxKind(v.kind).hold) {
+    const held = near || timelineModel.vfxKeyHeld(v, at);
+    setVfx(timelineModel.putVfxKey(v, { ...held, ...props }));
+    return;
+  }
   setVfx(timelineModel.putVfxKey(v, {
     ...vfxShown(v),
     ...props,
@@ -1939,7 +1972,10 @@ const vfxStrip = makeKeyStrip(vfxKeys, vfxKeysReadout, vfxKeysCanvas, {
       return;
     }
     let next = v;
-    if (!v.keys && at > reach) next = timelineModel.putVfxKey(next, { ...v, id: newKeyframeId(), t: 0 });
+    // Gravity (5.3.0). Not for a kind that starts at its first keyframe:
+    // one at the clip's start would let the picture go there.
+    const starts = !!timelineModel.vfxKind(v.kind).hold;
+    if (!v.keys && at > reach && !starts) next = timelineModel.putVfxKey(next, { ...v, id: newKeyframeId(), t: 0 });
     const there = timelineModel.vfxValuesAt(next, at);
     const whole = {};
     for (const [id, value] of Object.entries(there)) {

@@ -6,7 +6,21 @@ The most important changes since 1.5.5, newest first.
 
 ## 5.x: VFX (2026-11-17, 2026-11-18)
 
-Current version: 5.2.1.
+Current version: 5.3.0.
+
+- **Physics: Gravity (5.3.0).** A seventh heading in the VFX window, **Physics**, with the first VFX that moves a track instead of changing its picture. 67 VFX in all.
+  - **Gravity**: from its first keyframe on the picture falls to the bottom of the render frame, bounces, turns and rolls, and comes to rest lying there. **Double-click the keyframe bar** where the picture should let go; without a keyframe Gravity does nothing. Until that moment the track is wherever its own position and keyframes put it. It is seen in the main preview after **Apply**, and the exported file has the same motion frame for frame. Tracks with Gravity do not touch each other.
+  - **Collision Shape**: **Rectangle** falls as the picture's box and ends lying flat on one of its sides, **Circle** as the circle that fits inside the picture, which rolls. Choose Circle for a round picture or a track with a circle mask.
+  - **Velocity**: the throw to the side at the keyframe, in percent of the frame's height a second: 100 crosses a frame's height in a second, at any resolution. Below zero goes left.
+  - **Rotational Speed**: the spin at the keyframe in degrees a second, below zero counter-clockwise.
+  - **Bounciness**: how high it jumps back, as a share of the height it fell from. 0 stays down, 100 comes back up all the way and never stops.
+  - **Drag**: how much of the spin turns into movement to the side when it touches the floor. At 100 a circle 100 pixels across spinning once a second rolls off at 314 pixels a second and stops spinning; at 50 half the spin is kept at each touch. A rectangle is pushed the same way when a corner lands, less the more it bounces.
+  - Every touch of the floor or an edge takes 5% off the speed to the side and off the spin. Lying or rolling on the floor it slows down steadily, and below one pixel a second it stands still.
+  - **Edge Collision**: the picture bounces back off the frame's left and right edges. Off, it can leave the shot. A picture too wide to fit between the edges at every turn ignores them.
+  - A second keyframe throws the picture again from where it is, with that keyframe's settings. A change to a setting goes to the keyframe in force at the playhead and does not make a new one.
+  - One Gravity to a track. Text and shape tracks have no VFX and so no Gravity. A slide or zoom transition at the clip's end is left out while Gravity is on, and the Render Position handles show where the picture was placed, not where it has fallen to.
+  - Every figure of the motion (how hard gravity pulls, the 5%, how fast it slows on the floor, when it counts as standing) is a starting value in one table, to be tuned once the motion has been looked at.
+- **Fixed: a picture that turns between keyframes could be exported up to 2 pixels from where the preview showed it (5.3.0).** Where half the picture's width or height in the frame was an odd number, such as a picture 270 pixels high. Found while building Gravity; it applies to every keyframed turn.
 
 - **Render Position corners (5.2.1).** The four corner circles now size the picture instead of turning it. The picture always keeps the aspect ratio of its Video Frame and grows mirrored about its middle. With Shift held the corner opposite stays where it is instead, and a note under the preview says so. A picture stuck to one of the nine position circles stays stuck and grows away from it: on the left side its left edge stays on the frame's left edge, in a corner both edges stay, and on the center circle it grows evenly all round. The **Scale** slider follows.
   - Moved or sized by a corner, the picture's sides catch on the borders of the render frame within 4 pixels on screen, and a picture coming that near the frame's width or height takes exactly that size, so a track of the same aspect ratio fills the frame to the pixel. Dragging on pulls it free. The picture is turned with the dot above its top side, as a shape or a text box is.

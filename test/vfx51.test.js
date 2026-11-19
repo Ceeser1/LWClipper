@@ -22,8 +22,10 @@ const FULL = { x: 0, y: 0, w: 1, h: 1 };
 const WHOLE = { x: 0, y: 0, width: 1920, height: 1080 };
 const FIRST = ['obscure', 'pixelate'];
 const LATER = T.VFX_KIND_IDS.filter((k) => !FIRST.includes(k));
-// The kinds drawn from ops: every later one but Tilt-Shift, which is Obscure's blur.
-const OPS = LATER.filter((k) => k !== 'tiltshift');
+// Gravity (5.3.0). The kinds that move the picture and leave its pixels alone.
+const MOVERS = LATER.filter((k) => T.vfxKind(k).moves);
+// The kinds drawn from ops: every later one but Tilt-Shift, which is Obscure's blur, and the ones that only move the picture.
+const OPS = LATER.filter((k) => k !== 'tiltshift' && !MOVERS.includes(k));
 const KEYS = ['chromakey', 'lumakey'];
 // Apply LUT does nothing until a file is chosen; with one it is a kind like the others.
 const LUT_FILE = 'C:' + String.fromCharCode(92) + 'luts' + String.fromCharCode(92) + 'look one.cube';
@@ -50,7 +52,8 @@ test('there are forty and more kinds, every one under a heading of the menu, onc
   const listed = T.VFX_GROUPS.flatMap((g) => g.kinds);
   assert.deepEqual(listed.slice().sort(), T.VFX_KIND_IDS.slice().sort());
   assert.equal(new Set(listed).size, listed.length);
-  assert.deepEqual(T.VFX_GROUPS.map((g) => g.id), ['hide', 'color', 'stylize', 'distort', 'key', 'time']);
+  assert.deepEqual(T.VFX_GROUPS.map((g) => g.id), ['hide', 'color', 'stylize', 'distort', 'key', 'time', 'physics']);
+  assert.deepEqual(MOVERS, ['gravity']);
 });
 
 test('every kind drawn from ops has its row of ops, and no row is left over', () => {
@@ -77,7 +80,8 @@ test('every later kind has its own settings first and numbers a keyframe holds',
     const ids = [...def.statics, ...def.keyed].map((s) => s.id);
     assert.equal(new Set(ids).size, ids.length, kind + ': no setting twice');
     // A new one does something as it is added, or nobody would see it was.
-    assert.equal(now(kind).off, false, kind);
+    // One that moves the picture is off for every drawing of its pixels.
+    assert.equal(now(kind).off, MOVERS.includes(kind), kind);
   }
 });
 
