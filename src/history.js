@@ -94,6 +94,10 @@ const projectHistory = (() => {
     if ((a.fps || 0) !== (b.fps || 0)) return false;
     if ((a.width || 0) !== (b.width || 0)) return false;
     if ((a.height || 0) !== (b.height || 0)) return false;
+    // V5.5. The timeline's markers. A snapshot from before they were part of
+    // a step has no list at all, which says nothing about them rather than
+    // saying there are none, so it is not a change.
+    if (Array.isArray(a.markers) && Array.isArray(b.markers) && !deepEqual(a.markers, b.markers)) return false;
     if (a.layers.length !== b.layers.length) return false;
     return a.layers.every((l, i) => sameLayer(l, b.layers[i]));
   }
@@ -230,6 +234,8 @@ const projectHistory = (() => {
         fps: finiteOr0(s.fps),
         width: finiteOr0(s.width),
         height: finiteOr0(s.height),
+        // V5.5. Only where the step has them, so a stack from before reads back as it was.
+        ...(Array.isArray(s.markers) ? { markers: s.markers } : {}),
         layers: (s.layers || []).map(index),
       })),
     };
@@ -272,6 +278,9 @@ const projectHistory = (() => {
         fps: finiteOr0(s.fps),
         width: finiteOr0(s.width),
         height: finiteOr0(s.height),
+        ...(Array.isArray(s.markers)
+          ? { markers: s.markers.filter((m) => m && typeof m === 'object' && typeof m.id === 'string' && Number.isFinite(m.t)) }
+          : {}),
       });
     }
     const was = states[at];

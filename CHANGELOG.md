@@ -6,7 +6,17 @@ The most important changes since 1.5.5, newest first.
 
 ## 5.x: VFX (2026-11-17, 2026-11-18)
 
-Current version: 5.4.0.
+Current version: 5.5.0.
+
+- **Delete and close gap (5.5.0).** **Shift+Del**, or **Delete and close gap** on a clip's right-click menu, deletes the selected clips with their sound and moves everything after them left, on every row, so no gap is left. Where another track runs through the gap it closes only as far as it can and the status line says by how much. One undo puts all of it back.
+- **Markers (5.5.0).** **M** sets a marker at the playhead, a flag on the ruler, and pressed again on the marker's frame takes it away. A click on a flag moves the playhead there, a double-click names it, and its right-click menu renames or deletes it. A dragged clip edge catches on a marker as it does on the playhead. Markers are saved with the project and are part of undo; closing a gap or freezing a frame moves the markers after it along with the clips.
+- **From edge to edge (5.5.0).** **Ctrl+Right** and **Ctrl+Left** move the playhead to the next or previous clip start, clip end or marker.
+- **Duplicate (5.5.0).** **Ctrl+Shift+D**, or **Duplicate** on the right-click menu, puts a copy of the selected clip, with its sound, straight after it on its own row, or on a new row where that one is taken. The clipboard is left alone.
+- **Freeze frame (5.5.0).** **Shift+F**, or **Freeze frame** on a video clip's right-click menu, holds the frame under the playhead as a still for two seconds: the clip is cut there and everything after it moves on by two seconds, sound and markers too. The still is an image track with the clip's crop, place and VFX, so its end is dragged to hold it longer or shorter. Its picture is kept as a PNG among the downloads.
+- **Open recent (5.5.0).** **File > Open recent** lists the last ten projects saved or opened, marks the ones that are no longer there, and has **Clear list**.
+- **Save current frame as PNG (5.5.0).** **File > Save current frame as PNG** (**Ctrl+Shift+E**) saves what the preview shows at the playhead, at the project's resolution.
+- **Fixed: exporting a range that ends before a later sound clip starts wrote no file (5.5.0).** ffmpeg stopped with "Could not open encoder before EOF". A sound that starts after the range is now left out of it.
+- **For development (5.5.0).** `dev/harness/edit55.js` checks all of the above in the real window, the frozen frame against the exported file.
 
 - **The exported file's colours (5.4.0).** An exported file now always has the colours the preview showed, whatever went into it. Before, three kinds of project came out wrong, each measured:
   - **A project of images, text or shapes with no video under them** was written in the old SD colour standard (BT.601) without saying so, and every player then read it as the HD one (BT.709): a green of 50, 180, 80 was shown as 40, 161, 76. Every export is now written as BT.709 and says so in the file, so players, phones and upload sites all read it the same way.

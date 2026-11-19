@@ -1388,6 +1388,80 @@ body.splitting-layers {
   display: none;
 }
 
+/* V5.5. The project's markers (markers.js): a line down through the tracks
+   and a small flag in the ruler, which is the only part that takes the
+   pointer, as with the trim markers. A colour of their own, away from the
+   playhead's and from the green a snap lights up in. */
+.timeline-flags {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.timeline-flag {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+}
+
+.timeline-flag[hidden] {
+  display: none;
+}
+
+.timeline-flag::before {
+  content: "";
+  position: absolute;
+  top: 12px;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  background: rgba(240, 176, 64, 0.55);
+}
+
+.timeline-flag__head {
+  position: absolute;
+  top: 1px;
+  left: 0;
+  min-width: 9px;
+  max-width: 120px;
+  height: 11px;
+  padding: 0 4px 0 3px;
+  border: 0;
+  border-radius: 0 2px 2px 0;
+  background: #f0b040;
+  color: #1e1e22;
+  font: 9px/11px -apple-system, "Segoe UI", Roboto, sans-serif;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.timeline-flag__head:hover {
+  background: #ffc860;
+}
+
+.timeline-flag.snap-lit::before {
+  width: 3px;
+  left: -1px;
+  background: #78c88c;
+}
+
+.timeline-flag__rename {
+  position: fixed;
+  z-index: 60;
+  width: 180px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid #f0b040;
+  border-radius: 3px;
+  background: #1e1e22;
+  color: #e8e8ea;
+  font: 12px -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
 /* Runs the full height of the frame so the trim range reads through the stack
    and not just across the ruler. The hit area is 9px wide because a 1px line
    cannot be grabbed; the line and the tab at its top are drawn inside it, so
@@ -5860,6 +5934,12 @@ body.advanced .save-section {
   padding: 10px 12px;
   color: #d5d5dc;
   font-size: 13px;
+}
+
+/* V5.5. Open recent with nothing in it yet. */
+.menu-flyout__empty {
+  color: #8a8a94;
+  padding: 2px 0;
 }
 
 .menu-flyout .modal__section {

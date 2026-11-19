@@ -52,6 +52,11 @@ const ACTIONS = [
     enabled: () => !busy, run: () => openProjectFile(),
   },
   {
+    // V5.5. The projects last saved or opened, shown beside the entry.
+    id: 'file.recent', menu: 'file', label: () => t('Open recent'), keys: [], flyout: 'recent',
+    enabled: () => !busy, run: () => {},
+  },
+  {
     // Not held back by a running job: saving writes three kilobytes that touch
     // nothing a render is using (see saveProject).
     // V4.5. Greyed while there is no project at all: no file, no track and
@@ -63,6 +68,11 @@ const ACTIONS = [
   {
     id: 'file.saveAs', menu: 'file', label: () => t('Save project as...'), keys: ['Ctrl+Shift+S'], take: true,
     enabled: () => projectIsOpen(), run: () => saveProject(true),
+  },
+  {
+    // V5.5. The picture at the playhead, at the render resolution (export.js).
+    id: 'file.saveFrame', menu: 'file', label: () => t('Save current frame as PNG'), keys: ['Ctrl+Shift+E'], take: true,
+    enabled: () => !busy && timelineDriving() && layers.some((l) => l.type === 'video'), run: () => { saveCurrentFrame(); },
   },
   {
     // V4.1. The menu bar's Export button, which is not in a dropdown.
@@ -110,6 +120,22 @@ const ACTIONS = [
   {
     id: 'edit.delete', menu: 'edit', label: () => t('Delete'), keys: ['Del', 'Backspace'], guard: 'letters',
     enabled: () => !busy && !!selectedLayerId, run: () => { deleteSelected(); closeClipMenu(); },
+  },
+  {
+    // V5.5. Delete, and what follows moves up to close the gap.
+    id: 'edit.rippleDelete', menu: 'edit', label: () => t('Delete and close gap'), keys: ['Shift+Del'], guard: 'letters',
+    enabled: () => !busy && !!selectedLayerId, run: () => { rippleDeleteSelected(); closeClipMenu(); },
+  },
+  {
+    // V5.5. One more of the selected clip, straight after it.
+    id: 'edit.duplicate', menu: 'edit', label: () => t('Duplicate'), keys: ['Ctrl+Shift+D'], guard: 'letters', take: true,
+    enabled: () => !busy && !!selectedLayerId, run: () => { duplicateSelected(); closeClipMenu(); },
+  },
+  {
+    // V5.5. The frame at the playhead held as a still, the rest moved along (editing.js).
+    id: 'edit.freeze', menu: 'edit', label: () => t('Freeze frame'), keys: ['Shift+F'], guard: 'letters',
+    enabled: () => !busy && canFreezeAt(selectedLayerId && timelineModel.layerById(layers, selectedLayerId), compositeAt),
+    run: () => { freezeFrameAtPlayhead(); closeClipMenu(); },
   },
   { divider: 'edit' },
   {
@@ -164,6 +190,22 @@ const ACTIONS = [
   {
     id: 'play.secondOn', menu: 'playback', label: () => t('+1 Second'), keys: ['Up'], guard: 'arrows', simple: true, repeat: true, stop: true,
     enabled: () => playable(), run: () => stepSeconds(1),
+  },
+
+  { divider: 'playback' },
+  {
+    // V5.5. A marker at the playhead; on a marker's own frame it takes it away (markers.js).
+    id: 'play.marker', menu: 'playback', label: () => t('Add or remove marker'), keys: ['M'], guard: 'letters',
+    enabled: () => timelineDriving() && !busy && layers.length > 0, run: () => { toggleMarkerAtPlayhead(); },
+  },
+  {
+    // V5.5. The playhead to the clip edge or marker before it, and after it.
+    id: 'play.edgeBack', menu: 'playback', label: () => t('Previous edge or marker'), keys: ['Ctrl+Left'], guard: 'arrows', repeat: true, stop: true,
+    enabled: () => timelineDriving() && layers.length > 0, run: () => { stepToEdge(-1); },
+  },
+  {
+    id: 'play.edgeOn', menu: 'playback', label: () => t('Next edge or marker'), keys: ['Ctrl+Right'], guard: 'arrows', repeat: true, stop: true,
+    enabled: () => timelineDriving() && layers.length > 0, run: () => { stepToEdge(1); },
   },
 
   // ---- View ----
@@ -448,6 +490,46 @@ async function fillAboutFlyout(node) {
   );
 }
 
+/**
+ * V5.5. File > Open recent: a row a project, newest first, the folder it is
+ * in as the row's tooltip. One that is no longer where it was is greyed and
+ * says so. A click opens it the way a dropped project opens, the question
+ * about the project already open included.
+ */
+async function fillRecentFlyout(node) {
+  const list = await window.lwclipper.recentProjects();
+  if (!list.length) {
+    const none = document.createElement('div');
+    none.className = 'menu-flyout__empty';
+    none.textContent = t('No recent projects');
+    node.replaceChildren(none);
+    return;
+  }
+  const rows = list.map((p) => {
+    const row = document.createElement('button');
+    row.className = 'clip-menu__item';
+    row.dataset.noTranslate = '';
+    row.textContent = p.missing ? t('{name} (missing)', { name: p.name }) : p.name;
+    row.title = p.path;
+    row.disabled = p.missing || busy;
+    row.addEventListener('click', () => {
+      closeMenus();
+      openProjectPath(p.path);
+    });
+    return row;
+  });
+  const line = document.createElement('div');
+  line.className = 'menu-drop__divider';
+  const clear = document.createElement('button');
+  clear.className = 'clip-menu__item';
+  clear.textContent = t('Clear list');
+  clear.addEventListener('click', async () => {
+    await window.lwclipper.clearRecentProjects();
+    closeMenus();
+  });
+  node.replaceChildren(...rows, line, clear);
+}
+
 function openFlyout(item, kind) {
   if (flyout && flyout.item === item) return;
   closeFlyout();
@@ -470,7 +552,7 @@ function openFlyout(item, kind) {
   item.classList.add('menu-drop__item--flyout');
   flyout = { item, node, kind };
   place();
-  const fill = kind === 'about' ? fillAboutFlyout : fillTypesFlyout;
+  const fill = kind === 'about' ? fillAboutFlyout : kind === 'recent' ? fillRecentFlyout : fillTypesFlyout;
   fill(node).then(place, () => {
     node.textContent = t('Could not be read.');
     place();

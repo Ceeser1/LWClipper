@@ -1013,7 +1013,12 @@ function buildComposeArgs({
   // always was.
   const win = window && window.cut >= 1 && span.start > 0 ? window : null;
   const left = new Set(win && Array.isArray(win.drop) ? win.drop : []);
-  const live = all.filter((l) => !(l.type === 'video' && left.has(l.id)));
+  // V5.5. A sound that starts at or after the selection's end is not heard in
+  // it and is left out: delayed past the end, it kept amix waiting for a
+  // sample that never came, and the audio encoder got none at all (measured:
+  // "Could not open encoder before EOF", no file).
+  const live = all.filter((l) => !(l.type === 'video' && left.has(l.id))
+    && !(l.type === 'audio' && l.start >= span.end - 1e-6));
   const videoLayers = live.filter((l) => l.type === 'video');
   const audioLayers = live.filter((l) => l.type === 'audio');
   // Whether the file has a picture, which a layer being left out does not

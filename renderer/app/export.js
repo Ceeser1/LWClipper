@@ -1036,3 +1036,46 @@ cancelBtn.addEventListener('click', async () => {
   await window.lwclipper.cancelJob();
   setStatus('Cancelling...');
 });
+
+// ---- V5.5. File > Save current frame as PNG ----
+
+/**
+ * The frame at the playhead as a PNG, at the project's own size rather than
+ * the preview's: every track drawn by the same code that draws the preview,
+ * on a canvas of the render resolution. So it is the picture an export would
+ * have at that moment, to within what an encoder takes off it.
+ *
+ * Not while playing: the picture would be whatever frame the decoders were
+ * on when the key landed. Playback is stopped first, and the moment's wait
+ * after it is for the decoders to arrive where it stopped.
+ */
+async function saveCurrentFrame() {
+  if (!timelineDriving() || busy || !layers.some((l) => l.type === 'video')) return false;
+  if (compositePlaying) {
+    pauseComposite();
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  const frame = projectFrame();
+  const at = compositeAt;
+  const canvas = document.createElement('canvas');
+  canvas.width = frame.width;
+  canvas.height = frame.height;
+  paintLayers(canvas.getContext('2d'), canvas, at, null);
+  const blob = await new Promise((r) => canvas.toBlob(r, 'image/png'));
+  if (!blob) {
+    setStatus('The frame could not be saved.');
+    return false;
+  }
+  const fps = playheadFps();
+  const stamp = String(Math.floor(at / 60)).padStart(2, '0') + '-' + String(Math.floor(at % 60)).padStart(2, '0')
+    + '-' + String(Math.round((at % 1) * fps)).padStart(2, '0');
+  const result = await window.lwclipper.saveFrame(new Uint8Array(await blob.arrayBuffer()),
+    (projectTitle || 'frame') + ' ' + stamp);
+  if (!result || result.cancelled) return false;
+  if (!result.ok) {
+    setStatus('The frame could not be saved.');
+    return false;
+  }
+  setStatus('Frame saved: {name}', { name: result.name });
+  return true;
+}

@@ -59,6 +59,9 @@ const DEFAULTS = {
   // their ids (timeline.js VFX_GROUPS): ['color', 'distort']. null while all
   // are open.
   vfxFolded: null,
+  // V5.5. The projects last saved or opened, newest first, as paths
+  // (src/recentProjects.js). null until there is one.
+  recentProjects: null,
 };
 
 function settingsFile() {

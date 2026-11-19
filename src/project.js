@@ -21,6 +21,9 @@
 // results in, which is what lets all of this be tested the way trimmer.js is.
 
 const projectFile = (() => {
+  // V5.5. The window loads src/markers.js as a script before this one; node asks for it.
+  const markersModel = typeof timelineMarkers !== 'undefined' ? timelineMarkers : require('./markers');
+
   // What a .lwc says it is. Checked on open, so a JSON file that happens to
   // parse is not mistaken for a project.
   const FORMAT = 'lwclipper-project';
@@ -105,6 +108,9 @@ const projectFile = (() => {
       },
       layers: (state.layers || []).map((l) => ({ ...l })),
       media: mediaOf(state.media),
+      // V5.5. The timeline's markers (src/markers.js). A file from before has
+      // none and reads as an empty list.
+      markers: markersModel.markersOf(state.markers),
     };
   }
 
@@ -275,6 +281,8 @@ const projectFile = (() => {
         ...m,
         ref: refFor({ src: m.src, sourceDuration: m.duration }, stats[m.src], relatives[m.src]),
       })),
+      // V5.5.
+      markers: doc.markers,
       // V3.3. Beside the document rather than in it, see viewsOf.
       views: viewsOf(state.views),
       // V5.0. The notes already shown, see notesOf.

@@ -352,6 +352,168 @@ function deleteTracks(ids, disband) {
 }
 
 /**
+ * V5.5. Shift+Del: the chosen clips out, and the gap they leave closed.
+ *
+ * Everything that starts after them, on every row, moves left together by
+ * their length, so what comes later stays in step with itself; the markers
+ * after the gap go with it. A clip on another row that runs through the gap
+ * is in the way, and then the gap closes only as far as is free, which the
+ * status line says (timelineModel.rippleRemove has the rule).
+ *
+ * It takes each clip's whole group and join without asking, as Cut does: a
+ * gap closed under a sound left behind would put that sound against the
+ * wrong picture, which is the one thing this key is for avoiding.
+ */
+function rippleDeleteSelected() {
+  if (!timelineDriving() || busy || !selectedLayerId) return false;
+  const ids = new Set();
+  for (const id of selectionIds().length ? selectionIds() : [selectedLayerId]) {
+    for (const l of timelineModel.linkedOf(layers, id)) ids.add(l.id);
+  }
+  const all = [...ids];
+  const conflicts = all.flatMap((id) => [cropWindowOn(id) && cropWindowConflict(), genWindowConflict(id)]);
+  return confirmPopoutConflict(conflicts, () => {
+    const out = timelineModel.rippleRemove(layers, all);
+    if (out.layers === layers) return false;
+    // Before the layers, so the one step that follows holds both.
+    setProjectMarkers(timelineMarkers.ripple(projectMarkers, out.shifts), false);
+    setLayers(out.layers);
+    commitHistory();
+    if (out.closed <= 0 && out.wanted > 0) {
+      setStatus('Deleted. The gap could not be closed: another track runs through it.');
+    } else if (out.closed < out.wanted - 1e-6) {
+      setStatus('Deleted. The gap closed by {closed} of {wanted} seconds: another track is in the way.',
+        { closed: out.closed.toFixed(2), wanted: out.wanted.toFixed(2) });
+    }
+    return true;
+  });
+}
+
+// V5.5. How long a frozen frame holds to begin with. Its end is dragged like any image's.
+const FREEZE_SECONDS = 2;
+
+/** Whether a frame of this track can be frozen at `at`: a video file's track, with the moment inside it. */
+function canFreezeAt(layer, at) {
+  return !!layer && layer.type === 'video' && layer.kind === 'media'
+    && at >= layer.start - 1e-6 && at < timelineModel.endOf(layer) - 1e-6;
+}
+
+/**
+ * V5.5. Shift+F: the selected video's frame at the playhead held as a still.
+ *
+ * The clip is cut at the playhead (its sound with it), everything from there
+ * on moves right by the still's length, on every row and the markers too, and
+ * the still stands in the room that makes, on the clip's own row: the
+ * picture stops, holds, and goes on. The still is an image track like any
+ * other, so its end is dragged to hold longer or shorter; what follows does
+ * not move with that, as it would not for any other clip.
+ *
+ * The frame is read off the clip's own decoder, as the preview shows it, at
+ * the file's own size, and kept as a PNG among the downloads. The still takes
+ * the clip's crop, place, turn, mask and VFX as they are at that moment; a
+ * clip that moves between keyframes hands over where it is right then, and
+ * the still stays there. Gravity and Echo are left off it: one would drop it
+ * again and the other mixes frames a still has not got.
+ */
+async function freezeFrameAtPlayhead() {
+  if (!timelineDriving() || busy || !selectedLayerId) return false;
+  const id = selectedLayerId;
+  const at = compositeAt;
+  if (!canFreezeAt(timelineModel.layerById(layers, id), at)) {
+    setStatus('Select a video track and put the playhead on it to freeze its frame.');
+    return false;
+  }
+  if (compositePlaying) {
+    pauseComposite();
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  const layer = timelineModel.layerById(layers, id);
+  const entry = decoders.get(id);
+  const el = entry && entry.el;
+  if (!layer || !el || !(el.videoWidth > 0)) {
+    setStatus('The frame could not be read.');
+    return false;
+  }
+  // At the size the file says it has, which is what a crop is measured in.
+  const w = layer.sourceWidth > 0 ? layer.sourceWidth : el.videoWidth;
+  const h = layer.sourceHeight > 0 ? layer.sourceHeight : el.videoHeight;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  canvas.getContext('2d').drawImage(el, 0, 0, w, h);
+  const blob = await new Promise((r) => canvas.toBlob(r, 'image/png'));
+  const kept = blob && await window.lwclipper.keepFrame(new Uint8Array(await blob.arrayBuffer()), layer.name || 'frame');
+  if (!kept || !kept.ok) {
+    setStatus('The frame could not be read.');
+    return false;
+  }
+  // The file was written while the window went on living: only if the track is still what it was.
+  if (busy || timelineModel.layerById(layers, id) !== layer) return false;
+
+  const place = Array.isArray(layer.keyframes) && layer.keyframes.length
+    ? layerGeometry.placementAt(layer, at - layer.start, { width: w, height: h }, projectFrame())
+    : null;
+  const still = timelineModel.createLayer({
+    ...layer,
+    id: null,
+    kind: 'image',
+    src: kept.data.path,
+    start: at,
+    duration: FREEZE_SECONDS,
+    sourceIn: 0,
+    sourceDuration: kept.data.duration,
+    sourceWidth: w,
+    sourceHeight: h,
+    speed: 1,
+    groupId: null,
+    joinId: null,
+    keyframes: [],
+    fadeIn: 0,
+    fadeOut: 0,
+    fadeInTransition: null,
+    fadeOutTransition: null,
+    ownSize: false,
+    vfx: timelineModel.vfxList(layer).filter((v) => v.kind !== 'gravity' && v.kind !== 'echo'),
+    ...(place ? { crop: { ...place.src }, render: { ...place.dest }, rotation: place.rotation } : {}),
+  });
+  let next = timelineModel.splitJoinAt(layers, id, at);
+  next = timelineModel.rippleInsert(next, at, FREEZE_SECONDS);
+  next = timelineModel.addLayer(next, still);
+  setProjectMarkers(timelineMarkers.insert(projectMarkers, at, FREEZE_SECONDS), false);
+  selectedLayerIds = new Set();
+  selectedLayerId = still.id;
+  setLayers(next);
+  commitHistory();
+  setStatus('Frame frozen for {n} seconds. Drag its end to hold it longer or shorter.', { n: FREEZE_SECONDS });
+  return true;
+}
+
+/**
+ * V5.5. Ctrl+Shift+D: a copy of the selected clip straight after it, on its
+ * own row, with its group. Where that stretch of the row is taken the copy
+ * goes on a new row instead, at the same moment, so nothing is laid over
+ * something else by a key that only meant "one more of these". The clipboard
+ * is left as it was.
+ */
+function duplicateSelected() {
+  if (!timelineDriving() || busy || !selectedLayerId) return false;
+  const sel = timelineModel.layerById(layers, selectedLayerId);
+  const clip = timelineModel.copyOf(layers, selectedLayerId);
+  if (!sel || !clip) return false;
+  const at = Math.max(...timelineModel.linkedOf(layers, selectedLayerId).map((l) => timelineModel.endOf(l)));
+  const taken = layers.some((l) => l.type === sel.type && l.lane === sel.lane && l.id !== sel.id
+    && l.start < at + sel.duration - 1e-6 && timelineModel.endOf(l) > at + 1e-6);
+  const had = new Set(layers.map((l) => l.id));
+  const next = timelineModel.pasteInto(layers, clip, at, taken ? null : sel.lane);
+  if (next === layers) return false;
+  const pasted = next.find((l) => !had.has(l.id) && l.type === sel.type);
+  if (pasted) selectedLayerId = pasted.id;
+  setLayers(next);
+  commitHistory();
+  return true;
+}
+
+/**
  * Ctrl+V: at the playhead, on the selected clip's lane. "If there is no click
  * behind it, Crtl+V pastes behind the playhead. If no layer got selected,
  * paste the copied source into a newly created layer if needed."
@@ -803,6 +965,8 @@ function projectDocument() {
     trim: { start: slider.start, end: slider.end },
     // V4.5. Project Media, so a file added there is unsaved work too.
     media: projectMediaForFile(),
+    // V5.5. The timeline's markers.
+    markers: projectMarkers,
   };
 }
 
@@ -1190,6 +1354,8 @@ async function adoptProject(result) {
   // V4.5. Its Project Media, before the layers, which add whatever of theirs
   // the list does not have (a project from before V4.5 has no list at all).
   adoptProjectMedia(result);
+  // V5.5. And its markers.
+  loadProjectMarkers(result.doc.markers);
   setLayers(keep, true);
   // After setLayers, the same ordering applyHistory needs: syncProjectTrim in
   // there follows the project's new length and would move the very markers
@@ -1330,6 +1496,8 @@ async function newEmptyProject() {
   setLayerSelection([], null);
   // V4.5. A new project starts with nothing in Project Media.
   clearProjectMedia();
+  // V5.5. And with no markers.
+  loadProjectMarkers([]);
   setLayers([], true);
   trimSpan = 0;
   slider.reset();
@@ -1388,6 +1556,9 @@ async function newEmptyProject() {
 function projectState() {
   return {
     layers,
+    // V5.5. The timeline's markers: setting one is a step, and a step that
+    // moved them (closing a gap) puts them back when it is undone.
+    markers: projectMarkers,
     start: slider.start,
     end: slider.end,
     fps: compositeFrame ? compositeFrame.fps : 0,
@@ -1443,6 +1614,8 @@ function applyHistory(next) {
     }
   }
   resetLaneRows();
+  // V5.5. A step from before markers were part of one says nothing about them.
+  if (Array.isArray(state.markers)) loadProjectMarkers(state.markers);
   setLayers(state.layers, true);
   // After setLayers and not before. syncProjectTrim in there follows a project
   // that just got longer or shorter, and it would move the very markers being

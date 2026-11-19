@@ -45,6 +45,9 @@ const to = (matrix, range = 'tv') => 'scale=out_color_matrix=' + matrix + ':out_
 // ---- the clips the VFX lists run on ----
 make('src709.mp4', (f) => ff([...bars('1280x720', 2), '-vf', [COUNTER, to('bt709'), NAME709].join(','), ...x264, f]));
 make('g709.mp4', (f) => ff([...bars('1280x720', 5), '-vf', [COUNTER, to('bt709'), NAME709].join(','), ...x264, f]));
+// Five seconds of picture and sound, for the editing checks (edit55.js).
+make('talk709.mp4', (f) => ff([...bars('1280x720', 5), '-f', 'lavfi', '-i', 'sine=frequency=440:d=5',
+  '-vf', [COUNTER, to('bt709'), NAME709].join(','), ...x264, '-c:a', 'aac', f]));
 make('long1080.mp4',(f) => ff([...bars('1920x1080', 6), '-f', 'lavfi', '-i', 'sine=frequency=440:d=6',
   '-vf', [COUNTER, to('bt709'), NAME709].join(','), ...x264, '-c:a', 'aac', f]));
 // Natural colours: a picture that ships with Windows, slowly zoomed.

@@ -204,6 +204,8 @@ function positionTimelineMarkers() {
   timelineOutsideStart.style.width = before + 'px';
   timelineOutsideEnd.hidden = after <= 0;
   timelineOutsideEnd.style.width = after + 'px';
+  // V5.5. The project's own markers follow the same view (markers.js).
+  if (typeof positionProjectMarkers === 'function') positionProjectMarkers();
 }
 
 // Drawn the same way as the waveform: backing store in device pixels, drawing

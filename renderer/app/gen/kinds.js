@@ -269,9 +269,18 @@ function openClipMenu(evt, track) {
   // V4.3. Join the chosen clips; on a joined one, take it apart again.
   item(t('Join selected tracks'), !busy && joinTryable(), () => joinSelected());
   if (layer && layer.joinId) item(t('Un-join tracks'), !busy, () => unjoinLayer(layer.id));
+  // V5.5. The frame under the playhead held as a still. At the playhead and
+  // not where the menu opened: the frame that can be frozen is the one the
+  // preview is showing.
+  if (layer && layer.type === 'video' && layer.kind === 'media') {
+    item(t('Freeze frame'), canFreezeAt(layer, compositeAt), () => freezeFrameAtPlayhead());
+  }
   item(t('Copy'), !!layer, () => copySelected());
   item(t('Paste'), !!layerClipboard, () => pasteAt(at, type, lane));
+  // V5.5.
+  item(t('Duplicate'), !!layer, () => duplicateSelected());
   item(t('Delete'), !!layer, () => deleteSelected());
+  item(t('Delete and close gap'), !!layer, () => rippleDeleteSelected());
   document.body.appendChild(menu);
 
   // At the pointer, and pulled back inside the window when it would run off

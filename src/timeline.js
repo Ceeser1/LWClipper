@@ -2279,6 +2279,80 @@ const timelineModel = (() => {
     return layers.filter((l) => l.id !== id);
   }
 
+  /**
+   * V5.5. These clips taken out and the gap they leave closed: everything
+   * that starts after them, on every row, moves left by their length.
+   *
+   * One shift for all of it, so what comes later stays in step with itself:
+   * a video and the music under it, a title and the clip it sits on. And no
+   * further than is free: a clip on another row that runs through the gap
+   * stays where it is, and what follows it on its row stops at its end
+   * rather than sliding under it. Clips that already overlapped (a
+   * crossfade) keep the overlap they had. So the gap may close only partly,
+   * or not at all; `closed` says by how much, `wanted` how much was asked.
+   *
+   * Clips taken out in several places are closed place by place, the latest
+   * first, so an earlier gap's closing is measured on a timeline whose later
+   * ones are already closed.
+   */
+  function rippleRemove(layers, ids) {
+    const gone = new Set(ids);
+    const spans = [];
+    for (const l of layers.filter((x) => gone.has(x.id)).sort((p, q) => p.start - q.start)) {
+      const last = spans[spans.length - 1];
+      if (last && l.start <= last.end + 1e-6) last.end = Math.max(last.end, endOf(l));
+      else spans.push({ start: l.start, end: endOf(l) });
+    }
+    let next = layers.filter((l) => !gone.has(l.id));
+    if (next.length === layers.length) return { layers, closed: 0, wanted: 0, shifts: [] };
+    let closed = 0;
+    let wanted = 0;
+    // Each gap and how far it closed, in the order they were closed, for
+    // whatever else stands on the timeline and has to follow (the markers).
+    const shifts = [];
+    for (const span of spans.reverse()) {
+      const length = round(span.end - span.start);
+      wanted = round(wanted + length);
+      const moves = (l) => l.start >= span.end - 1e-6;
+      let shift = length;
+      const rows = new Map();
+      for (const l of next) {
+        const key = l.type + ':' + l.lane;
+        const row = rows.get(key) || { first: Infinity, held: -Infinity };
+        if (moves(l)) row.first = Math.min(row.first, l.start);
+        else row.held = Math.max(row.held, endOf(l));
+        rows.set(key, row);
+      }
+      for (const row of rows.values()) {
+        // What stays ends at or before the gap's start on most rows; where a
+        // clip runs on through the gap, the row's next clip stops at its end.
+        if (row.first < Infinity) shift = Math.min(shift, row.first - Math.max(row.held, span.start));
+      }
+      shift = round(Math.max(0, shift));
+      if (shift > 0) next = next.map((l) => (moves(l) ? { ...l, start: round(Math.max(0, l.start - shift)) } : l));
+      closed = round(closed + shift);
+      shifts.push({ from: round(span.start), to: round(span.end), by: shift });
+    }
+    return { layers: next, closed, wanted, shifts };
+  }
+
+  /**
+   * V5.5. Room made at `at`: everything that starts at or after it, on every
+   * row, moves right by `by` seconds. Closing a gap the other way round, and
+   * by the same rule, one shift for all of it so that what comes later stays
+   * in step with itself. A clip that starts before `at` and runs through it
+   * is left as it is: whoever wants it cut there cuts it first. Hands back
+   * the list it was given when nothing starts that late.
+   */
+  function rippleInsert(layers, at, by) {
+    const shift = round(Math.max(0, Number(by) || 0));
+    if (!(shift > 0)) return layers;
+    const from = round(Number(at) || 0) - 1e-6;
+    if (!layers.some((l) => l.start >= from)) return layers;
+    // A join whose pieces are no longer end to end is no join (normalizeJoins).
+    return normalizeJoins(layers.map((l) => (l.start >= from ? { ...l, start: round(l.start + shift) } : l)));
+  }
+
   function replace(layers, id, fn) {
     let touched = false;
     const next = layers.map((l) => {
@@ -3986,6 +4060,9 @@ const timelineModel = (() => {
     trimCeiling,
     addLayer,
     removeLayer,
+    // V5.5.
+    rippleRemove,
+    rippleInsert,
     moveSet,
     mergeLayers,
     shiftToZero,

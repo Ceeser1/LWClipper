@@ -957,6 +957,8 @@ function snapLines(layer) {
     }
   }
   const lines = [{ at: compositeAt, layerId: null, part: 'playhead' }];
+  // V5.5. And the timeline's markers, which are there to be cut and placed on.
+  for (const m of projectMarkers) lines.push({ at: m.t, layerId: null, part: 'marker', markerId: m.id });
   for (const l of layers) {
     if (own.has(l.id)) continue;
     const end = timelineModel.endOf(l);
@@ -973,6 +975,7 @@ function snapLines(layer) {
 function snapLineElement(line) {
   if (!line) return null;
   if (line.part === 'playhead') return timelinePlayhead;
+  if (line.part === 'marker') return markerElement(line.markerId);
   const clip = timelineStack.querySelector('.layer-clip[data-layer-id="' + line.layerId + '"]');
   if (!clip) return null;
   return line.part === 'start' || line.part === 'end'

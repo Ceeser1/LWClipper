@@ -88,6 +88,13 @@ contextBridge.exposeInMainWorld('lwclipper', {
   closeApp: () => ipcRenderer.invoke('app:close'),
   // V4.1. Settings, About, and the Rendering modal's Open Folder.
   aboutInfo: () => ipcRenderer.invoke('app:about'),
+  // V5.5. File > Save current frame as PNG.
+  saveFrame: (bytes, name) => ipcRenderer.invoke('frame:save', { bytes, name }),
+  // V5.5. Freeze frame: the frame's PNG kept in the cache, described like an opened image.
+  keepFrame: (bytes, name) => ipcRenderer.invoke('frame:keep', { bytes, name }),
+  // V5.5. File > Open recent.
+  recentProjects: () => ipcRenderer.invoke('project:recent'),
+  clearRecentProjects: () => ipcRenderer.invoke('project:clearRecent'),
   // V5.4. Settings > Update yt-dlp.
   updateYtdlp: () => ipcRenderer.invoke('tools:updateYtdlp'),
   openGithub: () => ipcRenderer.invoke('shell:openGithub'),

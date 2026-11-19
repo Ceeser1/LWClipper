@@ -72,6 +72,7 @@ const {
 const timelineModel = require('./src/timeline');
 const { ProcessCancelledError, runProcess } = require('./src/processRunner');
 const ytdlpUpdate = require('./src/ytdlpUpdate');
+const recentProjects = require('./src/recentProjects');
 const launchArgs = require('./src/launchArgs');
 
 // V3.8.5. One app, however it was started. A .lwc double-clicked while the app
@@ -1363,6 +1364,7 @@ ipcMain.handle('project:save', (_event, { filePath, state, previous }) => {
     // V4.5. A download in Project Media and not on the timeline is wanted
     // just as much, so Clear cache has to ask about it too.
     writeClaim(filePath, name, sourcesOf(state), previous);
+    noteRecentProject(filePath);
     return { ok: true, path: filePath, name };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
@@ -1435,6 +1437,7 @@ function openProject(filePath) {
     [...parsed.doc.layers.map((l) => (statuses[l.id] && statuses[l.id].path) || l.src),
       ...parsed.doc.media.map((m, i) => (mediaStatuses[i] && mediaStatuses[i].path) || m.src)],
     { path: filePath, name: parsed.meta.name });
+  noteRecentProject(filePath);
   return {
     ok: true,
     path: filePath,
@@ -1454,6 +1457,75 @@ function openProject(filePath) {
 }
 
 ipcMain.handle('project:open', (_event, filePath) => openProject(filePath));
+
+// ---- V5.5. File > Save current frame as PNG ----
+//
+// The picture is the window's own drawing of the frame at the project's size,
+// handed over as the bytes of a PNG; this side only asks where it goes and
+// writes it. On the Desktop to begin with, like Quick-Save.
+ipcMain.handle('frame:save', async (_event, { bytes, name }) => {
+  try {
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: t('Save current frame as PNG'),
+      defaultPath: path.join(app.getPath('desktop'), safeFilename(String(name || 'frame')) + '.png'),
+      filters: [{ name: 'PNG', extensions: ['png'] }],
+    });
+    if (result.canceled || !result.filePath) return { ok: false, cancelled: true };
+    const file = /\.png$/i.test(result.filePath) ? result.filePath : result.filePath + '.png';
+    fs.writeFileSync(file, Buffer.from(bytes));
+    return { ok: true, path: file, name: path.basename(file) };
+  } catch (err) {
+    log.error('main', 'the frame could not be saved: ' + log.errorText(err));
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// ---- V5.5. Freeze frame ----
+//
+// The frame the window read off a clip, kept as a PNG among the downloads
+// (the cache folder), because the still that shows it is a track like any
+// image and needs a file to point at. Named by what is in it, so the same
+// frame frozen twice is one file, and claimed by the project when it is
+// saved, like every file in there that a project uses.
+ipcMain.handle('frame:keep', (_event, { bytes, name }) => {
+  try {
+    const data = Buffer.from(bytes);
+    const key = crypto.createHash('sha1').update(data).digest('hex').slice(0, 10);
+    const base = safeFilename(String(name || 'frame')).slice(0, 60) || 'frame';
+    const file = path.join(toolPaths.cacheDir(), base + '_frame_' + key + '.png');
+    if (!statOrNull(file)) fs.writeFileSync(file, data);
+    return describeMedia(file);
+  } catch (err) {
+    log.error('main', 'the frozen frame could not be kept: ' + log.errorText(err));
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+});
+
+// ---- V5.5. File > Open recent ----
+//
+// The projects last saved or opened, kept in the settings as paths. Whether
+// each is still there is asked now, when the list is shown: one on a drive
+// that is not plugged in is listed as missing and kept.
+
+function noteRecentProject(filePath) {
+  try {
+    settings.set({ recentProjects: recentProjects.add(settings.get('recentProjects'), filePath) });
+  } catch {
+    // The settings could not be written; the project is open all the same.
+  }
+}
+
+ipcMain.handle('project:recent', () => recentProjects.listOf(settings.get('recentProjects')).map((file) => ({
+  path: file,
+  name: path.basename(file, '.' + PROJECT_EXT),
+  folder: path.dirname(file),
+  missing: !statOrNull(file),
+})));
+
+ipcMain.handle('project:clearRecent', () => {
+  settings.set({ recentProjects: null });
+  return true;
+});
 
 // ---- a project opened from outside the app ----
 //
