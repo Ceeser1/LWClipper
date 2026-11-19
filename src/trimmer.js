@@ -275,6 +275,7 @@ async function trim(media, dst, start, end, accurate, compression, audio, crop, 
 const NO_MEDIA = {
   duration: 0, hasAudio: false, width: 0, height: 0, fps: 0, videoCodec: '', audioCodec: '',
   audioBitrate: 0,
+  colorSpace: '', colorTransfer: '', colorPrimaries: '', colorRange: '', pixFmt: '',
 };
 
 /**
@@ -310,7 +311,8 @@ function probeMedia(filePath) {
       '-v', 'error',
       '-show_entries',
       'format=duration,bit_rate'
-        + ':stream=codec_type,codec_name,width,height,bit_rate,r_frame_rate',
+        + ':stream=codec_type,codec_name,width,height,bit_rate,r_frame_rate'
+        + ',pix_fmt,color_space,color_transfer,color_primaries,color_range',
       '-of', 'json', filePath,
     ], { encoding: 'utf8', timeout: 30000, windowsHide: true });
     const info = JSON.parse(out);
@@ -338,6 +340,13 @@ function probeMedia(filePath) {
       // file carries it, so the container's own is the fallback. Only the mp3
       // compression preset reads this.
       audioBitrate: rate(audio.bit_rate) || (streams.length === 1 ? rate(info.format.bit_rate) : 0),
+      // V5.4. What the picture's numbers mean as colours, in ffprobe's own
+      // words and empty where the file does not say (see colorSpace.js).
+      colorSpace: String(video.color_space || ''),
+      colorTransfer: String(video.color_transfer || ''),
+      colorPrimaries: String(video.color_primaries || ''),
+      colorRange: String(video.color_range || ''),
+      pixFmt: String(video.pix_fmt || ''),
     };
   } catch {
     return { ...NO_MEDIA };

@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('lwclipper', {
   setSettings: (patch) => ipcRenderer.invoke('settings:set', patch),
   chooseCacheFolder: () => ipcRenderer.invoke('dialog:chooseCacheFolder'),
   openAppFiles: () => ipcRenderer.invoke('shell:openAppFiles'),
+  // V5.4. Settings > Open log folder.
+  openLogFolder: () => ipcRenderer.invoke('shell:openLogs'),
   fitWindow: (delta) => ipcRenderer.invoke('window:fit', delta),
   releaseWindowHeight: () => ipcRenderer.invoke('window:release'),
   // V4.11.1. View > Restore default layout.
@@ -86,6 +88,8 @@ contextBridge.exposeInMainWorld('lwclipper', {
   closeApp: () => ipcRenderer.invoke('app:close'),
   // V4.1. Settings, About, and the Rendering modal's Open Folder.
   aboutInfo: () => ipcRenderer.invoke('app:about'),
+  // V5.4. Settings > Update yt-dlp.
+  updateYtdlp: () => ipcRenderer.invoke('tools:updateYtdlp'),
   openGithub: () => ipcRenderer.invoke('shell:openGithub'),
   showInFolder: (filePath) => ipcRenderer.invoke('shell:showInFolder', filePath),
   // Asked once at startup, because the events only fire on a change and the

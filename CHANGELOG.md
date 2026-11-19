@@ -6,7 +6,17 @@ The most important changes since 1.5.5, newest first.
 
 ## 5.x: VFX (2026-11-17, 2026-11-18)
 
-Current version: 5.3.0.
+Current version: 5.4.0.
+
+- **The exported file's colours (5.4.0).** An exported file now always has the colours the preview showed, whatever went into it. Before, three kinds of project came out wrong, each measured:
+  - **A project of images, text or shapes with no video under them** was written in the old SD colour standard (BT.601) without saying so, and every player then read it as the HD one (BT.709): a green of 50, 180, 80 was shown as 40, 161, 76. Every export is now written as BT.709 and says so in the file, so players, phones and upload sites all read it the same way.
+  - **A video that does not name its colour standard**, or names only part of it, is read by the preview by its height (720 lines or more as HD, fewer as SD). The export guessed differently and could be up to 20 of 255 off; it now follows the preview's rule.
+  - **HDR video**, as phones film it (HLG, or PQ / HDR10), is brought down to normal brightness by the preview, and the export did nothing of the kind: the two were about 20 of 255 apart all over. The export now does exactly what the preview does. Highlights brighter than white are cut off at white in both.
+  - Smaller: a BT.601 video or a JPEG image came out darker by about 2 of 255, because of how ffmpeg converts by itself. The export now converts them itself, exactly.
+  - All of it compared against the preview with real exports: every kind of source is now within about 1.5 of 255, which is what the encoder alone costs. Exporting an HDR clip takes about three times as long as a normal one.
+- **A log file (5.4.0).** LWClipper now writes down what happens: each start, every run of ffmpeg and yt-dlp with its full command and, when one fails, what it said, and every error of the app itself. **Settings > Open log folder** shows it (`lwclipper.log`, in the app's own folder, kept under 4 MB, deleted with Delete App files). It is sent nowhere. When an export or a download fails, this file says why.
+- **Update yt-dlp (5.4.0).** yt-dlp is the part that reads video sites, and it stops working on a site when the site changes. **Settings > Update yt-dlp** fetches the newest one into the app's own folder, so a download that stopped working no longer has to wait for a new LWClipper. It asks first, and only then goes to github.com. The yt-dlp the app came with is left untouched, and a later LWClipper that ships a newer one uses that.
+- **For development (5.4.0).** The check that preview and export agree is now in the repo, `dev/harness`, with a record of every case to run against after a change (see its README).
 
 - **Physics: Gravity (5.3.0).** A seventh heading in the VFX window, **Physics**, with the first VFX that moves a track instead of changing its picture. 67 VFX in all.
   - **Gravity**: from its first keyframe on the picture falls to the bottom of the render frame, bounces, turns and rolls, and comes to rest lying there. **Double-click the keyframe bar** where the picture should let go; without a keyframe Gravity does nothing. Until that moment the track is wherever its own position and keyframes put it. It is seen in the main preview after **Apply**, and the exported file has the same motion frame for frame. Tracks with Gravity do not touch each other.

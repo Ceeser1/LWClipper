@@ -2,10 +2,12 @@
 
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
 const { app } = require('electron');
 const { safeFilename, containerFor } = require('./backend');
 const settings = require('./settings');
 const projectClaim = require('./claim');
+const ytdlpUpdate = require('./ytdlpUpdate');
 
 // In a packaged build, tools/ ships under process.resourcesPath (see
 // extraResources in package.json). In dev, it's just the tools/ folder
@@ -39,7 +41,37 @@ function appIconPath() {
   return fs.existsSync(file) ? file : null;
 }
 
-const findYtDlp = () => findBundledOrPath('yt-dlp');
+// V5.4. The folder an updated yt-dlp is kept in: `tools` in the app's own
+// folder, beside its data (see ytdlpUpdate.js). Null where that folder is not
+// known, which is only ever a test.
+function ownToolsDir() {
+  let data = '';
+  try {
+    data = app.getPath('userData');
+  } catch {
+    data = '';
+  }
+  return data ? path.join(path.dirname(data), 'tools') : null;
+}
+
+/** A yt-dlp's version, read by running it, or null. Up to a few seconds: it unpacks itself first. */
+function ytDlpVersionSync(exe) {
+  try {
+    const out = execFileSync(exe, ['--version'], { encoding: 'utf8', timeout: 20000, windowsHide: true });
+    return out.trim().split(/\s+/)[0] || null;
+  } catch {
+    return null;
+  }
+}
+
+const findBundledYtDlp = () => findBundledOrPath('yt-dlp');
+// V5.4. The updated copy when there is one and it is the newer of the two.
+const findYtDlp = () => ytdlpUpdate.choose({
+  bundled: findBundledYtDlp(),
+  dir: ownToolsDir(),
+  appVersion: typeof app.getVersion === 'function' ? app.getVersion() : '',
+  versionOf: ytDlpVersionSync,
+});
 const findFfmpeg = () => findBundledOrPath('ffmpeg');
 const findFfprobe = () => findBundledOrPath('ffprobe');
 
@@ -288,7 +320,7 @@ function quickSaveTarget(title, isAudio, format) {
 }
 
 module.exports = {
-  findYtDlp, findFfmpeg, findFfprobe, cacheDir, isCacheFolder, cacheSizeBytes, clearCache,
+  findYtDlp, findBundledYtDlp, ownToolsDir, findFfmpeg, findFfprobe, cacheDir, isCacheFolder, cacheSizeBytes, clearCache,
   moveCache,
   projectsDir, cacheFileNames,
   quickSaveTarget,

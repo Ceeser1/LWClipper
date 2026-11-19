@@ -29,6 +29,7 @@ const {
 const geometry = require('./geometry');
 const timeline = require('./timeline');
 const vfxOps = require('./vfxOps');
+const colorSpace = require('./colorSpace');
 const gravity = require('./gravity');
 const toolPaths = require('./toolPaths');
 const exportWindow = require('./exportWindow');
@@ -54,6 +55,16 @@ function msFixed(v) {
 
 function chain(parts) {
   return parts.filter(Boolean).join(',');
+}
+
+/**
+ * V5.4. A layer's picture as the graph first takes it: its input, and for a
+ * video that names no colour matrix the one the preview reads it in, said
+ * before anything converts it (see colorSpace.js).
+ */
+function pictureOf(input, source) {
+  const said = colorSpace.headFilters(source, vfxOps.filterPath);
+  return '[' + input + ':v]' + (said.length ? said.join(',') + ',' : '');
 }
 
 // ---- V3.8.1. A fade that is not a straight line ----
@@ -505,7 +516,7 @@ function vfxFilters(f, fps) {
 function vfxHead(graph, l, n, input, fps, inputs, source, pre = null) {
   // V4.11. At the layer's speed from the very start, VFX and all.
   // V4.12. A still has no speed; it is its one frame, held for the clip.
-  const plain = '[' + input + ':v]' + (oneStill(l) ? holdStill(l.duration) + ',' : speedHead(l, fps));
+  const plain = pictureOf(input, source) + (oneStill(l) ? holdStill(l.duration) + ',' : speedHead(l, fps));
   const files = (Array.isArray(l.vfxFiles) && l.type === 'video' ? l.vfxFiles : [])
     .map((f, i) => ({ ...f, input: inputs && inputs[i] }))
     .filter((f) => {
@@ -762,7 +773,7 @@ function movingLayer(graph, l, n, motion, prev, { input, fps, source, projW, pro
   const tag = (s) => s + n;
 
   // 2 and 3. The picture, scaled for the moment and laid where its crop goes.
-  graph.push((head || '[' + input + ':v]') + chain([
+  graph.push((head || pictureOf(input, source)) + chain([
     'fps=' + fps,
     whole ? null : 'crop=' + cut.width + ':' + cut.height + ':' + cut.x + ':' + cut.y,
     shift,
@@ -859,7 +870,7 @@ function movingTurnedLayer(graph, l, n, motion, prev, { input, fps, source, mask
     + ':r=' + fps + ':d=' + fixed(l.duration) + ',' + shift + ',format=' + format;
   const tag = (s) => s + n;
 
-  graph.push((head || '[' + input + ':v]') + chain([
+  graph.push((head || pictureOf(input, source)) + chain([
     'fps=' + fps,
     whole ? null : 'crop=' + cut.width + ':' + cut.height + ':' + cut.x + ':' + cut.y,
     shift,
@@ -1196,7 +1207,7 @@ function buildComposeArgs({
       // here: it is the one the overlay below takes a picture in anyway, and
       // saying it before the hold is what makes that conversion happen once
       // instead of on every frame.
-      const bare = '[' + indexOf.get(l.id) + ':v]';
+      const bare = pictureOf(indexOf.get(l.id), sources[l.src] || null);
       const once = oneStill(l) && from === bare + holdStill(l.duration) + ',';
       // V4.13. Read or held from just before the selection, see windowSkip.
       const skip = skipOf.get(l.id) || null;
@@ -1291,6 +1302,9 @@ function buildComposeArgs({
         + ':end=' + fixed(span.end) + ',setpts=PTS-STARTPTS[vout]');
       prev = 'vout';
     }
+    // V5.4. Named as BT.709 all through, see colorSpace.js.
+    graph.push('[' + prev + ']' + colorSpace.OUTPUT_FILTER + '[vsaid]');
+    prev = 'vsaid';
     maps.push('-map', '[' + prev + ']');
   }
 
@@ -1369,6 +1383,9 @@ function buildComposeArgs({
 
   if (hasVideo) {
     args.push(...videoTrackArgs(format, compression, encoder));
+    // V5.4. Always BT.709 in TV range, and named so in the file: what reaches
+    // the end of the graph in another matrix or range is converted by ffmpeg.
+    args.push(...colorSpace.OUTPUT_TAGS);
     args.push('-r', String(fps));
   } else {
     args.push('-vn');
@@ -1437,6 +1454,27 @@ function spillGraph(args, graphFile, limit = GRAPH_ARG_MAX) {
  * before Step 11 added the fields. Passed in rather than required, so this
  * module still touches no filesystem.
  */
+/**
+ * V5.4. The same list with what the export has to know of each video file's
+ * colours (`colour`, see colorSpace.js). Asked of the file when the export
+ * starts, so a project from before 5.4 needs nothing new in it. A still or a
+ * drawn layer is red, green and blue and has nothing to say.
+ */
+function sourceColours(layers, sizes, probe) {
+  const out = { ...sizes };
+  const asked = new Set();
+  for (const l of layers) {
+    // A text, shape or bar is a PNG the window drew: red, green and blue already.
+    if (!l || l.type !== 'video' || !l.src || asked.has(l.src) || l.frames || l.kind === 'gen') continue;
+    asked.add(l.src);
+    const colour = colorSpace.describe(probe(l.src), { still: timeline.isStill(l) });
+    if (colour.assume || colour.hdr || colour.convert || colour.rgb) {
+      out[l.src] = { ...(out[l.src] || { width: 0, height: 0 }), colour };
+    }
+  }
+  return out;
+}
+
 function sourceSizes(layers, probe = null) {
   const sizes = {};
   for (const l of layers) {
@@ -1499,8 +1537,24 @@ async function render({
   } catch {
     window = null;
   }
+  // V5.4. An HDR source's table, written beside the graph for as long as the
+  // export runs (colorSpace.js). One file for each of HLG and PQ, whatever
+  // number of clips are in it.
+  const lutFiles = [];
+  const withLuts = { ...sources };
+  for (const [src, source] of Object.entries(sources)) {
+    const hdr = source && source.colour && source.colour.hdr;
+    if (!hdr) continue;
+    let made = lutFiles.find((f) => f.kind === hdr);
+    if (!made) {
+      made = { kind: hdr, file: path.join(os.tmpdir(), 'lwclipper-' + hdr + '-' + process.pid + '-' + Date.now() + '.cube') };
+      fs.writeFileSync(made.file, colorSpace.hdrCube(hdr));
+      lutFiles.push(made);
+    }
+    withLuts[src] = { ...source, colour: { ...source.colour, lut: made.file } };
+  }
   const built = buildComposeArgs({
-    layers, project, trim, output: out, format, compression, sources, encoder, window,
+    layers, project, trim, output: out, format, compression, sources: withLuts, encoder, window,
   });
   // V4.10. A graph too long for a command line is read from a file.
   const graphFile = path.join(os.tmpdir(), 'lwclipper-graph-' + process.pid + '-' + Date.now() + '.txt');
@@ -1523,13 +1577,11 @@ async function render({
     if (e instanceof ProcessCancelledError) discardPartial(out);
     throw e;
   } finally {
-    if (graph !== null) {
-      for (const g of graphFiles) {
-        try {
-          fs.unlinkSync(g.file);
-        } catch {
-          // Already gone, or still held: the temp folder is the system's to sweep.
-        }
+    for (const g of [...(graph !== null ? graphFiles : []), ...lutFiles]) {
+      try {
+        fs.unlinkSync(g.file);
+      } catch {
+        // Already gone, or still held: the temp folder is the system's to sweep.
       }
     }
   }
@@ -1545,6 +1597,6 @@ async function render({
 }
 
 module.exports = {
-  buildComposeArgs, outputSpan, enableExpr, sourceSizes, render, spillGraph, GRAPH_ARG_MAX, tempoFilters, windowSkip,
+  buildComposeArgs, outputSpan, enableExpr, sourceSizes, sourceColours, render, spillGraph, GRAPH_ARG_MAX, tempoFilters, windowSkip,
   piecewise, PIECEWISE_CHAIN,
 };

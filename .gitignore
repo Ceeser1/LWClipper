@@ -17,3 +17,6 @@ cache/
 
 # The project's own history and working notes. Stays on disk, never in the repo.
 memory.md
+
+# What the test harness makes: media, a profile of its own, exports.
+dev/harness/work/

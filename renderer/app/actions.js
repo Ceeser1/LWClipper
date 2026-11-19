@@ -213,6 +213,17 @@ const ACTIONS = [
     id: 'settings.keys', menu: 'settings', label: () => t('Key Binds'), keys: [],
     enabled: () => true, run: () => openKeyBinds(),
   },
+  {
+    // V5.4. A newer yt-dlp fetched into the app's own folder (download.js).
+    id: 'settings.updateYtdlp', menu: 'settings', label: () => t('Update yt-dlp'), keys: [],
+    enabled: () => !busy, run: () => { updateYtdlp(); },
+  },
+  {
+    // V5.4. The folder of the app's log (src/log.js), for when something
+    // went wrong and somebody asks what it said.
+    id: 'settings.logs', menu: 'settings', label: () => t('Open log folder'), keys: [],
+    enabled: () => true, run: () => { window.lwclipper.openLogFolder(); },
+  },
   { divider: 'settings' },
   {
     // V4.1. Shown beside the entry while it is hovered, and kept while the

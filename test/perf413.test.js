@@ -483,5 +483,5 @@ test('a layer whose frames are counted from its start is read the long way', () 
 test('the export asks for the plan, and goes the long way if that fails', () => {
   const render = fn(COMPOSER, 'render');
   assert.match(render, /window = exportWindow\.plan\(\{\s+layers: live, span, fps: [^\n]+, probe: exportWindow\.probeFrames,\s+\}\);\s+\} catch \{\s+window = null;/);
-  assert.match(render, /layers, project, trim, output: out, format, compression, sources, encoder, window,/);
+  assert.match(render, /layers, project, trim, output: out, format, compression, sources: withLuts, encoder, window,/);
 });

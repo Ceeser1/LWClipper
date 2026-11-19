@@ -74,3 +74,68 @@ function closeDownloadWindow() {
 
 downloadCloseBtn.addEventListener('click', closeDownloadWindow);
 bindPopup(downloadModal, closeDownloadWindow);
+
+// ---- V5.4. Settings > Update yt-dlp ----
+//
+// yt-dlp is what reads the video sites, and it ages: when a site changes, the
+// one the app came with stops reading it. This asks before it does anything,
+// because it is the one thing in the app that goes to the internet for
+// something other than the link the user pasted. The fetching is yt-dlp's own
+// (main process, src/ytdlpUpdate.js).
+
+async function updateYtdlp() {
+  if (busy) return;
+  let about = null;
+  try {
+    about = await window.lwclipper.aboutInfo();
+  } catch {
+    about = null;
+  }
+  const have = (about && about.ytdlp) || t('not found');
+  const go = await showChoice({
+    title: t('Update yt-dlp'),
+    message: [
+      t('yt-dlp is the part of LWClipper that reads video sites. When a download stops working, a newer yt-dlp usually fixes it.'),
+      t('This asks github.com for the newest version and downloads it into the app folder.'),
+      t('Installed: {version}', { version: have }),
+    ],
+    buttons: [
+      { id: 'cancel', label: t('Cancel'), left: true },
+      { id: 'update', label: t('Update'), primary: true },
+    ],
+    cancel: 'cancel',
+  });
+  if (go !== 'update' || busy) return;
+
+  // The question stays up while it runs, with Cancel as its one answer; the
+  // result settles it from here when the update is through first.
+  let done = false;
+  const running = window.lwclipper.updateYtdlp().then(
+    (r) => r, (e) => ({ ok: false, error: String((e && e.message) || e) }),
+  ).then((r) => {
+    done = true;
+    settleChoice('done');
+    return r;
+  });
+  const waited = await showChoice({
+    title: t('Update yt-dlp'),
+    message: t('Looking for a newer yt-dlp...'),
+    buttons: [{ id: 'cancel', label: t('Cancel') }],
+    cancel: 'cancel',
+  });
+  if (waited === 'cancel' && !done) window.lwclipper.cancelJob();
+  const result = await running;
+  if (result.cancelled) return;
+
+  const message = !result.ok
+    ? [t('yt-dlp could not be updated:'), result.error]
+    : result.updated
+      ? t('yt-dlp is now version {version}.', { version: result.version })
+      : t('yt-dlp {version} is already the newest.', { version: result.version });
+  await showChoice({
+    title: t('Update yt-dlp'),
+    message,
+    buttons: [{ id: 'ok', label: t('OK'), primary: true }],
+    cancel: 'ok',
+  });
+}

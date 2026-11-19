@@ -17,6 +17,34 @@ const localAppData = process.env.LOCALAPPDATA
   || path.join(app.getPath('home'), 'AppData', 'Local');
 app.setPath('userData', path.join(localAppData, 'LWClipper', 'data'));
 
+// V5.4. The log, beside the data and before anything else can go wrong: every
+// run of a tool and every error of either half of the app is a line in it
+// (src/log.js). The monitor only watches: what Electron does with an error
+// nobody caught is left as it was.
+const log = require('./src/log');
+log.init(path.join(localAppData, 'LWClipper', 'logs'));
+process.on('uncaughtExceptionMonitor', (err) => log.error('main', 'uncaught: ' + log.errorText(err)));
+process.on('unhandledRejection', (reason) => log.error('main', 'unhandled rejection: ' + log.errorText(reason)));
+require('./src/processRunner').setObserver(log.toolEnded);
+// Every window's own errors, the editor windows' as well: what the page
+// writes to its console as an error, and a page that went down.
+app.on('web-contents-created', (_event, contents) => {
+  contents.on('console-message', (event, level, message, line, sourceId) => {
+    // Electron 33 hands these over one by one; later ones as fields of the event.
+    const lvl = typeof level === 'number' ? level : ({ error: 3, warning: 2 })[event && event.level] || 0;
+    if (lvl < 3) return;
+    const text = typeof message === 'string' ? message : String((event && event.message) || '');
+    const from = typeof sourceId === 'string' ? sourceId : String((event && event.sourceId) || '');
+    const at = typeof line === 'number' ? line : Number(event && event.lineNumber) || 0;
+    log.error('window', text + (from ? '\n' + path.basename(from.split('?')[0]) + ':' + at : ''));
+  });
+  contents.on('render-process-gone', (_evt, details) => {
+    if (details && details.reason !== 'clean-exit') {
+      log.error('window', 'the page went down: ' + details.reason + ' (exit code ' + details.exitCode + ')');
+    }
+  });
+});
+
 const toolPaths = require('./src/toolPaths');
 const ytdlp = require('./src/ytdlp');
 const trimmer = require('./src/trimmer');
@@ -42,7 +70,8 @@ const {
 // follows, and for the same reason: two spellings of one fact is one of them
 // being wrong.
 const timelineModel = require('./src/timeline');
-const { ProcessCancelledError } = require('./src/processRunner');
+const { ProcessCancelledError, runProcess } = require('./src/processRunner');
+const ytdlpUpdate = require('./src/ytdlpUpdate');
 const launchArgs = require('./src/launchArgs');
 
 // V3.8.5. One app, however it was started. A .lwc double-clicked while the app
@@ -535,6 +564,37 @@ ipcMain.handle('app:about', async () => {
   return aboutCache;
 });
 
+// V5.4. Settings > Update yt-dlp. yt-dlp fetches its own newest release into
+// the app's folder (src/ytdlpUpdate.js); this only starts it, on a click, as
+// the one job running, so Cancel stops it like any other.
+ipcMain.handle('tools:updateYtdlp', async () => {
+  if (currentCancelToken) return { ok: false, error: t('Wait for the running job to finish first.') };
+  const token = startJob();
+  try {
+    const result = await ytdlpUpdate.update({
+      bundled: toolPaths.findBundledYtDlp(),
+      dir: toolPaths.ownToolsDir(),
+      appVersion: app.getVersion(),
+      run: (exe, args) => runProcess(exe, args, null, token),
+      versionOf: (exe) => toolVersion(exe, ['--version'], /^\s*(\S+)/),
+    });
+    // About reads the version once and keeps it.
+    aboutCache = null;
+    if (result.ok) {
+      log.info('main', 'yt-dlp ' + (result.updated
+        ? 'updated from ' + result.from + ' to ' + result.version
+        : 'is already the newest, ' + result.version));
+    } else {
+      log.error('main', 'yt-dlp could not be updated: ' + result.error);
+    }
+    return result;
+  } catch (e) {
+    return { ok: false, cancelled: e instanceof ProcessCancelledError, error: String(e.message || e) };
+  } finally {
+    currentCancelToken = null;
+  }
+});
+
 // V4.4. Whether the Export window may offer the GPU, from a real encode.
 ipcMain.handle('render:gpu', async () => ({
   available: await renderDevice.gpuAvailable(toolPaths.findFfmpeg()),
@@ -552,6 +612,9 @@ ipcMain.handle('shell:showInFolder', (_event, filePath) => {
 });
 
 app.whenReady().then(() => {
+  log.info('main', 'LWClipper ' + app.getVersion() + ' started (Electron ' + process.versions.electron
+    + ', Chromium ' + process.versions.chrome + ', ' + process.platform + ' ' + require('os').release()
+    + (app.isPackaged ? ', packaged' : ', from source') + ')');
   if (!firstInstance) return;
   // V4.0. No application menu at all. Electron installs a default one, and
   // hiding its bar left its keys working behind the app's back: Ctrl+R
@@ -700,6 +763,14 @@ ipcMain.handle('settings:set', (_event, patch) => {
 function appFilesDir() {
   return path.dirname(app.getPath('userData'));
 }
+
+// V5.4. Settings > Open log folder. Made first, so it opens on a first start
+// that has not written a line yet.
+ipcMain.handle('shell:openLogs', () => {
+  const dir = log.folder();
+  fs.mkdirSync(dir, { recursive: true });
+  return shell.openPath(dir);
+});
 
 ipcMain.handle('shell:openAppFiles', () => {
   const dir = appFilesDir();
@@ -861,7 +932,9 @@ ipcMain.handle('video:compose', async (_event, {
   try {
     const hasVideo = (layers || []).some((l) => l.type === 'video' && l.enabled && l.src);
     const format = containerFor(destination, !hasVideo);
-    const sources = composer.sourceSizes(layers || [], trimmer.probeMedia);
+    // V5.4. And what each video file's colours are to be read as.
+    const sources = composer.sourceColours(layers || [],
+      composer.sourceSizes(layers || [], trimmer.probeMedia), trimmer.probeMedia);
     // V4.4. The GPU when it was asked for (or Auto) and it opens here. An
     // audio file has no picture to encode, so it never asks the probe.
     const gpu = hasVideo && renderDevice.sanitizeChoice(device) !== 'cpu'

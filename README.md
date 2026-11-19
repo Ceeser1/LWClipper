@@ -57,6 +57,11 @@ in the app with no entry in `locales/`, and any entry no longer used:
 node scripts/check-locales.js
 ```
 
+Whether the preview and the exported file show the same picture is checked by
+starting the app and exporting for real, which `npm test` does not do. That is
+`dev/harness`, with its own README: run it after a change to how anything is
+drawn or exported, and after a new Electron or ffmpeg.
+
 ## Building
 
 ```
@@ -104,11 +109,14 @@ one while the other is open brings the open window forward.
   (text, bars) has its own folder, `renderer/app/gen/`.
 - `src/` is the work: `ytdlp.js` fetches, `trimmer.js` builds the ffmpeg argv,
   `backend.js` holds the format table every encoder decision reads from,
-  `waveform.js` renders the audio peaks, `toolPaths.js` locates everything.
+  `waveform.js` renders the audio peaks, `toolPaths.js` locates everything,
+  `log.js` writes the app's log and `ytdlpUpdate.js` keeps a newer yt-dlp.
 - Advanced editing adds its own half of `src/`, none of which touches the DOM so
   that all of it can be tested under plain `node --test`: `timeline.js` is the
   layer model, `geometry.js` places a layer in the output frame, `composer.js`
-  turns both into an ffmpeg filter graph, `history.js` is the undo stack,
+  turns both into an ffmpeg filter graph, `colorSpace.js` says what a file's
+  colours mean so the export reads them as the preview does, `history.js` is
+  the undo stack,
   `project.js` reads and writes `.lwc`, `autosave.js` decides which auto-saves
   to keep and which runs crashed, `filmstrip.js` extracts clip thumbnails
   and `progress.js` reads ffmpeg's own progress blocks for the bar and the ETA.
