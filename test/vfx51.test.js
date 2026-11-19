@@ -73,7 +73,9 @@ test('every later kind has its own settings first and numbers a keyframe holds',
     // A number among its own is a speed: it cannot blend, so no keyframe holds it.
     assert.ok(def.statics.every((s) => ['shape', 'check', 'choice', 'color', 'number', 'file', 'curve'].includes(s.type)), kind);
     assert.ok(def.statics.every((s) => s.type !== 'number' || ['speed', 'count', 'segments', 'copies', 'gap', 'decay'].includes(s.id)), kind);
-    assert.ok(def.keyed.every((s) => s.type === 'number' && (s.in === 'mask' || s.in === 'filter')), kind);
+    // V5.5.1. And Gravity's Enabled: a tick on a kind that moves the picture, gating the figures after it.
+    assert.ok(def.keyed.every((s) => (s.type === 'number' && (s.in === 'mask' || s.in === 'filter'))
+      || (s.type === 'check' && s.gate === true && MOVERS.includes(kind))), kind);
     // The soft edge last where the kind has one, and only with an area.
     const soft = def.keyed.findIndex((s) => s.id === 'soft');
     assert.ok(soft < 0 || (def.area && soft === def.keyed.length - 1), kind);

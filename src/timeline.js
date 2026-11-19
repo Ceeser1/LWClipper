@@ -837,8 +837,25 @@ const timelineModel = (() => {
       // Speed in degrees a second, clockwise, and how much it grips and
       // bounces from then on. They hold until the next keyframe and never
       // blend (`hold`): half way between two throws is not half a throw.
+      //
+      // V5.5.1. Enabled, a keyframe's first setting. The user: "keyframe
+      // Enable true = apply all settings", "keyframe2 Enable false = stop
+      // physics at this keyframe2", and unticked it "disables all settings
+      // below" (`gate`). A stopped picture holds where it is, in the air or
+      // on the floor, until a later keyframe with Enabled lets it go again.
+      //
+      // V5.5.1. Named Simple Physics in the window, the user: "its not only
+      // gravity". Its kind stays `gravity`, which saved projects name. And
+      // Gravity as a figure, "ranging from -3.00 to +3.00 G, default is 1
+      // G", kept in hundredths (`scale`) like every figure a whole number:
+      // 100 is the pull 5.3.0 had (gravity.js TUNING.gravity), below 0 the
+      // picture falls onto the top of the frame instead. Under it Air drag
+      // (velocity) and Air drag (rotation), 0 to 100% a second, how fast the
+      // sideways speed and the spin go down while it touches nothing.
       gravity: whole([pick('body', VFX_BODIES), tick('walls')],
-        [fig('velocity', -300, 300, 0), fig('spin', -1440, 1440, 0), fig('drag', 0, 100, 50), fig('bounce', 0, 100, 50)],
+        [{ id: 'on', type: 'check', def: true, gate: true }, { ...fig('gravity', -300, 300, 100), scale: 100 },
+          fig('airVelocity', 0, 100, 0), fig('airRotation', 0, 100, 0),
+          fig('velocity', -300, 300, 0), fig('spin', -1440, 1440, 0), fig('drag', 0, 100, 50), fig('bounce', 0, 100, 50)],
         () => true, { mix: false, moves: true, hold: true }),
     };
   })();
@@ -906,7 +923,9 @@ const timelineModel = (() => {
   }
 
   function vfxSettingValue(s, v) {
-    if (s.type === 'check') return bool(v);
+    // A check not written down is as it starts: a Gravity keyframe kept
+    // before it had Enabled (5.5.1) is on.
+    if (s.type === 'check') return v === undefined ? s.def === true : bool(v);
     // V5.1.3. One of the shapes the kind offers, which may be fewer than all.
     if (s.type === 'shape') return oneOf(v, s.options || SHAPE_KINDS, s.def);
     if (s.type === 'choice') return oneOf(v, s.options, s.def);
@@ -1034,16 +1053,26 @@ const timelineModel = (() => {
    * keyframe. `{ id, body, walls, throws }`, each throw a keyframe's moment
    * and figures as the window shows them. One to a track: a second is left
    * out, as a second Echo is.
+   *
+   * V5.5.1. A throw with `on` false stops the picture there. It starts at
+   * the first keyframe with Enabled, the ones before it doing nothing, and
+   * one with none enabled is no Gravity at all. `gravity` is in G, 1 the
+   * pull of 5.3.0.
    */
   function gravityOf(layer) {
     const v = vfxList(layer).find((o) => !!vfxKind(o.kind) && !!vfxKind(o.kind).moves && !o.disabled);
     const keys = vfxKeysFor(v);
     if (!v || !keys.length) return null;
+    const first = keys.findIndex((k) => k.on !== false);
+    if (first < 0) return null;
     return {
       id: v.id,
       body: v.body,
       walls: !!v.walls,
-      throws: keys.map((k) => ({ t: k.t, velocity: k.velocity, spin: k.spin, drag: k.drag, bounce: k.bounce })),
+      throws: keys.slice(first).map((k) => ({
+        t: k.t, on: k.on !== false, gravity: k.gravity / 100, airVelocity: k.airVelocity, airRotation: k.airRotation,
+        velocity: k.velocity, spin: k.spin, drag: k.drag, bounce: k.bounce,
+      })),
     };
   }
 
@@ -1106,6 +1135,9 @@ const timelineModel = (() => {
         out.box = { x: lerp(a.box.x, b.box.x), y: lerp(a.box.y, b.box.y), w: lerp(a.box.w, b.box.w), h: lerp(a.box.h, b.box.h) };
       } else if (id === 'rotation') {
         out.rotation = rotationOf((a.rotation || 0) + turnBetween(a.rotation, b.rotation) * u);
+      } else if (typeof a[id] === 'boolean') {
+        // V5.5.1. A tick cannot be half set: the earlier keyframe's holds.
+        out[id] = a[id];
       } else {
         out[id] = lerp(Number(a[id]) || 0, Number(b[id]) || 0);
       }

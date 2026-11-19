@@ -589,15 +589,18 @@ function acceptGenSettings(id, gen, changed, first, hook) {
  * the slider is being dragged. `settle()`, if given, runs when the slider is
  * let go. `show()` writes the value in force back into the box once it is
  * left, so a box left empty or past its range does not stay that way.
+ * V5.5.1. `parse(text)`, if given, reads what is typed instead, answering
+ * the value or null for text that is none yet; without it a whole number.
  */
-function bindNumberField({ slider, box, range, set, settle, show }) {
+function bindNumberField({ slider, box, range, set, settle, show, parse }) {
   slider.addEventListener('input', () => set(Number(slider.value), null, true));
   if (settle) slider.addEventListener('change', settle);
   box.addEventListener('input', () => {
     const text = box.value.trim();
     const [lo, hi] = range();
-    if (!(lo < 0 ? /^[-+]?\d+$/ : /^\d+$/).test(text)) return;
-    set(Math.min(hi, Math.max(lo, parseInt(text, 10))), box, false);
+    const n = parse ? parse(text) : ((lo < 0 ? /^[-+]?\d+$/ : /^\d+$/).test(text) ? parseInt(text, 10) : null);
+    if (n === null) return;
+    set(Math.min(hi, Math.max(lo, n)), box, false);
   });
   box.addEventListener('blur', show);
   box.addEventListener('keydown', (evt) => {

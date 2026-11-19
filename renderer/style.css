@@ -5015,6 +5015,12 @@ button.vfx-chip__x:hover:not(:disabled) {
   margin-bottom: 10px;
 }
 
+/* V5.5.1. A setting turned off by the tick above it (a Gravity's Enabled):
+   dimmed whole, as a disabled checkbox label is. */
+.vfx-field--off {
+  opacity: 0.4;
+}
+
 .vfx-field__caption {
   margin-bottom: 4px;
 }
@@ -5031,10 +5037,11 @@ button.vfx-chip__x:hover:not(:disabled) {
   min-width: 60px;
 }
 
-/* Every figure has the room of a unit after it, so the sliders are one length. */
+/* Every figure has the room of a unit after it, so the sliders are one length.
+   V5.5.1: room for the widest, Simple Physics' "%/s". */
 .vfx-field__line > .gen-field__unit {
   flex: none;
-  width: 16px;
+  width: 24px;
 }
 
 /* V5.1. A file: its name, cut short when it is long, and the button that picks one. */

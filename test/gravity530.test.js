@@ -63,7 +63,7 @@ test('Gravity is a kind under a heading of its own, Physics, and moves the pictu
   assert.deepEqual(def.statics.map((s) => [s.id, s.type]), [['body', 'choice'], ['walls', 'check']]);
   assert.deepEqual(def.statics[0].options, ['box', 'ball']);
   assert.deepEqual(def.keyed.map((s) => [s.id, s.min, s.max, s.def]),
-    [['velocity', -300, 300, 0], ['spin', -1440, 1440, 0], ['drag', 0, 100, 50], ['bounce', 0, 100, 50]]);
+    [['on', undefined, undefined, true], ['gravity', -300, 300, 100], ['airVelocity', 0, 100, 0], ['airRotation', 0, 100, 0], ['velocity', -300, 300, 0], ['spin', -1440, 1440, 0], ['drag', 0, 100, 50], ['bounce', 0, 100, 50]]);
   assert.deepEqual(T.VFX_GROUPS[T.VFX_GROUPS.length - 1], { id: 'physics', kinds: ['gravity'] });
   // No drawing of the picture ever has it on, with keyframes or without.
   assert.equal(T.vfxAt(T.vfxOf({ kind: 'gravity' }), 0).off, true);
@@ -82,8 +82,8 @@ test('it starts at its first keyframe: without one it does nothing, and each key
   assert.equal(got.body, 'ball');
   assert.equal(got.walls, true);
   assert.deepEqual(got.throws, [
-    { t: 1, velocity: 0, spin: 0, drag: 50, bounce: 50 },
-    { t: 3, velocity: 40, spin: -90, drag: 100, bounce: 0 },
+    { t: 1, on: true, gravity: 1, airVelocity: 0, airRotation: 0, velocity: 0, spin: 0, drag: 50, bounce: 50 },
+    { t: 3, on: true, gravity: 1, airVelocity: 0, airRotation: 0, velocity: 40, spin: -90, drag: 100, bounce: 0 },
   ]);
   // Switched off by its checkbox it is off, and a second one on a track is left out.
   assert.equal(T.gravityOf(vid({ vfx: [{ ...fall(), disabled: true }] })), null);
@@ -102,8 +102,8 @@ test('a keyframe\'s figures hold until the next one and never blend', () => {
   assert.equal(T.vfxKeyHeld(v, 2.9).id, 'a');
   assert.equal(T.vfxKeyHeld(v, 3).id, 'b');
   assert.equal(T.vfxKeyHeld(T.vfxOf({ kind: 'gravity' }), 1), null);
-  assert.deepEqual(T.vfxValuesAt(v, 2), { velocity: 0, spin: 0, drag: 0, bounce: 0 });
-  assert.deepEqual(T.vfxValuesAt(v, 5), { velocity: 100, spin: 200, drag: 100, bounce: 100 });
+  assert.deepEqual(T.vfxValuesAt(v, 2), { on: true, gravity: 100, airVelocity: 0, airRotation: 0, velocity: 0, spin: 0, drag: 0, bounce: 0 });
+  assert.deepEqual(T.vfxValuesAt(v, 5), { on: true, gravity: 100, airVelocity: 0, airRotation: 0, velocity: 100, spin: 200, drag: 100, bounce: 100 });
   // Another kind still blends.
   const bars = T.vfxOf({ kind: 'bars', keys: [{ t: 0, size: 0, mix: 0 }, { t: 2, size: 0.2, mix: 100 }] });
   assert.equal(T.vfxValuesAt(bars, 1).mix, 50);
@@ -471,14 +471,14 @@ test('Gravity has a row in every table and a name for everything, in both langua
     assert.equal(all[all.indexOf('echo') + 1], 'gravity', table);
   }
   const js = read('renderer', 'app', 'vfx.js');
-  assert.ok(js.includes("gravity: { name: () => t('Gravity'),"));
+  assert.ok(js.includes("gravity: { name: () => t('Simple Physics'),"));
   assert.ok(js.includes("  physics: () => t('Physics'),"));
   for (const line of ["  body: () => t('Collision Shape:'),", "  walls: () => t('Edge Collision'),", "  velocity: () => t('Velocity:'),",
     "  spin: () => t('Rotational Speed:'),", "  drag: () => t('Drag:'),", "  bounce: () => t('Bounciness:'),",
     "    box: () => t('Rectangle'),", "    ball: () => t('Circle'),"]) assert.ok(js.includes(line), line);
   for (const file of ['en.json', 'de.json']) {
     const words = JSON.parse(read('locales', file));
-    for (const key of ['Physics', 'Gravity', 'Collision Shape:', 'Rectangle', 'Circle', 'Edge Collision', 'Velocity:', 'Rotational Speed:',
+    for (const key of ['Physics', 'Simple Physics', 'Gravity:', 'Air drag (velocity):', 'Air drag (rotation):', 'Collision Shape:', 'Rectangle', 'Circle', 'Edge Collision', 'Velocity:', 'Rotational Speed:',
       'Drag:', 'Bounciness:']) assert.ok(words[key], file + ': ' + key);
   }
   // The window's script reads the fall from the same file the encoder does.

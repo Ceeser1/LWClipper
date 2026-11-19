@@ -31,6 +31,13 @@
 //   - Velocity is counted in the render frame: 100 is the frame's height a
 //     second.
 //   - Below 1 pixel a second it stands, and nothing more is worked out.
+//   - V5.5.1. A keyframe with Enabled ticked applies all its settings, one
+//     with it unticked stops the physics there.
+//   - V5.5.1. Gravity, -3 to 3 G: below 0 it falls onto the top of the
+//     frame by the same rules, at 0 it floats.
+//   - V5.5.1. Air drag (velocity) and Air drag (rotation), 0 to 100% a
+//     second: in the air the sideways speed and the spin go down in a
+//     straight line, at 100% to nothing within a second.
 //
 // "i just had kinda-fitting numbers in my mind. In practice they can be
 // really off": every figure is in TUNING below and nowhere else, to be set
@@ -41,7 +48,8 @@ const layerGravity = (() => {
   const model = typeof timelineModel !== 'undefined' ? timelineModel : require('./timeline');
 
   const TUNING = {
-    // How hard the frame pulls: frame heights a second, every second.
+    // How hard the frame pulls at 1 G: frame heights a second, every
+    // second. A keyframe's Gravity (V5.5.1) is so many times this.
     gravity: 2.4,
     // The share of its sideways speed a picture loses at a touch of a border.
     touchLoss: 0.05,
@@ -91,16 +99,24 @@ const layerGravity = (() => {
    * `rest`, the moment it stood for good, or null.
    *
    * `body` is `{ kind: 'ball', r }` or `{ kind: 'box', w, h }`. `throws` are
-   * `{ t, velocity, spin, drag, bounce }` in time order: pixels a second to
-   * the right, degrees a second clockwise, and two shares of 1. The first
-   * lets it go; a later one throws it again from where it is.
+   * `{ t, gravity, airVelocity, airRotation, velocity, spin, drag, bounce }`
+   * in time order: G (1 when not given), two shares a second (none when not
+   * given), pixels a second to the right, degrees a second clockwise, and
+   * two shares of 1. The first lets it go; a later one throws it again
+   * from where it is.
+   *
+   * V5.5.1. A throw with `on` false is a keyframe with Enabled unticked: it
+   * stops the picture where it is, in the air too, turned as it is, and it
+   * holds there until a later throw lets it go again. `rest` is then that
+   * moment.
    */
   function simulate(o) {
     const W = Number(o.W);
     const H = Number(o.H);
     const dt = TUNING.step;
-    const g = TUNING.gravity * H;
-    const hop = TUNING.hop * g;
+    // V5.5.1. Both by the Gravity of the throw in force.
+    let g = TUNING.gravity * H;
+    let hop = TUNING.hop * g;
     const edgeHop = TUNING.edgeHop * H;
     const lose = 1 - TUNING.touchLoss;
     const fade = Math.pow(lose, dt / TUNING.floorTouch);
@@ -131,6 +147,19 @@ const layerGravity = (() => {
     let drag = 0;
     let bounce = 0;
     let mode = AIR;
+    // V5.5.1. A Gravity below 0 pulls up. The frame is then worked out
+    // upside down, so everything below goes by the one floor: y counted from
+    // the top edge down is H less the frame's, and a turn is the other way
+    // round. `record` writes the frame's own figures.
+    let flipped = false;
+    // V5.5.1. Air drag, shares of a second, and the sideways speed and the
+    // spin it is counted from: what they were when it last left a border or
+    // was thrown (`fresh` until the first step after that).
+    let airMove = 0;
+    let airTurn = 0;
+    let fromMove = 0;
+    let fromTurn = 0;
+    let fresh = true;
     // A ball: the highest it has been since its last touch, and the height
     // its next jump is to reach. One height kept and multiplied, since
     // measuring every fall again drifted by 9% in half a minute.
@@ -169,8 +198,9 @@ const layerGravity = (() => {
     const record = (t) => {
       out.t.push(Math.round(t * 1e6) / 1e6);
       out.x.push(x);
-      out.y.push(y);
-      out.turn.push(quarters !== null ? quarters * 90 : turn0 + (a - a0) * 180 / Math.PI);
+      out.y.push(flipped ? H - y : y);
+      const q = flipped && quarters !== null ? 0 - quarters : quarters;
+      out.turn.push(q !== null ? q * 90 : turn0 + ((flipped ? -a : a) - a0) * 180 / Math.PI);
     };
     const energy = () => (vx * vx + vy * vy + I * av * av) / 2 + g * (H - y);
 
@@ -186,15 +216,66 @@ const layerGravity = (() => {
       rest = t;
     };
 
+    // V5.5.1. Stopped by a keyframe with Enabled unticked, at `t`, the
+    // moment last written down. Laid on even pixels both ways for the same
+    // reason as a picture that stands, less than a pixel each way, and the
+    // moment written down says so.
+    const hold = (t) => {
+      x = 2 * Math.round((x - layX) / 2) + layX;
+      const shown = 2 * Math.round(((flipped ? H - y : y) - layY) / 2) + layY;
+      y = flipped ? H - shown : shown;
+      out.x[out.x.length - 1] = x;
+      out.y[out.y.length - 1] = shown;
+      vx = 0;
+      vy = 0;
+      av = 0;
+      mode = REST;
+      rest = t;
+    };
+
+    // V5.5.1. Air drag. The user: "how much rotation or velocity slow down
+    // while not touching anything", "0% changes nothing ever, 100% per
+    // second reduces all rotation or velocity within 1s". So in the air
+    // the sideways speed and the spin go down in a straight line, by that
+    // share a second of what they were when it left the last border it
+    // touched, to nothing and no further: 50% leaves half after a second
+    // and nothing after two. The fall is not slowed, so Bounciness stays a
+    // share of the height. `touched`: the step just made touched a border.
+    const air = (touched, t) => {
+      if (touched || mode !== AIR) {
+        fresh = true;
+        return;
+      }
+      if (fresh) {
+        fromMove = Math.abs(vx);
+        fromTurn = Math.abs(av);
+        fresh = false;
+      }
+      if (airMove > 0) {
+        const by = airMove * fromMove * dt;
+        vx = Math.abs(vx) <= by ? 0 : vx - Math.sign(vx) * by;
+      }
+      if (airTurn > 0) {
+        const by = airTurn * fromTurn * dt;
+        av = Math.abs(av) <= by ? 0 : av - Math.sign(av) * by;
+      }
+      // At 0 G a picture that has come to a stop in the air stands, as it
+      // would on the floor, and nothing more is worked out.
+      if (g === 0 && inFrame() && Math.abs(vx) < TUNING.stop && Math.abs(vy) < TUNING.stop
+        && Math.abs(av) * R < TUNING.stop) stand(t);
+    };
+
     // The edges, for something `half` wide either side of its middle that
-    // does not turn against them: back with 5% less.
+    // does not turn against them: back with 5% less. True when one was hit.
     const edges = (half, spins) => {
-      if (!walls) return;
+      if (!walls) return false;
       if ((x - half < left && vx <= 0) || (x + half > right && vx >= 0)) {
         x = x - half < left ? left + half : right - half;
         vx = -vx * lose;
         if (spins) av = -av;
+        return true;
       }
+      return false;
     };
 
     function stepBall(t) {
@@ -214,15 +295,15 @@ const layerGravity = (() => {
         a += av * dt;
         edges(R, true);
         if (inFrame() && Math.abs(vx) < TUNING.stop && Math.abs(av) * R < TUNING.stop) stand(t);
-        return;
+        return true;
       }
       x += vx * dt;
       y += vy * dt + (g * dt * dt) / 2;
       vy += g * dt;
       a += av * dt;
       apex = Math.min(apex, y);
-      edges(R, true);
-      if (y + R < floor || vy <= 0) return;
+      const hit = edges(R, true);
+      if (y + R < floor || vy <= 0) return hit;
       // A touch of the floor.
       const drop = Math.max(0, floor - R - apex);
       y = floor - R;
@@ -240,6 +321,7 @@ const layerGravity = (() => {
         vy = 0;
         mode = FLOOR;
       }
+      return true;
     }
 
     const CORNERS = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
@@ -252,7 +334,7 @@ const layerGravity = (() => {
         y = floor - lyingHigh;
         edges(lying, false);
         if (inFrame() && Math.abs(vx) < TUNING.stop) stand(t);
-        return;
+        return true;
       }
       x += vx * dt;
       y += vy * dt + (g * dt * dt) / 2;
@@ -277,7 +359,7 @@ const layerGravity = (() => {
           else if (x + rx > right) list.push({ rx, ry, nx: -1, ny: 0, depth: x + rx - right });
         }
       }
-      if (!list.length) return;
+      if (!list.length) return false;
       // What a touch of the floor does to the speed sideways: a landing is
       // one touch, with the corner's push by the spin, and anything slower
       // is the touch that never ends.
@@ -371,7 +453,7 @@ const layerGravity = (() => {
       }
       if (down > 0) y -= down;
       x += side;
-      if (!onFloor || landing) return;
+      if (!onFloor || landing) return true;
       const speed = Math.abs(vy) + Math.abs(av) * R;
       if (speed < TUNING.calm * H) {
         const k = Math.exp(-TUNING.calmRate * dt);
@@ -399,13 +481,16 @@ const layerGravity = (() => {
         // On its side its top edge may fall on an odd pixel, which the
         // encoder would lay one higher, a line of nothing under it. It lies
         // one pixel lower instead, in the preview and in the file alike.
-        const top = H - lyingHigh - layY;
+        // Upside down it lies against the top edge: its middle is
+        // lyingHigh below it.
+        const top = flipped ? lyingHigh - layY : H - lyingHigh - layY;
         if (Number.isInteger(top) && Math.abs(top) % 2 === 1) lyingHigh -= 1;
         y = floor - lyingHigh;
         vy = 0;
         av = 0;
         mode = FLOOR;
       }
+      return true;
     }
 
     const step = ball ? stepBall : stepBox;
@@ -415,12 +500,41 @@ const layerGravity = (() => {
     for (let i = 0; i < total; i += 1) {
       const t = from + i * dt;
       let thrown = false;
+      let stopped = false;
       while (next < throws.length && throws[next].t <= t + 1e-9) {
         const k = throws[next];
+        // Of two in one step the later counts.
+        if (k.on === false) {
+          next += 1;
+          stopped = true;
+          thrown = false;
+          continue;
+        }
+        stopped = false;
+        // V5.5.1. Its Gravity, in G: below 0 the frame is turned upside
+        // down from here (`flipped`), as it is, moving as it moves, and
+        // the border it falls onto is the top one. At 0 nothing pulls and
+        // it keeps the way it had.
+        const G = Number.isFinite(Number(k.gravity)) ? Number(k.gravity) : 1;
+        const turnUp = G < 0 ? true : (G > 0 ? false : flipped);
+        if (turnUp !== flipped) {
+          y = H - y;
+          vy = -vy;
+          a = -a;
+          av = -av;
+          if (quarters !== null) quarters = 0 - quarters;
+          flipped = turnUp;
+          floor = H;
+        }
+        g = TUNING.gravity * H * Math.abs(G);
+        hop = TUNING.hop * g;
         vx = k.velocity;
-        av = k.spin * Math.PI / 180;
+        av = (flipped ? -1 : 1) * k.spin * Math.PI / 180;
         drag = Math.min(1, Math.max(0, k.drag));
         bounce = Math.min(1, Math.max(0, k.bounce));
+        airMove = Math.min(1, Math.max(0, Number(k.airVelocity) || 0));
+        airTurn = Math.min(1, Math.max(0, Number(k.airRotation) || 0));
+        fresh = true;
         promised = null;
         apex = y;
         next += 1;
@@ -440,12 +554,13 @@ const layerGravity = (() => {
         }
         cap = energy();
       }
+      if (stopped && mode !== REST) hold(t);
       if (mode === REST) {
         if (next >= throws.length) break;
         continue;
       }
       closeIn();
-      step(from + (i + 1) * dt);
+      air(step(from + (i + 1) * dt), from + (i + 1) * dt);
       record(from + (i + 1) * dt);
     }
     out.rest = rest;
@@ -528,6 +643,10 @@ const layerGravity = (() => {
       until: layer.duration,
       throws: spec.throws.map((k) => ({
         t: k.t,
+        on: k.on !== false,
+        gravity: k.gravity,
+        airVelocity: (k.airVelocity || 0) / 100,
+        airRotation: (k.airRotation || 0) / 100,
         velocity: (k.velocity / 100) * H,
         spin: k.spin,
         drag: k.drag / 100,

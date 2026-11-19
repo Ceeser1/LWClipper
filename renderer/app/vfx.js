@@ -158,7 +158,9 @@ const VFX_UI = {
   // V5.5.1.
   echo: { name: () => t('Echo'), about: () => t('What moves leaves fading copies of itself behind. Works on the track\'s picture before its other VFX, one Echo to a track') },
   // Gravity (5.3.0).
-  gravity: { name: () => t('Gravity'), about: () => t('Lets the picture fall to the bottom of the frame, bounce, turn and roll. It starts at its first keyframe: double-click the keyframe bar where the picture should let go. Seen in the main preview after Apply, one Gravity to a track') },
+  // V5.5.1. The user: "Gravity" is "a bad name for that since its not only
+  // gravity, rather call it "Simple Physics"". Its kind is still `gravity`.
+  gravity: { name: () => t('Simple Physics'), about: () => t('Lets the picture fall to the bottom of the frame, bounce, turn and roll, or to the top with a Gravity below 0. It starts at its first keyframe: double-click the keyframe bar where the picture should let go. A keyframe with Enabled unticked stops it where it is. One Simple Physics to a track') },
 };
 
 // V5.1. The headings the menu puts the kinds under (timeline.js VFX_GROUPS).
@@ -255,6 +257,11 @@ const VFX_SETTING_LABELS = {
   gap: () => t('Frames Apart:'),
   decay: () => t('Echo Strength:'),
   // Gravity (5.3.0).
+  on: () => t('Enabled'),
+  // V5.5.1.
+  gravity: () => t('Gravity:'),
+  airVelocity: () => t('Air drag (velocity):'),
+  airRotation: () => t('Air drag (rotation):'),
   body: () => t('Collision Shape:'),
   walls: () => t('Edge Collision'),
   velocity: () => t('Velocity:'),
@@ -280,6 +287,9 @@ const VFX_SETTING_UNITS = {
   outWhite: '%',
   duration: '%',
   decay: '%',
+  gravity: 'G',
+  airVelocity: '%/s',
+  airRotation: '%/s',
   velocity: '%',
   spin: '°',
   drag: '%',
@@ -373,6 +383,8 @@ let vfxSettleUntil = 0;
 // when another VFX is chosen, and the fields it holds, by setting.
 let vfxPanelFor = '';
 let vfxFields = [];
+// V5.5.1. The number box being typed in while its change is made, or null.
+let vfxTypedIn = null;
 
 // ---- between the layer's units and the window's ----
 
@@ -469,14 +481,28 @@ function vfxCurrent() {
  * they glide with it.
  */
 function vfxShown(v, whole = true) {
-  const now = timelineModel.vfxValuesAt(v, vfxLocalT());
-  if (!whole) return now;
+  const at = vfxLocalT();
+  // V5.5.1. Where a keyframe's figures hold (Gravity), the one shown is the
+  // one an edit goes to (vfxKeyEditing): the one within half a frame of the
+  // playhead first. The playhead put on a keyframe stands a hair before its
+  // moment, which is kept to the millisecond, so the one before it was
+  // shown while the edits went to it.
+  const near = timelineModel.vfxKind(v.kind).hold ? timelineModel.vfxKeyNear(v, at, keyframeReach()) : null;
+  const now = near ? timelineModel.vfxValuesAt(v, near.t) : timelineModel.vfxValuesAt(v, at);
+  return whole ? vfxWhole(now) : now;
+}
+
+/**
+ * Keyed values held to whole pixels, degrees and steps. V5.5.1: a tick (a
+ * Gravity's Enabled) stays true or false, which rounding made 1 and 0.
+ */
+function vfxWhole(now) {
   const out = {};
   for (const [id, value] of Object.entries(now)) {
     if (id === 'box') {
       out.box = { x: Math.round(value.x), y: Math.round(value.y), w: Math.max(1, Math.round(value.w)), h: Math.max(1, Math.round(value.h)) };
     } else {
-      out[id] = Math.round(value) || 0;
+      out[id] = typeof value === 'boolean' ? value : Math.round(value) || 0;
     }
   }
   return out;
@@ -1130,6 +1156,14 @@ function showVfxDraft() {
   vfxRemoveAllBtn.disabled = !vfxDraft.length;
   buildVfxSettings();
   showVfxSettings(null);
+  // V5.5.1. From the picture to the render frame or back (vfxShowsFrame),
+  // the stage is fitted again: a zoom or a pan is in the other's pixels.
+  const framed = vfxShowsFrame();
+  if (framed !== vfxStageFramed) {
+    vfxStageFramed = framed;
+    resetStageView(vfxStage);
+    paintVfxStage();
+  }
   placeVfxBoxes();
   // V5.1.1. The line of VFX and the settings in the centre take what room
   // they need, so the picture's cell can have grown or shrunk.
@@ -1170,7 +1204,13 @@ function buildVfxSettings() {
     if (!settings.length) return null;
     const box = make('div', 'vfx-group ' + cls);
     box.appendChild(make('div', 'vfx-group__title', title));
-    for (const s of settings) box.appendChild(vfxField(doc, make, s, label(s), keyed));
+    for (const s of settings) {
+      const before = vfxFields.length;
+      const row = vfxField(doc, make, s, label(s), keyed);
+      // V5.5.1. Each field knows its row, which a gate turns off.
+      for (const f of vfxFields.slice(before)) f.row = row;
+      box.appendChild(row);
+    }
     return box;
   };
   // The user: "show static settings as slightly greenish (like 222, 255,
@@ -1313,7 +1353,12 @@ function vfxField(doc, make, s, text, keyed) {
   slider.step = '1';
   const box = make('input', 'gen-num');
   box.type = 'text';
-  box.inputMode = 'numeric';
+  // V5.5.1. A figure kept in hundredths (`scale`, a Simple Physics' Gravity)
+  // is shown and typed as what it is: 1.00 for 100, a comma taken as a point.
+  const scale = s.scale || 1;
+  const places = String(scale).length - 1;
+  const shownText = (value) => (scale === 1 ? String(value) : (value / scale).toFixed(places));
+  box.inputMode = scale === 1 ? 'numeric' : 'decimal';
   box.maxLength = 5;
   line.append(slider, box);
   // A unit's room after every figure, named or not, so the sliders line up.
@@ -1327,15 +1372,29 @@ function vfxField(doc, make, s, text, keyed) {
       slider.min = String(lo);
       slider.max = String(hi);
       slider.value = String(value);
-      if (except !== box) box.value = String(value);
+      if (except !== box) box.value = shownText(value);
     },
   };
   bindNumberField({
     slider,
     box,
     range: () => vfxSettingRange(s),
+    parse: scale === 1 ? undefined : (typed) => {
+      const m = /^([-+]?)(\d*)(?:[.,](\d*))?$/.exec(typed);
+      if (!m || (!m[2] && !m[3])) return null;
+      const n = Number((m[1] === '-' ? '-' : '') + (m[2] || '0') + '.' + (m[3] || '0'));
+      return Number.isFinite(n) ? Math.round(n * scale) : null;
+    },
     set: (n, except) => {
-      change(n);
+      // V5.5.1. The change shows every setting again (setVfx), and the box
+      // typed in is left as typed meanwhile: "1." shown as "1.00" at once
+      // left no room for the "5" of 1.5.
+      vfxTypedIn = except;
+      try {
+        change(n);
+      } finally {
+        vfxTypedIn = null;
+      }
       showVfxSettings(except);
     },
     show: () => showVfxSettings(null),
@@ -1668,7 +1727,18 @@ function showVfxSettings(except) {
   const v = vfxCurrent();
   if (!v || !vfxFields.length) return;
   const now = vfxShown(v);
-  for (const f of vfxFields) f.show(f.keyed ? now[f.s.id] : v[f.s.id], except);
+  // V5.5.1. A keyed tick that is a gate, a Gravity's Enabled, turns off the
+  // keyed settings after it while it is unticked: the user's "disables all
+  // settings below when unticked". They keep their figures meanwhile.
+  let gated = false;
+  for (const f of vfxFields) {
+    const value = f.keyed ? now[f.s.id] : v[f.s.id];
+    f.show(value, except || vfxTypedIn);
+    if (!f.keyed || !f.row) continue;
+    f.row.classList.toggle('vfx-field--off', gated);
+    for (const input of f.row.querySelectorAll('input, button, select')) input.disabled = gated;
+    if (f.s.gate && value === false) gated = true;
+  }
 }
 
 /** The chosen VFX put back into the draft, changed. */
@@ -1771,6 +1841,11 @@ function paintVfxStage() {
   const fy = r.top * dpr;
   const fw = r.width * dpr;
   const fh = r.height * dpr;
+  if (vfxShowsFrame()) {
+    paintVfxFrame(ctx, fx, fy, fw, fh);
+    dimOutsideFrame(ctx, vfxCanvas, vfxStage);
+    return;
+  }
   ctx.save();
   ctx.translate(fx, fy);
   ctx.fillStyle = checkerPattern(ctx, dpr);
@@ -1790,6 +1865,52 @@ function paintVfxStage() {
     ctx.drawImage(pic.el, ...pic.from, fx, fy, fw, fh);
   }
   dimOutsideFrame(ctx, vfxCanvas, vfxStage);
+}
+
+/**
+ * V5.5.1. Whether the stage is the render frame and not the source picture:
+ * while the chosen VFX moves the picture (Gravity). The user: it "doesnt
+ * show anything in the preview except the original image", "instead it
+ * should show the current render preview of that image/track as you slide
+ * along the keyframe ruler".
+ */
+function vfxShowsFrame() {
+  const v = vfxCurrent();
+  const def = v ? timelineModel.vfxKind(v.kind) : null;
+  return !!def && !!def.moves;
+}
+
+// The track with the draft's VFX, kept while neither changes: the main
+// preview's drawing keeps a fall worked out by the layer object it is for.
+let vfxFramed = null;
+// Whether the stage showed the render frame when last laid out.
+let vfxStageFramed = false;
+
+/**
+ * The render frame at the playhead with this track in it, as the main
+ * preview draws it (compositor.js drawLayerInto): placed, turned and falling,
+ * with its crop, mask, fade and the draft's other VFX. Only this track, over
+ * the black the render starts from. Held to VFX_STAGE_MAX like the picture.
+ */
+function paintVfxFrame(ctx, fx, fy, fw, fh) {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(fx, fy, fw, fh);
+  const live = timelineModel.layerById(layers, vfxLayerId);
+  if (!live || !vfxFrameSource()) return;
+  if (!vfxFramed || vfxFramed.live !== live || vfxFramed.draft !== vfxDraft) {
+    vfxFramed = { live, draft: vfxDraft, layer: { ...live, vfx: vfxListOfDraft(vfxDraft) } };
+  }
+  const shown = vfxFramed.layer;
+  const at = live.start + vfxLocalT();
+  const alpha = timelineModel.layerAlphaAt(shown, at);
+  if (!(alpha > 0)) return;
+  const k = Math.min(1, VFX_STAGE_MAX / Math.max(fw, fh));
+  ctx.save();
+  ctx.translate(fx, fy);
+  ctx.scale(1 / k, 1 / k);
+  ctx.globalAlpha = alpha;
+  drawLayerInto(ctx, { width: fw * k, height: fh * k }, shown, undefined, undefined, at);
+  ctx.restore();
 }
 
 /** A box on the stage: an area's, turned as the area is. */
@@ -1842,8 +1963,11 @@ function placeVfxBoxes() {
   if (hasArea(chosen)) placeVfxNode(vfxBoxEl, vfxShown(chosen, false), r);
   if (hasPoint(chosen)) placeVfxPoint(vfxPointEl, vfxShown(chosen, false), r);
   const doc = vfxOthers.ownerDocument;
+  // V5.5.1. Over the render frame (vfxShowsFrame) the others' areas, which
+  // are on the source picture, would be in the wrong place.
+  const framed = vfxShowsFrame();
   vfxOthers.replaceChildren(...vfxDraft.map((v, i) => {
-    if (i === vfxSel || !(hasArea(v) || hasPoint(v))) return null;
+    if (framed || i === vfxSel || !(hasArea(v) || hasPoint(v))) return null;
     const node = doc.createElement('div');
     node.dataset.index = String(i);
     node.title = vfxLabel(i);
@@ -1885,7 +2009,8 @@ bindStageView(vfxStage, {
     placeVfxBoxes();
     paintVfxStage();
   },
-  size: () => vfxPic,
+  // V5.5.1. The render frame's pixels while it is the frame that is shown.
+  size: () => (vfxShowsFrame() ? projectFrame() : vfxPic),
 });
 
 // A press on an area while the project plays stops it first: a VFX with
@@ -1977,13 +2102,7 @@ const vfxStrip = makeKeyStrip(vfxKeys, vfxKeysReadout, vfxKeysCanvas, {
     const starts = !!timelineModel.vfxKind(v.kind).hold;
     if (!v.keys && at > reach && !starts) next = timelineModel.putVfxKey(next, { ...v, id: newKeyframeId(), t: 0 });
     const there = timelineModel.vfxValuesAt(next, at);
-    const whole = {};
-    for (const [id, value] of Object.entries(there)) {
-      whole[id] = id === 'box'
-        ? { x: Math.round(value.x), y: Math.round(value.y), w: Math.max(1, Math.round(value.w)), h: Math.max(1, Math.round(value.h)) }
-        : Math.round(value) || 0;
-    }
-    next = timelineModel.putVfxKey(next, { ...whole, id: newKeyframeId(), t: at });
+    next = timelineModel.putVfxKey(next, { ...vfxWhole(there), id: newKeyframeId(), t: at });
     setVfx(next);
     seekVfxClip(at);
   },
