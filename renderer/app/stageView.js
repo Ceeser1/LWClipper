@@ -65,7 +65,7 @@ function stageFrameRect(stage) {
   const h = stage.clientHeight;
   const frame = stageFrameSize(stage);
   const v = stageViews.get(stage);
-  const pad = v ? STAGE_FIT_PAD : 0;
+  const pad = v ? v.pad : 0;
   const fit = Math.max(1e-6, Math.min((w - 2 * pad) / frame.width, (h - 2 * pad) / frame.height));
   if (!v) {
     // The letterbox the generated media stages always had, in whole pixels.
@@ -145,15 +145,16 @@ function showStageZoom(stage) {
  * Zoom and pan on `stage`. `open()` says whether it is live, `empty(evt)`
  * whether a press is on nothing a left drag would otherwise move, and
  * `redraw(quick)` puts everything on the stage where the view now says;
- * `quick` is true while the view is still moving.
+ * `quick` is true while the view is still moving. `pad` is the room round the
+ * fitted frame, for a stage that needs more than a corner grip's.
  */
-function bindStageView(stage, { open, empty, redraw, size }) {
+function bindStageView(stage, { open, empty, redraw, size, pad = STAGE_FIT_PAD }) {
   const label = document.createElement('div');
   label.className = 'stage-zoom';
   label.dataset.noTranslate = '';
   label.hidden = true;
   stage.appendChild(label);
-  stageViews.set(stage, { zoom: 1, cx: null, cy: null, label, size: size || null });
+  stageViews.set(stage, { zoom: 1, cx: null, cy: null, label, size: size || null, pad });
   stage.dataset.zoomable = 'true';
 
   // The full paint once the wheel has been still for a moment, since a text

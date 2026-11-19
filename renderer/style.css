@@ -2822,9 +2822,17 @@ body.lane-lifting * {
    where no layer covers it. */
 .place-panel {
   display: flex;
-  justify-content: center;
+  /* V5.5.2. A column, for the note under the stage. */
+  flex-direction: column;
+  align-items: center;
   /* V5.1.5. The readout and the Scale slider are over the stage now. */
   margin-top: 10px;
+}
+
+.place-note {
+  margin-top: 6px;
+  color: #a0a0a8;
+  font-size: 12px;
 }
 
 .place-stage {
@@ -5223,7 +5231,8 @@ body.popout-body > .modal__panel--vfx > .crop-actions {
 }
 
 /* V3.4. The Render Position box takes no presses itself, the stage hit tests
-   the picture, but its turning circles do. */
+   the picture, but its corners and its turning dot do. */
+.place-corner,
 .place-rotor {
   pointer-events: auto;
 }

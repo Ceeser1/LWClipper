@@ -623,7 +623,7 @@
         <div class="info-tip__pop">
           <div id="cropHint" class="hint-label">Hold Shift to move bars mirrored, Ctrl on a corner to move it diagonally, both to keep the shape</div>
           <div id="cropPanHint" class="hint-label">Click or Hold arrows to pan precise</div>
-          <div id="placeHint" class="hint-label" hidden>Drag the picture to place it, and the scale to resize it</div>
+          <div id="placeHint" class="hint-label" hidden>Drag the picture to place it, a corner or the scale to resize it and the dot above it to turn it</div>
           <div id="placeZoomHint" class="hint-label" hidden>Scroll to zoom, drag empty space or with the middle button to pan, double-click empty space to fit the frame</div>
           <div id="maskHint" class="hint-label" hidden>Drag the sides to stretch the mask, a corner to scale it and inside it to move it, hold Shift to keep its centre</div>
           <div id="maskZoomHint" class="hint-label" hidden>Scroll to zoom, drag empty space or with the middle button to pan, double-click empty space to fit the frame</div>
@@ -715,14 +715,19 @@
         <div id="placeStage" class="place-stage">
           <canvas id="placeCanvas" class="place-canvas"></canvas>
           <div id="placeBox" class="place-box">
-            <!-- V3.4. Turning circles, the text box's own. -->
-            <div class="crop-corner crop-corner--tl text-rotor place-rotor" data-corner="tl"></div>
-            <div class="crop-corner crop-corner--tr text-rotor place-rotor" data-corner="tr"></div>
-            <div class="crop-corner crop-corner--bl text-rotor place-rotor" data-corner="bl"></div>
-            <div class="crop-corner crop-corner--br text-rotor place-rotor" data-corner="br"></div>
+            <!-- V5.5.2. The corners size the picture, and the dot above the
+                 top side turns it, as on a shape or a text box. Inside the
+                 box, so the dot turns with it. -->
+            <div class="crop-corner crop-corner--tl place-corner" data-corner="tl"></div>
+            <div class="crop-corner crop-corner--tr place-corner" data-corner="tr"></div>
+            <div class="crop-corner crop-corner--bl place-corner" data-corner="bl"></div>
+            <div class="crop-corner crop-corner--br place-corner" data-corner="br"></div>
+            <div class="shape-rotor-line"></div>
+            <div class="shape-rotor text-rotor place-rotor"></div>
           </div>
           <div id="placeAngle" class="text-angle" data-no-translate hidden></div>
         </div>
+        <div class="place-note">Hold shift while dragging to break the center point and scale across your axis.</div>
       </div>
       <!-- V3.6. Edit Mask: the shapes over the picture the mask belongs to,
            then Invert and Soft Edge and what a ring or a star has, then the

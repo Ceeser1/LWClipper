@@ -6,8 +6,10 @@ The most important changes since 1.5.5, newest first.
 
 ## 5.x: VFX (2026-11-17, 2026-11-18)
 
-Current version: 5.2.0.
+Current version: 5.2.1.
 
+- **Render Position corners (5.2.1).** The four corner circles now size the picture instead of turning it. The picture always keeps the aspect ratio of its Video Frame and grows mirrored about its middle. With Shift held the corner opposite stays where it is instead, and a note under the preview says so. A picture stuck to one of the nine position circles stays stuck and grows away from it: on the left side its left edge stays on the frame's left edge, in a corner both edges stay, and on the center circle it grows evenly all round. The **Scale** slider follows.
+  - Moved or sized by a corner, the picture's sides catch on the borders of the render frame within 4 pixels on screen, and a picture coming that near the frame's width or height takes exactly that size, so a track of the same aspect ratio fills the frame to the pixel. Dragging on pulls it free. The picture is turned with the dot above its top side, as a shape or a text box is.
 - **Nine more VFX, 66 in all (5.2.0).** Corner Pin, Polar Coordinates, Vibrance, Halftone, Curves, Chroma Key, Luma Key, Strobe and Echo, with two new headings in the VFX window, **Keying** and **Time**. Each is described below.
 
 - **Echo (5.2.0).** A second VFX under **Time**.

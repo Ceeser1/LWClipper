@@ -1138,6 +1138,163 @@ const layerGeometry = (() => {
     return textTurn(start + (a1 - a0) * 180 / Math.PI);
   }
 
+  // ---- V5.5.2. A corner of the Render Position box ----
+  //
+  // `rect` is the picture when the drag began, `corner` one of tl, tr, bl, br
+  // and `deg` how far the picture is turned about its middle. The picture only
+  // ever changes by one share on both axes, so it keeps its shape.
+
+  /** An offset in the picture's own axes, as it lies on the frame. */
+  function turnOffset(x, y, deg) {
+    const a = finite(deg, 0) * Math.PI / 180;
+    return { x: x * Math.cos(a) - y * Math.sin(a), y: x * Math.sin(a) + y * Math.cos(a) };
+  }
+
+  const cornerSides = (corner) => ({
+    sx: String(corner).includes('l') ? -1 : 1,
+    sy: String(corner).includes('t') ? -1 : 1,
+  });
+
+  const rectMiddle = (rect) => ({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
+
+  /** Where a corner of the picture is on the frame, turned as it is. */
+  function placeCornerPoint(rect, corner, deg) {
+    const { sx, sy } = cornerSides(corner);
+    const mid = rectMiddle(rect);
+    const out = turnOffset(sx * rect.width / 2, sy * rect.height / 2, deg);
+    return { x: mid.x + out.x, y: mid.y + out.y };
+  }
+
+  /**
+   * How big the picture is to be, as a share of `rect`, with this corner wanted
+   * at `point`: the pointer's reach measured along the picture's diagonal, from
+   * the opposite corner, or from the middle when `aboutMiddle`. Never below 0,
+   * for a pointer taken past the point that stays.
+   */
+  function placeCornerShare(rect, corner, deg, point, aboutMiddle) {
+    const { sx, sy } = cornerSides(corner);
+    const held = aboutMiddle ? rectMiddle(rect) : placeCornerPoint(rect, oppositeCorner(corner), deg);
+    const reach = turnOffset(point.x - held.x, point.y - held.y, -finite(deg, 0));
+    const k = aboutMiddle ? 0.5 : 1;
+    const dx = sx * rect.width * k;
+    const dy = sy * rect.height * k;
+    return Math.max(0, (reach.x * dx + reach.y * dy) / (dx * dx + dy * dy));
+  }
+
+  /**
+   * The share for a picture stuck to a ring at `ax`, `ay`, which grows away
+   * from the point of the box round it that lies on that ring. The corner runs
+   * along the line from that point, so the reach is measured along that line.
+   * A corner standing on the point itself has no such line and goes by its
+   * reach from the middle, so dragging it outwards still grows the picture.
+   */
+  function placeAnchorShare(rect, corner, deg, point, ax, ay) {
+    const held = placeHeldPoint(rect, corner, deg, { ax, ay }, false);
+    const at = placeCornerPoint(rect, corner, deg);
+    const vx = at.x - held.x;
+    const vy = at.y - held.y;
+    if (Math.hypot(vx, vy) < Math.hypot(rect.width, rect.height) / 8) {
+      return placeCornerShare(rect, corner, deg, point, true);
+    }
+    return Math.max(0, ((point.x - held.x) * vx + (point.y - held.y) * vy) / (vx * vx + vy * vy));
+  }
+
+  /**
+   * The point that stays while a corner sizes the picture: the point of the box
+   * round it on the `ring` it is stuck to, the opposite corner when the middle
+   * is `broken` by Shift, and otherwise the middle.
+   */
+  function placeHeldPoint(rect, corner, deg, ring, broken) {
+    const mid = rectMiddle(rect);
+    if (ring) {
+      const room = turnedSize(rect.width, rect.height, deg);
+      return { x: mid.x + (ring.ax - 0.5) * room.width, y: mid.y + (ring.ay - 0.5) * room.height };
+    }
+    return broken ? placeCornerPoint(rect, oppositeCorner(corner), deg) : mid;
+  }
+
+  /**
+   * Where a picture's near side goes when one of its sides is within `reach` of
+   * a border of the frame, either border, the nearest one winning. `near` is the
+   * side towards 0, and `span` the frame's length on this axis.
+   */
+  function placeSnapSide(near, size, span, reach) {
+    let move = null;
+    for (const side of [near, near + size]) {
+      for (const border of [0, span]) {
+        const d = border - side;
+        if (Math.abs(d) <= reach && (move === null || Math.abs(d) < Math.abs(move))) move = d;
+      }
+    }
+    return near + (move || 0);
+  }
+
+  /**
+   * The scale in percent a picture being sized lands on, or null when nothing
+   * is within `reach`. `rect` is the picture when the drag began, `held` the
+   * point that stays and `pct` the scale the pointer asks for.
+   *
+   * The exact size of the frame comes first: the user, "If you scale an exactly
+   * matching aspect radio track it should also perfectly snap into the exact
+   * render size". After that a side landing on a border. Worked out from the
+   * fit rather than from `rect`, whose size is rounded, so the size comes out
+   * exact and not a pixel or two beside it.
+   */
+  function placeSnapScale(rect, deg, held, fit, pct, frame, reach) {
+    const room = turnedSize(rect.width, rect.height, deg);
+    const full = turnedSize(fit.width, fit.height, deg);
+    const mid = rectMiddle(rect);
+    const axes = [
+      { span: frame.width, unit: full.width / 100, from: held.x, middle: mid.x, length: room.width },
+      { span: frame.height, unit: full.height / 100, from: held.y, middle: mid.y, length: room.height },
+    ];
+    let best = null;
+    let gap = Infinity;
+    const offer = (d, scale) => {
+      if (d <= reach && d < gap && scale > 0) {
+        best = scale;
+        gap = d;
+      }
+    };
+    for (const a of axes) offer(Math.abs(a.unit * pct - a.span), a.span / a.unit);
+    if (best !== null) return best;
+    for (const a of axes) {
+      for (const side of [-0.5, 0.5]) {
+        // How far this side stands from the held point, per length of the box.
+        const k = (a.middle + side * a.length - a.from) / a.length;
+        if (Math.abs(k) < 1e-6) continue;
+        const now = a.from + k * a.unit * pct;
+        for (const border of [0, a.span]) offer(Math.abs(now - border), (border - a.from) / (k * a.unit));
+      }
+    }
+    return best;
+  }
+
+  /** The middle of the picture at its new `size`, the opposite corner held. */
+  function placeCornerCentre(rect, corner, deg, size) {
+    const { sx, sy } = cornerSides(corner);
+    const held = placeCornerPoint(rect, oppositeCorner(corner), deg);
+    const out = turnOffset(sx * size.width / 2, sy * size.height / 2, deg);
+    return { cx: held.x + out.x, cy: held.y + out.y };
+  }
+
+  function oppositeCorner(corner) {
+    const { sx, sy } = cornerSides(corner);
+    return (sy < 0 ? 'b' : 't') + (sx < 0 ? 'r' : 'l');
+  }
+
+  /**
+   * The scale, in percent of `fit`, that rounds back to this width and this
+   * height. Taken from the width alone, 527 x 396 on a fit of 960 x 720 came
+   * back 527 x 395. A rectangle of another shape has no such scale and goes by
+   * its width.
+   */
+  function placeScaleOf(width, height, fit) {
+    const low = Math.max((width - 0.5) / fit.width, (height - 0.5) / fit.height);
+    const high = Math.min((width + 0.5) / fit.width, (height + 0.5) / fit.height);
+    return (low <= high ? (low + high) / 2 : width / fit.width) * 100;
+  }
+
   /**
    * One side of a turned box moved by `delta` pixels along the box's own axis,
    * positive outwards for the right and bottom sides and inwards for the left
@@ -1285,6 +1442,14 @@ const layerGeometry = (() => {
     TEXT_TURN_SNAP,
     textTurn,
     textTurnDrag,
+    placeCornerPoint,
+    placeCornerShare,
+    placeAnchorShare,
+    placeHeldPoint,
+    placeSnapSide,
+    placeSnapScale,
+    placeCornerCentre,
+    placeScaleOf,
     textBoxEdgeTurned,
     textBoxMoveTurned,
     PREVIEW_MAX_W,

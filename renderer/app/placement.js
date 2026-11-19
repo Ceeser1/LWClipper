@@ -120,6 +120,15 @@ function placeRingScale() {
 // was plain about which of the two wins: "dragging the image disables
 // repositioning".
 const PLACE_RING_SLOP = 3;
+// V5.5.2. How near, in screen pixels, a side or the size of the picture has to
+// come to a border of the frame to land on it. The user: "let it snap about 3-5
+// pixels. If the user keeps dragging, keep extending."
+const PLACE_SNAP = 4;
+
+/** PLACE_SNAP in project pixels, at the stage's zoom. */
+function placeSnapReach() {
+  return PLACE_SNAP / stageFrameRect(placeStage).s;
+}
 // The ring the pointer went down on, while it is still allowed to become a
 // click. Cleared the moment the pointer leaves that ring or drags the picture.
 let placeRingPress = null;
@@ -523,8 +532,10 @@ function adoptPlaceRect(rect, fit) {
     return;
   }
   placeCentre = { cx: rect.x + rect.width / 2, cy: rect.y + rect.height / 2 };
+  // V5.5.2. Not rounded: a corner leaves the picture between two whole
+  // percentages, and moving it afterwards must not change its size.
   placeScalePct = (fit && fit.width)
-    ? clamp(Math.round((rect.width / fit.width) * 100), PLACE_SCALE_MIN, PLACE_SCALE_MAX)
+    ? clamp(layerGeometry.placeScaleOf(rect.width, rect.height, fit), PLACE_SCALE_MIN, PLACE_SCALE_MAX)
     : 100;
   placeHeld = fit
     ? { rect: { ...rect }, fit: { ...fit }, pct: placeScalePct, cx: placeCentre.cx, cy: placeCentre.cy }
@@ -652,8 +663,12 @@ placeStage.addEventListener('pointermove', (evt) => {
   const room = placeTurnedSize(placeDraft);
   const ox = (room.width - placeDraft.width) / 2;
   const oy = (room.height - placeDraft.height) / 2;
-  const x = layerGeometry.holdOffFrame(p.x - placeDrag.dx - ox, room.width, frame.width) + ox;
-  const y = layerGeometry.holdOffFrame(p.y - placeDrag.dy - oy, room.height, frame.height) + oy;
+  // V5.5.2. And its sides land on the frame's borders when they come near.
+  const reach = placeSnapReach();
+  const x = layerGeometry.placeSnapSide(layerGeometry.holdOffFrame(p.x - placeDrag.dx - ox, room.width, frame.width),
+    room.width, frame.width, reach) + ox;
+  const y = layerGeometry.placeSnapSide(layerGeometry.holdOffFrame(p.y - placeDrag.dy - oy, room.height, frame.height),
+    room.height, frame.height, reach) + oy;
   placeDraft = { ...placeDraft, x: Math.round(x), y: Math.round(y) };
   // The drag is what decides where the middle is from here on, so it is written
   // unrounded: the rectangle above is what is drawn, this is what it is drawn
@@ -685,10 +700,10 @@ placeStage.addEventListener('pointerup', (evt) => endPlaceDrag(evt, true));
 
 // ---- V3.4. Turning the picture ----
 //
-// Any corner circle turns it about its middle by as far as the pointer goes
-// round that middle, in whole degrees, landing on a quarter turn within two of
-// one: the text box's rule, through the same textTurnDrag. The angle shows by
-// the middle while it is dragged.
+// V5.5.2: the dot above the box, no longer the corner circles, turns it about
+// its middle by as far as the pointer goes round that middle, in whole degrees,
+// landing on a quarter turn within two of one: the text box's rule, through the
+// same textTurnDrag. The angle shows by the middle while it is dragged.
 
 function setPlaceRotation(deg) {
   if (placeRotation === deg) return;
@@ -727,12 +742,97 @@ for (const rotor of placeBox.querySelectorAll('.place-rotor')) {
   });
 }
 
+// ---- V5.5.2. Sizing the picture by a corner ----
+//
+// The user: "Using the corners to adjust the size must always maintain the
+// aspect ratio from Video Frame and adjust the Scale slider accordingly." So a
+// corner sets the scale and nothing else about the shape: the size still comes
+// from placeDraftSize, the fit of the crop times the scale.
+//
+// And: "It should always scale mirrored across its center point (a fixed point
+// selected out of the 9 or not), pressing shift should break the center point
+// and scale alongside the dragged axis." So the middle stays where it is, and
+// with Shift held the corner opposite does instead.
+//
+// A picture stuck to a ring grows away from it: "keep its left border on the
+// left render-frame border sticked and only grow up/down and right", "never
+// overlapping any border it got sticked to", "the stick-to-center has no
+// borders". The ring stays selected and holdPlaceAnchor keeps the picture on it.
+// Shift breaks a center point only, so it does nothing on a ring at a border.
+
+/** A picture that has just landed on a size, put exactly on the borders it is at. */
+function snapPlaceCentre(fit, reach) {
+  const frame = projectFrame();
+  const room = placeTurnedSize(placeDraftSize(fit));
+  const left = layerGeometry.placeSnapSide(placeCentre.cx - room.width / 2, room.width, frame.width, reach);
+  const top = layerGeometry.placeSnapSide(placeCentre.cy - room.height / 2, room.height, frame.height, reach);
+  placeCentre = { cx: left + room.width / 2, cy: top + room.height / 2 };
+}
+
+for (const corner of placeBox.querySelectorAll('.place-corner')) {
+  const name = corner.dataset.corner;
+  corner.addEventListener('pointerdown', (evt) => {
+    if (evt.button !== 0 || !placeDraft || cropTab !== 'place') return;
+    const fit = placeFitRect(cropTargetLayer());
+    if (!fit) return;
+    // Or the stage underneath would take it as a move or a pan as well.
+    evt.stopPropagation();
+    const start = { ...placeDraft };
+    const startPct = layerGeometry.placeScaleOf(start.width, start.height, fit);
+    const turn = placeRotation;
+    // The middle as it is carried, unrounded, so sizing it again and again
+    // cannot walk the picture across the frame.
+    if (!placeCentre) adoptPlaceRect(placeDraft, fit);
+    const middle = { ...placeCentre };
+    const stuck = PLACE_ANCHORS.find((a) => a.key === placeAnchor) || null;
+    // Where on the circle it was caught, so the picture does not jump to the
+    // pointer on the first move.
+    const p0 = placePointAt(evt);
+    const at = layerGeometry.placeCornerPoint(start, name, turn);
+    const grab = { x: at.x - p0.x, y: at.y - p0.y };
+    beginDrag(corner, evt, (ev) => {
+      const p = placePointAt(ev);
+      const to = { x: p.x + grab.x, y: p.y + grab.y };
+      const broken = ev.shiftKey && (!stuck || stuck.key === 'centre');
+      const ring = broken ? null : stuck;
+      const share = ring
+        ? layerGeometry.placeAnchorShare(start, name, turn, to, ring.ax, ring.ay)
+        : layerGeometry.placeCornerShare(start, name, turn, to, !broken);
+      const wanted = clamp(startPct * share, PLACE_SCALE_MIN, PLACE_SCALE_MAX);
+      const reach = placeSnapReach();
+      const held = layerGeometry.placeHeldPoint(start, name, turn, ring, broken);
+      const landed = layerGeometry.placeSnapScale(start, turn, held, fit, wanted, projectFrame(), reach);
+      placeScalePct = landed === null ? wanted : clamp(landed, PLACE_SCALE_MIN, PLACE_SCALE_MAX);
+      placeAnchor = ring ? ring.key : null;
+      if (ring) holdPlaceAnchor(fit, true);
+      else {
+        placeCentre = broken
+          ? layerGeometry.placeCornerCentre(start, name, turn, placeDraftSize(fit))
+          : { ...middle };
+        if (landed !== null) snapPlaceCentre(fit, reach);
+      }
+      placeTouched = true;
+      rebuildPlaceDraft();
+      showPlaceScale();
+      drawPlaceStage();
+    });
+  });
+}
+
+// V5.5.2. Room over the fitted frame for the turning dot, which stands 22
+// pixels above the picture's top side and would be cut off by the stage's edge
+// on a picture that fills the frame.
+const PLACE_FIT_PAD = 32;
+
 // V3.3. The wheel zooms and empty space pans, so a picture put off the frame
-// can be seen and grabbed there. Empty is neither the picture nor a ring.
+// can be seen and grabbed there. Empty is neither the picture nor a ring, nor
+// one of the box's handles hanging over its edge.
 bindStageView(placeStage, {
   open: () => !cropModal.hidden && cropTab === 'place' && !!placeDraft,
-  empty: (evt) => !onPicture(placePointAt(evt)) && !ringAt(placeStagePointAt(evt)),
+  empty: (evt) => !evt.target.closest('.place-box')
+    && !onPicture(placePointAt(evt)) && !ringAt(placeStagePointAt(evt)),
   redraw: () => drawPlaceStage(),
+  pad: PLACE_FIT_PAD,
 });
 // A cancelled pointer is the window taking the gesture away, not a click.
 placeStage.addEventListener('pointercancel', (evt) => endPlaceDrag(evt, false));
